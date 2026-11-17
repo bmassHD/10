@@ -504,6 +504,34 @@ export const SystemDiagnosticsManager: React.FC = () => {
                 </span>
               </div>
             </div>
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={`https://console.firebase.google.com/project/${encodeURIComponent(
+                  data?.services.firebase.projectId || firebaseConfig.projectId
+                )}/firestore/databases/${encodeURIComponent(
+                  data?.services.firebase.databaseId || firebaseConfig.firestoreDatabaseId || '(default)'
+                )}/data`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-semibold inline-flex items-center gap-1.5 transition"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Mở Cloud Firestore (Database ID)</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              <a
+                href={`https://console.firebase.google.com/project/${encodeURIComponent(
+                  data?.services.firebase.projectId || firebaseConfig.projectId
+                )}/authentication/users`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 text-[11px] font-semibold inline-flex items-center gap-1.5 transition"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Mở Firebase Authentication</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
             <ol className="list-decimal list-inside text-[11px] text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
               <li>
                 Truy cập{' '}
