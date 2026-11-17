@@ -136,6 +136,7 @@ import { WorkAndHolidaySetupManager } from '../admin/WorkAndHolidaySetupManager'
 import { SendNotificationModal } from '../modals/SendNotificationModal';
 import { SystemDiagnosticsManager } from '../admin/SystemDiagnosticsManager';
 import { GeminiAiAutomationManager } from '../admin/GeminiAiAutomationManager';
+import { FirebaseConfigReadonlyCard } from '../admin/FirebaseConfigReadonlyCard';
 import { StationLogo } from '../common/StationLogo';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
 import { UserAvatar } from '../common/UserAvatar';
@@ -225,7 +226,8 @@ type AdminSubTab =
   | 'system_control'
   | 'bhxh_api'
   | 'ai_automation'
-  | 'diagnostics';
+  | 'diagnostics'
+  | 'firebase_config';
 
 const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'vaccination_setup',
@@ -247,6 +249,7 @@ const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'bhxh_api',
   'ai_automation',
   'diagnostics',
+  'firebase_config',
 ]);
 
 export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
@@ -3241,6 +3244,19 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   <Activity className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
                   <span>Chẩn Đoán &amp; Vercel</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSubTab('firebase_config')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
+                    subTab === 'firebase_config'
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
+                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                  <span>Cấu Hình Firebase (Chỉ Xem)</span>
+                </button>
               </>
             )}
           </div>
@@ -3249,6 +3265,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
       {/* Subtab: Gemini AI Automation & Document Scanning */}
       {subTab === 'ai_automation' && isAdmin && <GeminiAiAutomationManager settings={settings} />}
+
+      {/* Subtab: Read-only Firebase Config & Direct Console Links */}
+      {subTab === 'firebase_config' && isAdmin && <FirebaseConfigReadonlyCard />}
 
       {/* Subtab: System Diagnostics (Vercel, RSS, Firebase, Tenten) */}
       {subTab === 'diagnostics' && <SystemDiagnosticsManager />}
