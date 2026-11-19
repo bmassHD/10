@@ -291,7 +291,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
               className="w-full min-h-[40px] py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <LogIn className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span>Đăng nhập hệ thống (Quản trị / Tài khoản)</span>
+              <span>Đăng nhập hệ thống</span>
             </button>
           </div>
 
