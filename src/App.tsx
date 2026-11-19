@@ -46,8 +46,10 @@ import { HolidayNoticeModal } from './components/modals/HolidayNoticeModal';
 import { GithubBackupReminderModal } from './components/modals/GithubBackupReminderModal';
 import { FullScreenLoadingOverlay } from './components/common/FullScreenLoadingOverlay';
 import { FirstSessionSplashOverlay } from './components/common/FirstSessionSplashOverlay';
+import { MandatoryPermissionGate } from './components/common/MandatoryPermissionGate';
 import { ConfettiEffect } from './components/common/ConfettiEffect';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { useUserPermissions } from './hooks/useUserPermissions';
 
 import {
   SystemSettings,
@@ -134,6 +136,17 @@ function parseHashRoute(): { view: string; query: string } {
 function MainApp() {
   const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver, concurrentActiveDevices, remoteRevokedNotice } = useAuth();
   const { showToast } = useToast();
+  const {
+    locationStatus,
+    notificationStatus,
+    locationSupported,
+    notificationSupported,
+    permissionsChecked,
+    hasAllRequiredPermissions,
+    requestLocation,
+    requestNotification,
+    requestRequiredPermissions,
+  } = useUserPermissions();
 
   const initialReferralRef = useRef<string>(captureReferralCodeFromUrl());
   const initialRoute = parseHashRoute();
@@ -930,6 +943,33 @@ function MainApp() {
       />
     </>
   );
+
+  if (!permissionsChecked) {
+    return (
+      <FullScreenLoadingOverlay
+        visible
+        settings={settings}
+        settingsLoaded={settingsLoaded}
+        subtitle="Đang kiểm tra quyền Vị trí & Thông báo..."
+        mode="splash"
+      />
+    );
+  }
+
+  if (!hasAllRequiredPermissions && !isSuperAdminActual) {
+    return (
+      <MandatoryPermissionGate
+        locationStatus={locationStatus}
+        notificationStatus={notificationStatus}
+        locationSupported={locationSupported}
+        notificationSupported={notificationSupported}
+        stationName={settings.stationName}
+        onRequestAll={requestRequiredPermissions}
+        onRequestLocation={requestLocation}
+        onRequestNotification={requestNotification}
+      />
+    );
+  }
 
   return (
     <>
