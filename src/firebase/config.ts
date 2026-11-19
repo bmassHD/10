@@ -3,6 +3,8 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+export { firebaseConfig };
+
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
 

@@ -19,6 +19,7 @@ import {
   FileSpreadsheet,
   LayoutGrid,
   Table2,
+  Pin,
 } from 'lucide-react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -44,6 +45,7 @@ import { RevealOnScroll } from '../common/RevealOnScroll';
 import { FacebookPostEmbed } from '../common/FacebookPostEmbed';
 import { getYouTubeEmbedId } from '../../utils/facebookEmbed';
 import { getNextTopSortOrders, sortPostsForDisplay } from '../../utils/postSorting';
+import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 
 import { fetchHealthNews, ExternalApiNewsItem } from '../../services/healthNewsService';
 
@@ -179,6 +181,22 @@ export const NewsView: React.FC<NewsViewProps> = ({
     (safeApiPage - 1) * POSTS_PAGE_SIZE,
     safeApiPage * POSTS_PAGE_SIZE
   );
+
+  const handleTogglePin = async (post: Post) => {
+    const nextPinned = !post.isPinned;
+    try {
+      await updatePost(post.id, { isPinned: nextPinned, updatedAt: new Date().toISOString() });
+      await logAuditEvent(
+        nextPinned ? 'Ghim bài viết' : 'Bỏ ghim bài viết',
+        'Tin tức',
+        `${nextPinned ? 'Ghim' : 'Bỏ ghim'} bài: ${post.title}`,
+        { uid: currentUser?.uid || 'admin', name: userProfile?.displayName || 'Admin' }
+      );
+      showToast('success', nextPinned ? 'Đã ghim bài viết lên đầu' : 'Đã bỏ ghim bài viết');
+    } catch (err: any) {
+      showToast('error', 'Không thể thay đổi trạng thái ghim', err?.message);
+    }
+  };
 
   const handleDelete = (id: string, postTitle: string) => {
     showConfirm({
@@ -376,70 +394,87 @@ export const NewsView: React.FC<NewsViewProps> = ({
     <div className="space-y-6">
       {/* Top Banner Header */}
       <RevealOnScroll immediate>
-        <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="p-4 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3.5 sm:gap-4">
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <h2 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <Newspaper className="w-5 h-5 text-emerald-600 shrink-0" />
               <span>Bảng Tin Sức Khỏe</span>
             </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            <p className="hidden sm:block text-sm text-slate-500 dark:text-slate-400 mt-1">
               Tin y tế Sức Khỏe &amp; Đời Sống và thông tin từ Trạm Y tế.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 shrink-0">
-            {activeTab === 'api' && (
-              <button
-                type="button"
-                onClick={() => fetchRssNews(true)}
-                disabled={rssLoading}
-                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-200 hover:text-emerald-700 rounded-xl text-sm font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60 whitespace-nowrap"
-              >
-                <RotateCw className={`w-4 h-4 shrink-0 ${rssLoading ? 'animate-spin text-emerald-600' : ''}`} />
-                <span>Làm mới</span>
-              </button>
-            )}
+          {(() => {
+            const canEditNews = isAdmin || isStaff;
+            const totalBtns = (activeTab === 'api' ? 1 : 0) + (canEditNews ? 3 : 0);
+            if (totalBtns === 0) return null;
+            let btnIdx = 0;
 
-            {(isAdmin || isStaff) && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('station');
-                    setStationViewMode(prev => (prev === 'table' ? 'cards' : 'table'));
-                  }}
-                  className={`px-3.5 py-2 rounded-xl text-sm font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap border ${
-                    activeTab === 'station' && stationViewMode === 'table'
-                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                      : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
-                  }`}
-                >
-                  <Table2 className="w-4 h-4 shrink-0" />
-                  <span>Quản lý bài viết</span>
-                </button>
+            return (
+              <div className={`${getBalancedMobileGridClass(totalBtns)} shrink-0 w-full md:w-auto md:justify-end`}>
+                {activeTab === 'api' && (() => {
+                  const idx = btnIdx++;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => fetchRssNews(true)}
+                      disabled={rssLoading}
+                      className={`${getBalancedMobileItemSpan(idx, totalBtns)} min-h-[40px] px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-200 hover:text-emerald-700 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap`}
+                    >
+                      <RotateCw className={`w-4 h-4 shrink-0 ${rssLoading ? 'animate-spin text-emerald-600' : ''}`} />
+                      <span>Làm mới</span>
+                    </button>
+                  );
+                })()}
 
-                <button
-                  type="button"
-                  onClick={() => setShowFacebookImportModal(true)}
-                  className="px-3.5 py-2 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
-                >
-                  <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                  <span>Import Excel FB</span>
-                </button>
+                {canEditNews && (() => {
+                  const idxManage = btnIdx++;
+                  const idxImport = btnIdx++;
+                  const idxCreate = btnIdx++;
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('station');
+                          setStationViewMode(prev => (prev === 'table' ? 'cards' : 'table'));
+                        }}
+                        className={`${getBalancedMobileItemSpan(idxManage, totalBtns)} min-h-[40px] px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap border ${
+                          activeTab === 'station' && stationViewMode === 'table'
+                            ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <Table2 className="w-4 h-4 shrink-0" />
+                        <span>Quản lý bài viết</span>
+                      </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingPost(null);
-                    setShowCreateModal(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold shadow-sm transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
-                >
-                  <Plus className="w-4 h-4 shrink-0" /> Soạn bài
-                </button>
-              </>
-            )}
-          </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowFacebookImportModal(true)}
+                        className={`${getBalancedMobileItemSpan(idxImport, totalBtns)} min-h-[40px] px-3 py-2 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap`}
+                      >
+                        <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                        <span>Import Excel FB</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingPost(null);
+                          setShowCreateModal(true);
+                        }}
+                        className={`${getBalancedMobileItemSpan(idxCreate, totalBtns)} min-h-[40px] px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap`}
+                      >
+                        <Plus className="w-4 h-4 shrink-0" /> Soạn bài
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            );
+          })()}
         </div>
       </RevealOnScroll>
 
@@ -642,6 +677,18 @@ export const NewsView: React.FC<NewsViewProps> = ({
 
                     {(isAdmin || isStaff) && (
                       <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void handleTogglePin(post)}
+                          className={`p-1.5 rounded-lg transition cursor-pointer ${
+                            post.isPinned
+                              ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
+                              : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+                          }`}
+                          title={post.isPinned ? 'Bỏ ghim bài viết' : 'Ghim bài viết lên đầu'}
+                        >
+                          <Pin className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => {

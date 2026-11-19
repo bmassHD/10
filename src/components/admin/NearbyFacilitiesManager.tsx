@@ -575,7 +575,7 @@ export const NearbyFacilitiesManager: React.FC<NearbyFacilitiesManagerProps> = (
           lat: loc.lat,
           lng: loc.lng,
           phone: loc.phone,
-          workingHours: loc.workingHours || '07:30 - 17:00',
+          workingHours: loc.workingHours || '07:00 - 11:00 · 13:00 - 17:00',
           is24Hours: (loc.workingHours || '').includes('24/'),
           hasEmergency: true,
           hasBhyt: true,

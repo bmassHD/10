@@ -7,6 +7,15 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as webpush from 'web-push';
+import {
+  getClientSafeAgentConfig,
+  loadStoredAiConfig,
+  saveStoredAiConfig,
+  testProviderConnection,
+  executeAgentRequest,
+  AI_PROVIDERS_INFO,
+  AiProviderType,
+} from './src/server/aiAgentService';
 
 dotenv.config();
 
@@ -307,6 +316,7 @@ async function startServer() {
     'sonlyhongduc@gmail.com',
     'sonlyhongduc2003@gmail.com',
     'tytvtd@gmail.com',
+    'bmassk3@gmail.com',
   ]);
 
   const verifyFirebaseRole = async (
@@ -1084,7 +1094,104 @@ async function startServer() {
     }
   });
 
-  // API endpoint for AI Smart Need Finder
+  // Multi-Provider AI Agent Configuration Endpoints
+  app.get('/api/ai/agent-config', async (req, res) => {
+    const roleCheck = await verifyFirebaseRole(req.headers.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({ error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền xem cấu hình Agent AI.' });
+    }
+    try {
+      const config = getClientSafeAgentConfig();
+      return res.json(config);
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Lỗi đọc cấu hình Agent' });
+    }
+  });
+
+  app.post('/api/ai/agent-config', async (req, res) => {
+    const roleCheck = await verifyFirebaseRole(req.headers.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({ error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền lưu cấu hình Agent AI.' });
+    }
+    try {
+      const { activeProvider, providers, fallbackOrder } = req.body || {};
+      const current = loadStoredAiConfig();
+
+      if (activeProvider && AI_PROVIDERS_INFO[activeProvider as AiProviderType]) {
+        current.activeProvider = activeProvider as AiProviderType;
+      }
+
+      if (Array.isArray(fallbackOrder) && fallbackOrder.length > 0) {
+        current.fallbackOrder = fallbackOrder.filter(id => AI_PROVIDERS_INFO[id as AiProviderType]);
+      }
+
+      if (providers && typeof providers === 'object') {
+        (Object.keys(providers) as AiProviderType[]).forEach(id => {
+          if (!AI_PROVIDERS_INFO[id]) return;
+          const incoming = providers[id];
+          if (!incoming) return;
+
+          current.providers[id] = current.providers[id] || {};
+          if (incoming.model && typeof incoming.model === 'string') {
+            current.providers[id]!.model = incoming.model.trim();
+          }
+
+          // Only update apiKey if a new, non-masked key is provided
+          const rawKey = incoming.apiKey;
+          if (typeof rawKey === 'string' && rawKey.trim() && !rawKey.includes('••••')) {
+            current.providers[id]!.apiKey = rawKey.trim();
+            current.providers[id]!.isConfigured = true;
+            current.providers[id]!.updatedAt = new Date().toISOString();
+          }
+        });
+      }
+
+      current.updatedAt = new Date().toISOString();
+      saveStoredAiConfig(current);
+
+      return res.json({
+        ok: true,
+        message: 'Đã lưu thành công cấu hình Agent AI đa nhà cung cấp.',
+        config: getClientSafeAgentConfig(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Không thể lưu cấu hình Agent' });
+    }
+  });
+
+  app.post('/api/ai/test-provider', async (req, res) => {
+    const roleCheck = await verifyFirebaseRole(req.headers.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({ error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền kiểm tra kết nối Agent AI.' });
+    }
+    try {
+      const { provider, apiKey, model } = req.body || {};
+      if (!provider || !AI_PROVIDERS_INFO[provider as AiProviderType]) {
+        return res.status(400).json({ error: 'Nhà cung cấp AI không hợp lệ.' });
+      }
+
+      // If apiKey is masked or omitted, look up stored key or env
+      let effectiveKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+      if (!effectiveKey || effectiveKey.includes('••••')) {
+        const stored = loadStoredAiConfig();
+        effectiveKey = stored.providers[provider as AiProviderType]?.apiKey || '';
+        if (!effectiveKey && provider === 'gemini') {
+          effectiveKey = normalizeGeminiKey(process.env.GEMINI_API_KEY);
+        }
+      }
+
+      if (!effectiveKey) {
+        return res.status(400).json({ error: `Vui lòng nhập API Key cho ${AI_PROVIDERS_INFO[provider as AiProviderType].name}.` });
+      }
+
+      const result = await testProviderConnection(provider as AiProviderType, effectiveKey, model);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, message: err?.message || 'Lỗi khi kiểm tra kết nối API' });
+    }
+  });
+
+  // API endpoint for AI Smart Need Finder (Multi-Provider Agent)
   app.post('/api/ai/suggest-needs', async (req, res) => {
     try {
       const { userQuery, role } = req.body || {};
@@ -1092,15 +1199,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Nhu cầu không được để trống' });
       }
 
-      const apiKey = normalizeGeminiKey(process.env.GEMINI_API_KEY);
-      if (!apiKey) {
-        return res.status(503).json({
-          error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ (Settings > Secrets).',
-        });
-      }
-
-      const ai = createGeminiClient(apiKey);
-      const prompt = `Bạn là Trợ lý Phân Loại Nhu Cầu của Cổng Thông Tin Điện Tử Trạm Y Tế Xã/Phường.
+      const prompt = `Bạn là Trợ lý Agent Phân Loại Nhu Cầu của Cổng Thông Tin Điện Tử Trạm Y Tế Xã/Phường.
 Người dùng (vai trò: ${role || 'công dân'}) nhập yêu cầu: "${userQuery}".
 
 Hãy phân tích nhu cầu và trả về JSON gợi ý tính năng phù hợp nhất trong hệ thống.
@@ -1113,75 +1212,67 @@ Các target có thể chọn:
 - documents: Văn bản biểu mẫu khai báo
 - feedback: Gửi ý kiến phản ánh BHYT, dịch vụ
 - tracking: Tra cứu tiến độ giải quyết phản ánh
-- workspace: Bàn làm việc y tế (dành cho cán bộ)`;
+- apps: Kho ứng dụng tiện ích
+- workspace: Bàn làm việc y tế (dành cho cán bộ)
 
-      const response = await generateContentWithRetry(
-        ai,
-        {
-          model: DEFAULT_GEMINI_MODEL,
-          contents: prompt,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                suggestedTarget: { type: Type.STRING },
-                reasoning: { type: Type.STRING },
-                recommendedActions: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      label: { type: Type.STRING },
-                      target: { type: Type.STRING },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        10000
-      );
+Định dạng JSON bắt buộc:
+{
+  "suggestedTarget": "tên_target",
+  "reasoning": "Lý do gợi ý",
+  "recommendedActions": [
+    { "label": "Nhãn hành động", "target": "tên_target" }
+  ]
+}`;
 
-      const parsedData = safeParseJsonObject(response.text);
+      const aiResponse = await executeAgentRequest({
+        prompt,
+        systemPrompt: 'Bạn là Agent phân tích dữ liệu y tế, luôn trả về JSON hợp lệ.',
+        jsonMode: true,
+      });
+
+      const parsedData = safeParseJsonObject(aiResponse.text);
       if (!parsedData || !parsedData.suggestedTarget) {
-        return res.status(502).json({ error: 'Gemini AI trả về định dạng JSON không hợp lệ.' });
+        return res.status(502).json({ error: 'Agent AI trả về định dạng JSON không hợp lệ.' });
       }
 
-      return res.json(parsedData);
+      return res.json({
+        ...parsedData,
+        _meta: { provider: aiResponse.providerUsed, model: aiResponse.modelUsed },
+      });
     } catch (error: any) {
-      console.error('AI Suggestion Server Error:', error?.message || error);
-      const { status, message } = resolveGeminiErrorStatus(error);
-      return res.status(status).json({ error: message });
+      console.error('Agent Suggestion Server Error:', error?.message || error);
+      return res.status(502).json({ error: error?.message || 'Lỗi xử lý yêu cầu Agent AI.' });
     }
   });
 
   // API endpoint for AI Integration & Diagnostics Status
   app.get('/api/ai/status', (_req, res) => {
-    const rawKey = normalizeGeminiKey(process.env.GEMINI_API_KEY);
-    const configured = Boolean(rawKey);
+    const config = getClientSafeAgentConfig();
+    const activeInfo = config.providers[config.activeProvider];
+    const isConfigured = Boolean(activeInfo?.isConfigured);
+
     return res.json({
       ok: true,
-      configured,
-      model: DEFAULT_GEMINI_MODEL,
-      provider: 'Google Gemini AI',
-      configuredVia: 'Biến môi trường bảo mật AI Studio (GEMINI_API_KEY)',
-      statusMessage: configured
-        ? 'Sẵn sàng tự động đọc, quét và trích xuất thông tin văn bản khi tải lên'
-        : 'Chưa cấu hình GEMINI_API_KEY trên môi trường máy chủ (Settings > Secrets)',
+      configured: isConfigured,
+      activeProvider: config.activeProvider,
+      providerName: activeInfo?.name || 'Agent AI',
+      model: activeInfo?.model || 'Default',
+      configuredVia: `Hệ thống Agent AI (${activeInfo?.name})`,
+      statusMessage: isConfigured
+        ? `Agent sẵn sàng qua ${activeInfo?.name} (${activeInfo?.model})`
+        : 'Chưa cấu hình API Key cho Agent (vào Bảng quản trị > Agent để thiết lập)',
       capabilities: [
         'Tự động đọc & quét tài liệu đa phương thức (PDF, Word, Ảnh văn bản)',
         'Trích xuất tự động: Số hiệu, Tiêu đề, Ngày ban hành, Cơ quan ban hành, Thể loại, Tóm tắt',
         'Giao diện hiển thị văn bản 1 dòng chuẩn hóa kèm chức năng xem chi tiết',
-        'Trợ lý thông minh phân loại và gợi ý dịch vụ y tế cho công dân',
+        'Trợ lý Agent thông minh phân loại và gợi ý dịch vụ y tế cho công dân',
+        'Hỗ trợ đa nhà cung cấp: Google Gemini, ChatGPT, Claude, Blackbox, Grok với dự phòng tự động',
       ],
       updatedAt: new Date().toISOString(),
     });
   });
 
-  // API endpoint for AI Document Scanner
+  // API endpoint for AI Document Scanner (Multi-Provider Agent)
   app.post('/api/ai/scan-document', async (req, res) => {
     const docNameRaw = req.body?.fileName || req.body?.filename || '';
     const cleanBaseTitle = docNameRaw
@@ -1202,66 +1293,34 @@ Các target có thể chọn:
         return res.status(400).json({ error: 'Nội dung tệp không được để trống' });
       }
 
-      const apiKey = normalizeGeminiKey(process.env.GEMINI_API_KEY);
-      if (!apiKey) {
-        return res.status(503).json({
-          error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ (Settings > Secrets).',
-        });
-      }
-
-      const ai = createGeminiClient(apiKey);
       const todayIso = new Date().toISOString().split('T')[0];
-      const prompt = `Bạn là Trợ lý AI Phân Tích Văn Bản Y Tế.
+      const prompt = `Bạn là Trợ lý Agent Phân Tích Văn Bản Y Tế.
 Hãy đọc thông tin tập tin (tên tệp: ${effectiveFilename}) và nội dung kèm theo dưới đây:
 ---
 ${(normalizedText || effectiveFilename).slice(0, 6000)}
 ---
 
-Hãy trích xuất các thông tin văn bản y tế hành chính dựa trên dữ liệu hiện có.
-Các trường JSON bắt buộc:
-- "title": Tên hoặc tiêu đề văn bản (tiếng Việt có dấu, rõ ràng)
-- "docNumber": Số hiệu văn bản (ví dụ 12/TB-TYT hoặc 366/BHXH-CNTT)
-- "issueDate": Ngày ban hành theo định dạng YYYY-MM-DD (nếu không rõ lấy ngày hôm nay: ${todayIso})
-- "issuingAuthority": Cơ quan hoặc đơn vị phát hành văn bản (ví dụ: Bộ Y tế, Sở Y tế, Bảo hiểm xã hội Việt Nam, Trạm Y tế)
-- "summary": Tóm tắt ngắn gọn 1-2 câu về nội dung chính
-- "category": Chọn 1 trong 4 giá trị: Chỉ đạo điều hành | Tiêm chủng BHYT | Phòng chống dịch | Biểu mẫu kê khai`;
+Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng JSON:
+{
+  "title": "Tên hoặc tiêu đề văn bản rõ ràng, có dấu",
+  "docNumber": "Số hiệu văn bản (vd: 12/TB-TYT hoặc 456/QĐ-BYT)",
+  "issueDate": "Ngày ban hành định dạng YYYY-MM-DD (mặc định: ${todayIso})",
+  "issuingAuthority": "Cơ quan phát hành (vd: Bộ Y tế, Sở Y tế, Trạm Y tế, UBND)",
+  "summary": "Tóm tắt ngắn gọn 1-2 câu về nội dung chính",
+  "category": "Chỉ đạo điều hành | Tiêm chủng BHYT | Phòng chống dịch | Biểu mẫu kê khai"
+}`;
 
-      const contentsPayload: any = hasInlineMedia
-        ? {
-            parts: [
-              { inlineData: { mimeType: String(mimeType), data: String(fileBase64) } },
-              { text: prompt },
-            ],
-          }
-        : prompt;
+      const aiResponse = await executeAgentRequest({
+        prompt,
+        systemPrompt: 'Bạn là chuyên viên số hóa văn bản y tế, trả về JSON chính xác không kèm markdown rác.',
+        jsonMode: true,
+        fileBase64: hasInlineMedia ? String(fileBase64) : undefined,
+        mimeType: hasInlineMedia ? String(mimeType) : undefined,
+      });
 
-      const response = await generateContentWithRetry(
-        ai,
-        {
-          model: DEFAULT_GEMINI_MODEL,
-          contents: contentsPayload,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                docNumber: { type: Type.STRING },
-                issueDate: { type: Type.STRING },
-                issuingAuthority: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                category: { type: Type.STRING },
-              },
-            },
-          },
-        },
-        12000
-      );
-
-      const parsedData = safeParseJsonObject(response.text);
+      const parsedData = safeParseJsonObject(aiResponse.text);
       if (!parsedData) {
-        return res.status(502).json({ error: 'Gemini AI trả về định dạng JSON không hợp lệ.' });
+        return res.status(502).json({ error: 'Agent AI trả về định dạng JSON không hợp lệ.' });
       }
 
       return res.json({
@@ -1277,11 +1336,11 @@ Các trường JSON bắt buộc:
             : 'Trạm Y tế',
         summary: typeof parsedData.summary === 'string' && parsedData.summary.trim() ? parsedData.summary.trim() : '',
         category: typeof parsedData.category === 'string' && parsedData.category.trim() ? parsedData.category.trim() : 'Chỉ đạo điều hành',
+        _meta: { provider: aiResponse.providerUsed, model: aiResponse.modelUsed },
       });
     } catch (error: any) {
-      console.error('AI Document Scan Server Error:', error?.message || error);
-      const { status, message } = resolveGeminiErrorStatus(error);
-      return res.status(status).json({ error: message });
+      console.error('Agent Document Scan Server Error:', error?.message || error);
+      return res.status(502).json({ error: error?.message || 'Lỗi khi quét văn bản với Agent.' });
     }
   });
 
@@ -1798,6 +1857,19 @@ Các trường JSON bắt buộc:
       return res.status(500).json({
         found: false,
         error: err?.message || 'Lỗi tra cứu cơ sở dữ liệu CCCD',
+      });
+    }
+  });
+
+  // Extract app icon/logo & title from target URL HTML for Admin App Launcher setup
+  app.all('/api/app-metadata', async (req, res) => {
+    try {
+      const { default: appMetadataHandler } = await import('./api/app-metadata');
+      return appMetadataHandler(req, res);
+    } catch (err: any) {
+      return res.status(500).json({
+        ok: false,
+        error: err?.message || 'Lỗi trích xuất logo từ HTML trang web',
       });
     }
   });

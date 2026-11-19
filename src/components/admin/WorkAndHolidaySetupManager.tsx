@@ -132,7 +132,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
     const first = activeDays[0];
     const last = activeDays[activeDays.length - 1];
     const hours = [first.morningHours, first.afternoonHours].filter(Boolean).join(' | ');
-    return `${first.label} – ${last.label}: ${hours || '07:30 - 17:00'} (Trực cấp cứu 24/7)`;
+    return `${first.label} – ${last.label}: ${hours || '07:00 - 11:00 | 13:00 - 17:00'} (Trực cấp cứu 24/7)`;
   };
 
   const handleSaveWeeklyWorkSchedule = async (e: React.FormEvent) => {
@@ -379,7 +379,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-          <table className="w-full text-left text-xs border-collapse min-w-[740px]">
+          <table className="w-full text-left text-xs border-collapse min-w-max">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-800">
                 <th className="p-3 whitespace-nowrap">Ngày trong tuần</th>
@@ -404,7 +404,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                     {day.label}
                   </td>
                   <td className="p-3 whitespace-nowrap">
-                    <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={day.isWorking}
@@ -412,17 +412,17 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                           handleDayChange(day.dayOfWeek, {
                             isWorking: e.target.checked,
                             morningHours: e.target.checked
-                              ? day.morningHours || '07:30 - 11:30'
+                              ? day.morningHours || '07:00 - 11:00'
                               : '',
                             afternoonHours: e.target.checked
-                              ? day.afternoonHours || '13:30 - 17:00'
+                              ? day.afternoonHours || '13:00 - 17:00'
                               : '',
                           })
                         }
                         className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
                       />
                       <span
-                        className={`font-semibold ${
+                        className={`font-semibold whitespace-nowrap ${
                           day.isWorking
                             ? 'text-emerald-700 dark:text-emerald-400'
                             : 'text-slate-500'
@@ -432,7 +432,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       </span>
                     </label>
                   </td>
-                  <td className="p-2.5">
+                  <td className="p-2.5 whitespace-nowrap">
                     <input
                       type="text"
                       disabled={!day.isWorking}
@@ -440,11 +440,11 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       onChange={e =>
                         handleDayChange(day.dayOfWeek, { morningHours: e.target.value })
                       }
-                      placeholder="07:30 - 11:30"
+                      placeholder="07:00 - 11:00"
                       className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 disabled:opacity-50 tabular-nums focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </td>
-                  <td className="p-2.5">
+                  <td className="p-2.5 whitespace-nowrap">
                     <input
                       type="text"
                       disabled={!day.isWorking}
@@ -452,11 +452,11 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       onChange={e =>
                         handleDayChange(day.dayOfWeek, { afternoonHours: e.target.value })
                       }
-                      placeholder="13:30 - 17:00"
+                      placeholder="13:00 - 17:00"
                       className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 disabled:opacity-50 tabular-nums focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </td>
-                  <td className="p-2.5">
+                  <td className="p-2.5 whitespace-nowrap">
                     <input
                       type="text"
                       value={day.departmentsSummary || ''}
@@ -467,7 +467,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       className="w-full min-w-[200px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </td>
-                  <td className="p-2.5">
+                  <td className="p-2.5 whitespace-nowrap">
                     <input
                       type="text"
                       value={day.notes || ''}

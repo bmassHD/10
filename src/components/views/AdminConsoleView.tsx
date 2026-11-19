@@ -61,6 +61,11 @@ import {
   FileSpreadsheet,
   X,
   Unlock,
+  LayoutGrid,
+  ShoppingBag,
+  Award,
+  Star,
+  ArrowLeft,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -84,6 +89,13 @@ import {
   AccessRestrictionRules,
   ReferralCodeItem,
   UserVerifiedDevice,
+  ReferralIssuerTier,
+  RolePermissionsConfig,
+  RolePermissionPolicy,
+  ServiceRating,
+  ServiceRatingCategory,
+  LegacyUserSnapshot,
+  UserMigrationClaim,
 } from '../../types';
 import {
   updateSystemSettings,
@@ -115,6 +127,14 @@ import {
   DEFAULT_VACCINATION_VACCINES,
   DEFAULT_VACCINATION_NOTES,
   CONTROLLABLE_SIDEBAR_TABS,
+  DEFAULT_ROLE_PERMISSIONS,
+  resolveRolePermissions,
+  ROLE_PERMISSION_PRESETS,
+  SERVICE_RATING_CATEGORY_LABELS,
+  deleteServiceRating,
+  listLegacyUserSnapshots,
+  listUserMigrationClaims,
+  resolveUserMigrationClaim,
 } from '../../services/firebaseService';
 import {
   getOrCreateDeviceId,
@@ -135,8 +155,12 @@ import { EventsManager } from '../admin/EventsManager';
 import { WorkAndHolidaySetupManager } from '../admin/WorkAndHolidaySetupManager';
 import { SendNotificationModal } from '../modals/SendNotificationModal';
 import { SystemDiagnosticsManager } from '../admin/SystemDiagnosticsManager';
-import { GeminiAiAutomationManager } from '../admin/GeminiAiAutomationManager';
+import { AgentAutomationManager } from '../admin/AgentAutomationManager';
+import { OrganizationAccountsManager } from '../admin/OrganizationAccountsManager';
 import { FirebaseConfigReadonlyCard } from '../admin/FirebaseConfigReadonlyCard';
+import { AppsManager } from '../admin/AppsManager';
+import { buildAdminNavGroups, AdminSubTab as AdminShellSubTab } from '../admin/AdminShell';
+import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 import { StationLogo } from '../common/StationLogo';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
 import { UserAvatar } from '../common/UserAvatar';
@@ -205,29 +229,12 @@ interface AdminConsoleViewProps {
   onNavigateToLogin?: () => void;
   onOpenOrgChart?: () => void;
   initialSubTab?: string;
+  activeSubTab?: string;
+  onSubTabChange?: (tab: AdminSubTab) => void;
+  onExitAdmin?: () => void;
 }
 
-type AdminSubTab =
-  | 'vaccination_setup'
-  | 'work_holiday_setup'
-  | 'events_setup'
-  | 'notifications'
-  | 'station_setup'
-  | 'org_personnel'
-  | 'functions_duties'
-  | 'map_locations'
-  | 'nearby_facilities'
-  | 'footer_links'
-  | 'users'
-  | 'feedback'
-  | 'github_storage'
-  | 'backup'
-  | 'audit'
-  | 'system_control'
-  | 'bhxh_api'
-  | 'ai_automation'
-  | 'diagnostics'
-  | 'firebase_config';
+type AdminSubTab = AdminShellSubTab;
 
 const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'vaccination_setup',
@@ -241,7 +248,10 @@ const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'nearby_facilities',
   'footer_links',
   'users',
+  'referral_codes',
+  'org_accounts',
   'feedback',
+  'ratings',
   'github_storage',
   'backup',
   'audit',
@@ -250,6 +260,7 @@ const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'ai_automation',
   'diagnostics',
   'firebase_config',
+  'apps_setup',
 ]);
 
 export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
@@ -266,22 +277,45 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   onNavigateToLogin,
   onOpenOrgChart,
   initialSubTab,
+  activeSubTab,
+  onSubTabChange,
+  onExitAdmin,
 }) => {
-  const { currentUser, userProfile, isPrimaryAdmin, isAdmin, isStaff } = useAuth();
+  const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff } = useAuth();
+  const canManageSuperAdminTier = Boolean(isSuperAdmin || isPrimaryAdmin);
   const { showToast, showConfirm } = useToast();
 
   const resolvedInitialTab: AdminSubTab =
-    initialSubTab && VALID_ADMIN_SUBTABS.has(initialSubTab as AdminSubTab)
+    (activeSubTab && VALID_ADMIN_SUBTABS.has(activeSubTab as AdminSubTab)
+      ? (activeSubTab as AdminSubTab)
+      : initialSubTab && VALID_ADMIN_SUBTABS.has(initialSubTab as AdminSubTab)
       ? (initialSubTab as AdminSubTab)
-      : 'station_setup';
+      : 'notifications');
 
-  const [subTab, setSubTab] = useState<AdminSubTab>(resolvedInitialTab);
+  const [internalSubTab, setInternalSubTab] = useState<AdminSubTab>(resolvedInitialTab);
+  const subTab: AdminSubTab =
+    activeSubTab && VALID_ADMIN_SUBTABS.has(activeSubTab as AdminSubTab)
+      ? (activeSubTab as AdminSubTab)
+      : internalSubTab;
+
+  const setSubTab = (next: AdminSubTab) => {
+    setInternalSubTab(next);
+    if (onSubTabChange) {
+      onSubTabChange(next);
+    }
+  };
 
   useEffect(() => {
     if (initialSubTab && VALID_ADMIN_SUBTABS.has(initialSubTab as AdminSubTab)) {
-      setSubTab(initialSubTab as AdminSubTab);
+      setInternalSubTab(initialSubTab as AdminSubTab);
     }
   }, [initialSubTab]);
+
+  useEffect(() => {
+    if (activeSubTab && VALID_ADMIN_SUBTABS.has(activeSubTab as AdminSubTab)) {
+      setInternalSubTab(activeSubTab as AdminSubTab);
+    }
+  }, [activeSubTab]);
 
   // Station settings form state
   const [stationName, setStationName] = useState(settings.stationName || '');
@@ -454,6 +488,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [tabMaintenance, setTabMaintenance] = useState<Record<string, boolean>>(
     settings.tabMaintenance || {}
   );
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionsConfig>(() =>
+    resolveRolePermissions(settings)
+  );
+  const [activeRoleConfigTab, setActiveRoleConfigTab] = useState<'super_admin' | 'admin' | 'user' | 'organization' | 'guest'>('guest');
+  const [savingRolePerms, setSavingRolePerms] = useState(false);
   const [savingSystemControl, setSavingSystemControl] = useState(false);
 
   // Client Platform / Device / Browser Access Control state
@@ -629,6 +668,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
     setHiddenTabs(settings.hiddenTabs || []);
     setTabMaintenance(settings.tabMaintenance || {});
+    setRolePermissions(resolveRolePermissions(settings));
     if (settings.accessControl) {
       setAccessRules(settings.accessControl.rules || {});
       if (settings.accessControl.customMessage !== undefined) {
@@ -728,17 +768,108 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     };
   }, [editingUser?.uid]);
 
-  // Super Admin Referral Code & Invite Link management
+  // Two-Tier Referral Code & Invite Link management (Super Admin & Admin)
   const [referralCodes, setReferralCodes] = useState<ReferralCodeItem[]>([]);
   const [loadingReferrals, setLoadingReferrals] = useState(false);
   const [newRefCodeInput, setNewRefCodeInput] = useState('');
   const [newRefLabelInput, setNewRefLabelInput] = useState('');
+  const [newRefIssuerTier, setNewRefIssuerTier] = useState<ReferralIssuerTier>(
+    canManageSuperAdminTier ? 'super_admin' : 'admin'
+  );
+  const [newRefTargetAccountType, setNewRefTargetAccountType] = useState<'employee' | 'admin'>('employee');
   const [newRefRole, setNewRefRole] = useState<'staff' | 'doctor' | 'nurse' | 'communicator' | 'leadership'>('staff');
   const [creatingRef, setCreatingRef] = useState(false);
   const [copiedRefText, setCopiedRefText] = useState<string | null>(null);
+  const [referralTierFilter, setReferralTierFilter] = useState<'all' | ReferralIssuerTier>('all');
+
+  // Service Ratings & Citizen Experience state
+  const [serviceRatings, setServiceRatings] = useState<ServiceRating[]>([]);
+  const [ratingCategoryFilter, setRatingCategoryFilter] = useState<'all' | ServiceRatingCategory>('all');
+  const [ratingStarFilter, setRatingStarFilter] = useState<number>(0);
+
+  // Firebase Migration & Reconciliation state
+  const [legacySnapshots, setLegacySnapshots] = useState<LegacyUserSnapshot[]>([]);
+  const [migrationClaims, setMigrationClaims] = useState<UserMigrationClaim[]>([]);
+  const [loadingMigrationData, setLoadingMigrationData] = useState(false);
+  const [migrationToggleSaving, setMigrationToggleSaving] = useState(false);
+  const [migrationBannerNoteInput, setMigrationBannerNoteInput] = useState(
+    settings.migrationBannerNote || ''
+  );
+  const [resolvingClaim, setResolvingClaim] = useState<UserMigrationClaim | null>(null);
+  const [claimEditValues, setClaimEditValues] = useState<{
+    displayName: string;
+    phoneNumber: string;
+    citizenId: string;
+    department: string;
+    position: string;
+    role: UserProfile['role'];
+    accountType: UserProfile['accountType'];
+  }>({
+    displayName: '',
+    phoneNumber: '',
+    citizenId: '',
+    department: '',
+    position: '',
+    role: 'citizen',
+    accountType: 'citizen',
+  });
+  const [adminClaimNote, setAdminClaimNote] = useState('');
+  const [savingClaimResolution, setSavingClaimResolution] = useState(false);
 
   useEffect(() => {
-    if (!isPrimaryAdmin || subTab !== 'users') return;
+    setMigrationBannerNoteInput(settings.migrationBannerNote || '');
+  }, [settings.migrationBannerNote]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const unsub = onSnapshot(
+      collection(db, 'serviceRatings'),
+      snap => {
+        const list = snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as ServiceRating))
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        setServiceRatings(list);
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [isAdmin]);
+
+  const fetchMigrationData = async () => {
+    if (!isAdmin) return;
+    setLoadingMigrationData(true);
+    try {
+      const [snaps, claims] = await Promise.all([
+        listLegacyUserSnapshots(),
+        listUserMigrationClaims(),
+      ]);
+      setLegacySnapshots(snaps);
+      setMigrationClaims(claims);
+    } finally {
+      setLoadingMigrationData(false);
+    }
+  };
+
+  const refreshReferralCodesList = async () => {
+    if (!isAdmin) return;
+    setLoadingReferrals(true);
+    try {
+      const items = await listReferralCodes();
+      setReferralCodes(items);
+    } catch {
+      // ignore transient error
+    } finally {
+      setLoadingReferrals(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isAdmin || subTab !== 'users') return;
+    void fetchMigrationData();
+  }, [isAdmin, subTab]);
+
+  useEffect(() => {
+    if (!isAdmin || subTab !== 'referral_codes') return;
     let active = true;
     setLoadingReferrals(true);
     listReferralCodes()
@@ -752,7 +883,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     return () => {
       active = false;
     };
-  }, [isPrimaryAdmin, subTab]);
+  }, [isAdmin, subTab]);
 
   // User duplicate detection and categorization
   const userDuplicateInfo = useMemo(() => {
@@ -1786,6 +1917,37 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     } catch (err: any) {
       setTabMaintenance(prevMap);
       showToast('error', 'Cập nhật bảo trì phân hệ thất bại', err?.message);
+    }
+  };
+
+  const handleSaveRolePermissions = async (
+    nextConfig: RolePermissionsConfig,
+    summaryLabel = 'Cập nhật cấu hình phân quyền theo đối tượng'
+  ) => {
+    const prevConfig = rolePermissions;
+    const normalized: RolePermissionsConfig = {
+      ...nextConfig,
+      super_admin: { fullAccess: true },
+      updatedAt: new Date().toISOString(),
+      updatedByUid: currentUser?.uid,
+    };
+    setRolePermissions(normalized);
+    setSavingRolePerms(true);
+    try {
+      await updateSystemSettings({
+        rolePermissions: normalized,
+        updatedAt: new Date().toISOString(),
+      });
+      await logAuditEvent('Phân quyền theo đối tượng', 'Hệ thống', summaryLabel, {
+        uid: currentUser?.uid || 'admin',
+        name: userProfile?.displayName || 'Admin',
+      });
+      showToast('success', 'Đã lưu phân quyền đối tượng', summaryLabel);
+    } catch (err: any) {
+      setRolePermissions(prevConfig);
+      showToast('error', 'Không thể lưu phân quyền', err?.message);
+    } finally {
+      setSavingRolePerms(false);
     }
   };
 
@@ -2897,12 +3059,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
   const handleCreateReferralCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isPrimaryAdmin || !currentUser) return;
+    if (!isAdmin || !currentUser) return;
+    const effectiveTier: ReferralIssuerTier = canManageSuperAdminTier ? newRefIssuerTier : 'admin';
+    const effectiveTargetAccountType: 'employee' | 'admin' =
+      effectiveTier === 'super_admin' && newRefTargetAccountType === 'admin' ? 'admin' : 'employee';
     setCreatingRef(true);
     try {
       const created = await createReferralCode({
         code: newRefCodeInput.trim() || undefined,
         label: newRefLabelInput.trim() || undefined,
+        issuerTier: effectiveTier,
+        targetAccountType: effectiveTargetAccountType,
         targetRole: newRefRole,
         createdByUid: currentUser.uid,
         createdByEmail: currentUser.email || undefined,
@@ -2910,7 +3077,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       setReferralCodes(prev => [created, ...prev]);
       setNewRefCodeInput('');
       setNewRefLabelInput('');
-      showToast('success', 'Đã tạo mã giới thiệu', `Mã ${created.code} đã sẵn sàng sử dụng.`);
+      showToast(
+        'success',
+        'Đã tạo mã giới thiệu',
+        `Mã ${created.code} (${effectiveTier === 'super_admin' ? 'Super Admin' : 'Admin'}) đã sẵn sàng sử dụng.`
+      );
     } catch (err: any) {
       showToast('error', 'Không thể tạo mã giới thiệu', err?.message || 'Vui lòng thử lại.');
     } finally {
@@ -2919,7 +3090,12 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   };
 
   const handleToggleReferralCode = async (item: ReferralCodeItem) => {
-    if (!isPrimaryAdmin) return;
+    if (!isAdmin) return;
+    const tier = item.issuerTier || 'super_admin';
+    if (tier === 'super_admin' && !canManageSuperAdminTier) {
+      showToast('warning', 'Chỉ Super Admin mới có quyền khóa/mở mã thuộc đối tượng Super Admin');
+      return;
+    }
     const nextActive = !item.active;
     try {
       await toggleReferralCodeStatus(item.code, nextActive);
@@ -2933,7 +3109,12 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   };
 
   const handleDeleteReferralCode = (item: ReferralCodeItem) => {
-    if (!isPrimaryAdmin) return;
+    if (!isAdmin) return;
+    const tier = item.issuerTier || 'super_admin';
+    if (tier === 'super_admin' && !canManageSuperAdminTier) {
+      showToast('warning', 'Chỉ Super Admin mới có quyền xóa mã thuộc đối tượng Super Admin');
+      return;
+    }
     showConfirm({
       title: `Xóa mã giới thiệu ${item.code}?`,
       message: 'Liên kết giới thiệu sử dụng mã này sẽ không còn hiệu lực đối với lượt đăng ký mới.',
@@ -2963,311 +3144,94 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Admin Categorized Navigation Tabs */}
-      <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-        {/* Category 1: Quản trị Nội dung */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Phân Hệ 1: Quản Trị Nội Dung & Thông Tin Y Tế</span>
-          </div>
+    <div className="space-y-5 animate-in fade-in duration-200">
+      {/* Compact Group Sub-Tab Bar (Standalone Sidebar holds the 6 top-level groups) */}
+      {(() => {
+        const groups = buildAdminNavGroups({
+          newFeedback: feedbackList.filter(f => f.status === 'new').length,
+          disputedMigrations: migrationClaims.filter(
+            c => c.status === 'disputed' || c.status === 'pending'
+          ).length,
+          ratingsCount: serviceRatings.length,
+        })
+          .map(g => ({
+            ...g,
+            items: g.items.filter(item => !item.adminOnly || isAdmin),
+          }))
+          .filter(g => g.items.length > 0);
+        const currentGroup = groups.find(g => g.items.some(i => i.id === subTab)) || groups[0];
+        const siblingItems = currentGroup?.items || [];
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSubTab('notifications')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'notifications'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <BellRing className="w-3.5 h-3.5 shrink-0" />
-              <span>Thông Báo ({publishedNotifications.length + publishedAnnouncements.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('vaccination_setup')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'vaccination_setup'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Syringe className="w-3.5 h-3.5 shrink-0" />
-              <span>Lịch Tiêm Chủng ({vaccinationSchedulesList.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('events_setup')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'events_setup'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <PartyPopper className="w-3.5 h-3.5 shrink-0" />
-              <span>Sự Kiện ({events.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('work_holiday_setup')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'work_holiday_setup'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <CalendarClock className="w-3.5 h-3.5 shrink-0" />
-              <span>Lịch Làm Việc &amp; Nghỉ Lễ ({(settings.holidaySchedules || []).length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('station_setup')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'station_setup'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Building className="w-3.5 h-3.5 shrink-0" />
-              <span>Thông Tin Đơn Vị</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('org_personnel')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'org_personnel'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Network className="w-3.5 h-3.5 shrink-0" />
-              <span>Nhân Lực &amp; Khoa Phòng</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('functions_duties')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'functions_duties'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5 shrink-0" />
-              <span>Chức Năng - Nhiệm Vụ</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('footer_links')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'footer_links'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5 shrink-0" />
-              <span>Footer & Liên Kết ({quickLinksList.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubTab('feedback')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'feedback'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-              <span>Xử Lý Phản Ánh ({feedbackList.filter(f => f.status === 'new').length} mới)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Category 2: Quản trị Kỹ thuật & An ninh */}
-        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            <Shield className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
-            <span>Phân Hệ 2: Quản Trị Kỹ Thuật, Bản Đồ & An Ninh Hệ Thống</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSubTab('map_locations')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'map_locations'
-                  ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <MapPin className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
-              <span>Bản Đồ & Tọa Độ ({mapLocationsList.length})</span>
-            </button>
-
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setSubTab('nearby_facilities')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                  subTab === 'nearby_facilities'
-                    ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                    : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Hospital className="w-3.5 h-3.5 shrink-0 text-rose-500" />
-                <span>Cơ Sở Y Tế Lân Cận</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setSubTab('users')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                subTab === 'users'
-                  ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5 shrink-0 text-teal-500" />
-              <span>Tài Khoản & Phân Quyền ({users.length})</span>
-            </button>
-
-            {isAdmin && (
-              <>
+        return (
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>{currentGroup?.title || 'Bảng Quản Trị'}</span>
+              </div>
+              {onExitAdmin && (
                 <button
                   type="button"
-                  onClick={() => setSubTab('github_storage')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'github_storage'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
+                  onClick={onExitAdmin}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
-                  <FolderGit2 className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-                  <span>Kho Tệp & GitHub PAT</span>
+                  <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                  <span>Về trang bình thường</span>
                 </button>
+              )}
+            </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSubTab('backup')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'backup'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Database className="w-3.5 h-3.5 shrink-0 text-rose-500" />
-                  <span>Sao Lưu & Phiên Bản</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('audit')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'audit'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
-                  <span>Nhật Ký Kiểm Toán ({auditLogs.length})</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('system_control')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'system_control'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Wrench className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-                  <span>
-                    Bảo Trì, Chặn Thiết Bị &amp; Tab
-                    {(maintenanceMode ||
-                      hiddenTabs.length > 0 ||
-                      Object.values(tabMaintenance).some(Boolean) ||
-                      Object.values(accessRules).some(Boolean))
-                      ? ' (Đang bật)'
-                      : ''}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('bhxh_api')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'bhxh_api'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <CreditCard className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
-                  <span>
-                    Kết Nối API BHXH{bhxhEnabled && bhxhHasPassword ? ' (Đang bật)' : ''}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('ai_automation')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'ai_automation'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Sparkles className="w-3.5 h-3.5 shrink-0 text-purple-500" />
-                  <span>Tự Động Hoá Gemini AI</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('diagnostics')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'diagnostics'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Activity className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
-                  <span>Chẩn Đoán &amp; Vercel</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSubTab('firebase_config')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
-                    subTab === 'firebase_config'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100 shadow-sm font-bold'
-                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  <Lock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-                  <span>Cấu Hình Firebase (Chỉ Xem)</span>
-                </button>
-              </>
+            {siblingItems.length > 1 && (
+              <div className={getBalancedMobileGridClass(siblingItems.length)}>
+                {siblingItems.map((item, idx) => {
+                  const Icon = item.icon;
+                  const active = subTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setSubTab(item.id)}
+                      className={`${getBalancedMobileItemSpan(idx, siblingItems.length)} min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center sm:justify-start gap-2 whitespace-nowrap cursor-pointer border ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs font-bold'
+                          : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{item.shortLabel}</span>
+                      {typeof item.badgeCount === 'number' && item.badgeCount > 0 && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold tabular-nums ${
+                            active
+                              ? 'bg-white/20 text-white'
+                              : 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
+                          }`}
+                        >
+                          {item.badgeCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
-      {/* Subtab: Gemini AI Automation & Document Scanning */}
-      {subTab === 'ai_automation' && isAdmin && <GeminiAiAutomationManager settings={settings} />}
+      {/* Subtab: Organization / Business Accounts */}
+      {subTab === 'org_accounts' && isAdmin && (
+        <OrganizationAccountsManager settings={settings} />
+      )}
+
+      {/* Subtab: Agent AI Automation & Document Scanning */}
+      {subTab === 'ai_automation' && isAdmin && <AgentAutomationManager settings={settings} />}
 
       {/* Subtab: Read-only Firebase Config & Direct Console Links */}
       {subTab === 'firebase_config' && isAdmin && <FirebaseConfigReadonlyCard />}
+
+      {/* Subtab: Smartphone-style Apps Launcher Manager */}
+      {subTab === 'apps_setup' && isAdmin && <AppsManager settings={settings} />}
 
       {/* Subtab: System Diagnostics (Vercel, RSS, Firebase, Tenten) */}
       {subTab === 'diagnostics' && <SystemDiagnosticsManager />}
@@ -4483,7 +4447,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   type="text"
                   value={workingHours}
                   onChange={e => setWorkingHours(e.target.value)}
-                  placeholder="7:30 - 11:30 | 13:30 - 17:00 (Thứ 2 - Thứ 6)"
+                  placeholder="Sáng: 07:00 - 11:00 | Chiều: 13:00 - 17:00 (Thứ 2 - Thứ 6)"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
@@ -5308,192 +5272,6 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </button>
             </div>
           </div>
-
-          {isPrimaryAdmin && (
-            <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-900/60 shadow-sm space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Ticket className="w-4 h-4 text-emerald-600" />
-                    <span>Mã &amp; Đường dẫn giới thiệu Cán bộ Y tế</span>
-                  </h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Người đăng ký bằng mã hoặc đường dẫn mời của Super Admin sẽ tự động được cấp quyền Cán bộ Y tế.
-                  </p>
-                </div>
-              </div>
-
-              <form onSubmit={handleCreateReferralCode} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 text-xs">
-                <div className="sm:col-span-4 flex gap-1.5">
-                  <input
-                    type="text"
-                    value={newRefCodeInput}
-                    onChange={e => setNewRefCodeInput(e.target.value.toUpperCase())}
-                    placeholder="Mã tự nhập (hoặc bỏ trống)"
-                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono uppercase focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setNewRefCodeInput(generateRandomReferralCode('CBYT'))}
-                    className="px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold text-slate-700 dark:text-slate-200 cursor-pointer shrink-0"
-                    title="Tạo mã ngẫu nhiên"
-                  >
-                    Ngẫu nhiên
-                  </button>
-                </div>
-
-                <input
-                  type="text"
-                  value={newRefLabelInput}
-                  onChange={e => setNewRefLabelInput(e.target.value)}
-                  placeholder="Ghi chú (VD: Tổ Tiêm chủng)"
-                  className="sm:col-span-3 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-
-                <select
-                  value={newRefRole}
-                  onChange={e => setNewRefRole(e.target.value as any)}
-                  className="sm:col-span-3 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="staff">Nhân viên Y tế</option>
-                  <option value="doctor">Bác sĩ</option>
-                  <option value="nurse">Điều dưỡng</option>
-                  <option value="communicator">Truyền thông</option>
-                  <option value="leadership">Ban Lãnh đạo</option>
-                </select>
-
-                <button
-                  type="submit"
-                  disabled={creatingRef}
-                  className="sm:col-span-2 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{creatingRef ? 'Đang tạo...' : 'Tạo mã'}</span>
-                </button>
-              </form>
-
-              {loadingReferrals ? (
-                <div className="text-xs text-slate-400 py-3">Đang tải danh sách mã giới thiệu...</div>
-              ) : referralCodes.length === 0 ? (
-                <div className="text-xs text-slate-400 py-3">
-                  Chưa có mã giới thiệu nào. Tạo mã ở trên để lấy đường dẫn mời Cán bộ Y tế.
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                        <th className="py-2.5 px-3">Mã giới thiệu</th>
-                        <th className="py-2.5 px-3">Vai trò</th>
-                        <th className="py-2.5 px-3">Ghi chú</th>
-                        <th className="py-2.5 px-3 text-center">Đã dùng</th>
-                        <th className="py-2.5 px-3">Trạng thái</th>
-                        <th className="py-2.5 px-3">Đường dẫn mời</th>
-                        <th className="py-2.5 px-3 text-right">Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
-                      {referralCodes.map(item => {
-                        const inviteUrl =
-                          typeof window !== 'undefined'
-                            ? `${window.location.origin}/?ref=${item.code}#tai-khoan`
-                            : `/?ref=${item.code}#tai-khoan`;
-                        const roleLabel =
-                          item.targetRole === 'doctor'
-                            ? 'Bác sĩ'
-                            : item.targetRole === 'nurse'
-                            ? 'Điều dưỡng'
-                            : item.targetRole === 'communicator'
-                            ? 'Truyền thông'
-                            : item.targetRole === 'leadership'
-                            ? 'Ban Lãnh đạo'
-                            : 'Nhân viên Y tế';
-                        return (
-                          <tr key={item.code} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition">
-                            <td className="py-2.5 px-3 whitespace-nowrap">
-                              <code className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono font-bold">
-                                {item.code}
-                              </code>
-                            </td>
-                            <td className="py-2.5 px-3 whitespace-nowrap font-semibold text-slate-700 dark:text-slate-300">
-                              {roleLabel}
-                            </td>
-                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 max-w-[160px] truncate" title={item.label || ''}>
-                              {item.label || '—'}
-                            </td>
-                            <td className="py-2.5 px-3 text-center font-semibold text-slate-700 dark:text-slate-300 tabular-nums whitespace-nowrap">
-                              {item.usedCount || 0}
-                            </td>
-                            <td className="py-2.5 px-3 whitespace-nowrap">
-                              <span
-                                className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  item.active
-                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                    : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-                                }`}
-                              >
-                                {item.active ? 'Đang bật' : 'Tạm khóa'}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3 max-w-[220px]">
-                              <span className="block font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate" title={inviteUrl}>
-                                {inviteUrl}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                              <div className="inline-flex items-center justify-end gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyReferralValue(item.code, `code_${item.code}`, 'mã giới thiệu')}
-                                  className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-                                  title="Sao chép mã"
-                                >
-                                  {copiedRefText === `code_${item.code}` ? (
-                                    <Check className="w-3 h-3 text-emerald-600" />
-                                  ) : (
-                                    <Copy className="w-3 h-3 text-slate-500" />
-                                  )}
-                                  <span>Mã</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyReferralValue(inviteUrl, `link_${item.code}`, 'đường dẫn giới thiệu')}
-                                  className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-                                  title="Sao chép đường dẫn giới thiệu"
-                                >
-                                  {copiedRefText === `link_${item.code}` ? (
-                                    <Check className="w-3 h-3 text-emerald-600" />
-                                  ) : (
-                                    <Link2 className="w-3 h-3" />
-                                  )}
-                                  <span>Link</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleReferralCode(item)}
-                                  className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold cursor-pointer"
-                                >
-                                  {item.active ? 'Khóa' : 'Mở'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteReferralCode(item)}
-                                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                                  title="Xóa mã giới thiệu"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
 
           <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
             <table className="w-full text-left border-collapse text-xs">
@@ -6447,8 +6225,758 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </div>
             </div>
           )}
+
+          {/* Đối chiếu & Xác nhận User sau Di trú Firebase Mới */}
+          {isAdmin && (
+            <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-900/60 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+                <div>
+                  <h4 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0" />
+                    <span>Đối Chiếu Dữ Liệu User Sau Chuyển Firebase Mới</span>
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Khi khôi phục hệ thống trừ bảng User sang Firebase mới, bật chế độ này để nhắc người dùng đăng nhập kiểm tra &amp; xác nhận dữ liệu cũ.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={loadingMigrationData}
+                    onClick={() => void fetchMigrationData()}
+                    className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingMigrationData ? 'animate-spin' : ''}`} />
+                    <span>Làm mới</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={migrationToggleSaving}
+                    onClick={async () => {
+                      setMigrationToggleSaving(true);
+                      try {
+                        const nextVal = !settings.migrationReconciliationActive;
+                        await updateSystemSettings({
+                          migrationReconciliationActive: nextVal,
+                          migrationBannerNote: migrationBannerNoteInput.trim(),
+                          updatedAt: new Date().toISOString(),
+                        });
+                        showToast(
+                          'success',
+                          nextVal
+                            ? 'Đã bật nhắc User đối chiếu dữ liệu di trú'
+                            : 'Đã tắt nhắc User đối chiếu dữ liệu di trú'
+                        );
+                      } catch {
+                        showToast('error', 'Không thể cập nhật trạng thái đối chiếu');
+                      } finally {
+                        setMigrationToggleSaving(false);
+                      }
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold text-white transition cursor-pointer whitespace-nowrap ${
+                      settings.migrationReconciliationActive
+                        ? 'bg-emerald-600 hover:bg-emerald-700'
+                        : 'bg-amber-600 hover:bg-amber-700'
+                    }`}
+                  >
+                    {settings.migrationReconciliationActive
+                      ? 'Đang BẬT đối chiếu User'
+                      : 'Bật nhắc đối chiếu User'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <div className="text-slate-500 dark:text-slate-400">Hồ sơ cũ chờ đối chiếu</div>
+                  <div className="text-lg font-extrabold text-slate-900 dark:text-white tabular-nums mt-0.5">
+                    {legacySnapshots.filter(s => s.claimStatus === 'pending').length} / {legacySnapshots.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800">
+                  <div className="text-rose-700 dark:text-rose-300 font-semibold">Yêu cầu điều chỉnh sai/thiếu</div>
+                  <div className="text-lg font-extrabold text-rose-800 dark:text-rose-200 tabular-nums mt-0.5">
+                    {migrationClaims.filter(c => c.status === 'disputed' || c.status === 'pending').length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                  <div className="text-emerald-700 dark:text-emerald-300 font-semibold">Đã xác nhận / Hoàn tất</div>
+                  <div className="text-lg font-extrabold text-emerald-800 dark:text-emerald-200 tabular-nums mt-0.5">
+                    {migrationClaims.filter(c => c.status === 'confirmed' || c.status === 'resolved').length}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 text-xs">
+                <input
+                  type="text"
+                  value={migrationBannerNoteInput}
+                  onChange={e => setMigrationBannerNoteInput(e.target.value)}
+                  placeholder="Ghi chú hiển thị cho người dân khi đăng nhập kiểm tra dữ liệu di trú..."
+                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <button
+                  type="button"
+                  disabled={migrationToggleSaving}
+                  onClick={async () => {
+                    setMigrationToggleSaving(true);
+                    try {
+                      await updateSystemSettings({
+                        migrationBannerNote: migrationBannerNoteInput.trim(),
+                        updatedAt: new Date().toISOString(),
+                      });
+                      showToast('success', 'Đã lưu ghi chú thông báo di trú');
+                    } catch {
+                      showToast('error', 'Lưu ghi chú thất bại');
+                    } finally {
+                      setMigrationToggleSaving(false);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold whitespace-nowrap cursor-pointer"
+                >
+                  Lưu ghi chú
+                </button>
+              </div>
+
+              {migrationClaims.length === 0 ? (
+                <div className="p-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-xs text-slate-400 text-center">
+                  Chưa có yêu cầu xác nhận hoặc điều chỉnh nào từ người dùng.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase whitespace-nowrap">
+                        <th className="py-2.5 px-3">Người dùng</th>
+                        <th className="py-2.5 px-3">Trạng thái</th>
+                        <th className="py-2.5 px-3">Mục báo sai/thiếu</th>
+                        <th className="py-2.5 px-3">Nội dung phản hồi</th>
+                        <th className="py-2.5 px-3 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {migrationClaims.map(claim => {
+                        const isPending = claim.status === 'disputed' || claim.status === 'pending';
+                        return (
+                          <tr key={claim.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                            <td className="py-2.5 px-3">
+                              <div className="font-bold text-slate-900 dark:text-white">
+                                {claim.displayName || 'Chưa cập nhật'}
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono">{claim.email}</div>
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isPending
+                                    ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                    : claim.status === 'rejected'
+                                    ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                }`}
+                              >
+                                {claim.status === 'disputed'
+                                  ? 'Báo sai / thiếu'
+                                  : claim.status === 'pending'
+                                  ? 'Chờ Admin duyệt'
+                                  : claim.status === 'rejected'
+                                  ? 'Từ chối'
+                                  : claim.status === 'resolved'
+                                  ? 'Đã điều chỉnh'
+                                  : 'Đã xác nhận'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {(claim.disputedFields || []).length > 0
+                                ? claim.disputedFields!.join(', ')
+                                : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 max-w-[260px]">
+                              <p className="line-clamp-2 text-slate-700 dark:text-slate-300">
+                                {claim.userNote || claim.adminNote || '—'}
+                              </p>
+                            </td>
+                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const liveUser = users.find(u => u.uid === claim.uid);
+                                  setResolvingClaim(claim);
+                                  setClaimEditValues({
+                                    displayName: liveUser?.displayName || claim.displayName || '',
+                                    phoneNumber: liveUser?.phoneNumber || liveUser?.verifiedPhone || '',
+                                    citizenId: liveUser?.citizenId || '',
+                                    department: liveUser?.department || '',
+                                    position: liveUser?.position || '',
+                                    role: liveUser?.role || 'citizen',
+                                    accountType: liveUser?.accountType || 'citizen',
+                                  });
+                                  setAdminClaimNote(claim.adminNote || '');
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold cursor-pointer"
+                              >
+                                {isPending ? 'Kiểm tra & Điều chỉnh' : 'Xem chi tiết'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Modal Admin Resolve Migration Claim */}
+          {resolvingClaim && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-xl w-full p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto text-xs">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                      Điều Chỉnh Hồ Sơ Di Trú
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-mono">{resolvingClaim.email}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setResolvingClaim(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {(resolvingClaim.userNote || (resolvingClaim.disputedFields || []).length > 0) && (
+                  <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-950 dark:text-amber-200 space-y-1">
+                    <div className="font-bold">Ghi chú từ người dùng:</div>
+                    {resolvingClaim.userNote && <p>{resolvingClaim.userNote}</p>}
+                    {(resolvingClaim.disputedFields || []).length > 0 && (
+                      <div className="text-[11px] font-semibold pt-1">
+                        Mục báo sai/thiếu: {resolvingClaim.disputedFields!.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold mb-1">Họ và tên</label>
+                    <input
+                      type="text"
+                      value={claimEditValues.displayName}
+                      onChange={e => setClaimEditValues(p => ({ ...p, displayName: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Số điện thoại</label>
+                    <input
+                      type="text"
+                      value={claimEditValues.phoneNumber}
+                      onChange={e => setClaimEditValues(p => ({ ...p, phoneNumber: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Số CCCD</label>
+                    <input
+                      type="text"
+                      value={claimEditValues.citizenId}
+                      onChange={e => setClaimEditValues(p => ({ ...p, citizenId: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Khoa / Phòng</label>
+                    <input
+                      type="text"
+                      value={claimEditValues.department}
+                      onChange={e => setClaimEditValues(p => ({ ...p, department: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Chức vụ</label>
+                    <input
+                      type="text"
+                      value={claimEditValues.position}
+                      onChange={e => setClaimEditValues(p => ({ ...p, position: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Vai trò hệ thống</label>
+                    <select
+                      value={claimEditValues.role}
+                      onChange={e => setClaimEditValues(p => ({ ...p, role: e.target.value as UserProfile['role'] }))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    >
+                      <option value="citizen">Công dân</option>
+                      <option value="staff">Nhân viên Y tế</option>
+                      <option value="doctor">Bác sĩ</option>
+                      <option value="nurse">Điều dưỡng</option>
+                      <option value="communicator">Truyền thông</option>
+                      <option value="leadership">Ban Lãnh đạo</option>
+                      <option value="admin">Quản trị viên (Admin)</option>
+                      {canManageSuperAdminTier && <option value="super_admin">Super Admin</option>}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1">Loại tài khoản</label>
+                    <select
+                      value={claimEditValues.accountType || 'citizen'}
+                      onChange={e =>
+                        setClaimEditValues(p => ({ ...p, accountType: e.target.value as UserProfile['accountType'] }))
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    >
+                      <option value="citizen">Công dân</option>
+                      <option value="employee">Cán bộ / Nhân viên</option>
+                      <option value="admin">Quản trị viên</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1">Phản hồi của Quản trị viên</label>
+                  <textarea
+                    rows={2}
+                    value={adminClaimNote}
+                    onChange={e => setAdminClaimNote(e.target.value)}
+                    placeholder="Ghi chú xác nhận hoặc hướng dẫn cho người dùng..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 resize-none"
+                  />
+                </div>
+
+                <div className={getBalancedMobileGridClass(3, 'pt-3 border-t border-slate-100 dark:border-slate-800 sm:justify-end')}>
+                  <button
+                    type="button"
+                    disabled={savingClaimResolution}
+                    onClick={() => setResolvingClaim(null)}
+                    className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
+                  >
+                    Đóng
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingClaimResolution}
+                    onClick={async () => {
+                      setSavingClaimResolution(true);
+                      try {
+                        await resolveUserMigrationClaim({
+                          claim: resolvingClaim,
+                          action: 'reject',
+                          adminUid: currentUser?.uid || 'admin',
+                          adminName: userProfile?.displayName || currentUser?.email || PRIMARY_ADMIN_EMAIL,
+                          adminNote: adminClaimNote.trim() || 'Không tìm thấy sai lệch dữ liệu.',
+                        });
+                        showToast('info', 'Đã từ chối yêu cầu điều chỉnh');
+                        setResolvingClaim(null);
+                        void fetchMigrationData();
+                        onRefreshData();
+                      } catch (err: any) {
+                        showToast('error', 'Thao tác thất bại', err?.message);
+                      } finally {
+                        setSavingClaimResolution(false);
+                      }
+                    }}
+                    className="min-h-[40px] px-4 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold cursor-pointer"
+                  >
+                    Từ chối
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingClaimResolution}
+                    onClick={async () => {
+                      setSavingClaimResolution(true);
+                      try {
+                        await resolveUserMigrationClaim({
+                          claim: resolvingClaim,
+                          action: 'resolve',
+                          adminUid: currentUser?.uid || 'admin',
+                          adminName: userProfile?.displayName || currentUser?.email || PRIMARY_ADMIN_EMAIL,
+                          adminNote: adminClaimNote.trim() || 'Đã đối chiếu & cập nhật hồ sơ đầy đủ.',
+                          updatedUserFields: claimEditValues,
+                        });
+                        showToast('success', 'Đã cập nhật & hoàn tất đối chiếu cho tài khoản');
+                        setResolvingClaim(null);
+                        void fetchMigrationData();
+                        onRefreshData();
+                      } catch (err: any) {
+                        showToast('error', 'Không thể lưu cập nhật', err?.message);
+                      } finally {
+                        setSavingClaimResolution(false);
+                      }
+                    }}
+                    className={`${getBalancedMobileItemSpan(2, 3)} min-h-[40px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer`}
+                  >
+                    {savingClaimResolution ? 'Đang lưu...' : 'Áp dụng & Hoàn tất'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Subtab: Link & Mã Giới Thiệu Theo 2 Đối Tượng (Super Admin & Admin) */}
+      {subTab === 'referral_codes' && isAdmin && (() => {
+        const superAdminCodes = referralCodes.filter(
+          item => (item.issuerTier || 'super_admin') === 'super_admin'
+        );
+        const adminCodes = referralCodes.filter(item => item.issuerTier === 'admin');
+        const activeCount = referralCodes.filter(item => item.active).length;
+        const totalUsedCount = referralCodes.reduce((sum, item) => sum + (item.usedCount || 0), 0);
+        const visibleTiers: ReferralIssuerTier[] =
+          referralTierFilter === 'all' ? ['super_admin', 'admin'] : [referralTierFilter];
+
+        return (
+          <div className="space-y-6">
+            <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-900/60 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Ticket className="w-5 h-5 text-emerald-600" />
+                    <span>Link &amp; Mã Giới Thiệu Theo 2 Đối Tượng (Super Admin &amp; Admin)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Phân tách rõ 2 luồng mời: <strong>Đối tượng Super Admin</strong> (có thể mời Admin Trạm hoặc Cán bộ Y tế) và <strong>Đối tượng Admin</strong> (mời Cán bộ Y tế).
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void refreshReferralCodesList()}
+                  disabled={loadingReferrals}
+                  className="self-start sm:self-auto px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingReferrals ? 'animate-spin text-emerald-600' : ''}`} />
+                  <span>Làm mới</span>
+                </button>
+              </div>
+
+              {/* Summary + Tier Filter */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70">
+                  <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Tổng mã mời</div>
+                  <div className="text-lg font-extrabold text-slate-900 dark:text-white tabular-nums mt-0.5">
+                    {referralCodes.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60">
+                  <div className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">Super Admin</div>
+                  <div className="text-lg font-extrabold text-amber-900 dark:text-amber-200 tabular-nums mt-0.5">
+                    {superAdminCodes.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60">
+                  <div className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">Admin Trạm</div>
+                  <div className="text-lg font-extrabold text-emerald-900 dark:text-emerald-200 tabular-nums mt-0.5">
+                    {adminCodes.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-800/60">
+                  <div className="text-[11px] font-semibold text-blue-800 dark:text-blue-300">Đang bật / Đã dùng</div>
+                  <div className="text-lg font-extrabold text-blue-900 dark:text-blue-200 tabular-nums mt-0.5">
+                    {activeCount} <span className="text-xs font-semibold opacity-75">/ {totalUsedCount} lượt</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReferralTierFilter('all')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    referralTierFilter === 'all'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Tất cả ({referralCodes.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReferralTierFilter('super_admin')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    referralTierFilter === 'super_admin'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                  }`}
+                >
+                  Đối tượng Super Admin ({superAdminCodes.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReferralTierFilter('admin')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    referralTierFilter === 'admin'
+                      ? 'bg-emerald-700 text-white shadow-xs'
+                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50'
+                  }`}
+                >
+                  Đối tượng Admin ({adminCodes.length})
+                </button>
+              </div>
+
+              {/* Create Form */}
+              <form onSubmit={handleCreateReferralCode} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div className="sm:col-span-3">
+                  <select
+                    value={canManageSuperAdminTier ? newRefIssuerTier : 'admin'}
+                    disabled={!canManageSuperAdminTier}
+                    onChange={e => {
+                      const nextTier = e.target.value as ReferralIssuerTier;
+                      setNewRefIssuerTier(nextTier);
+                      if (nextTier !== 'super_admin') setNewRefTargetAccountType('employee');
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
+                  >
+                    {canManageSuperAdminTier && (
+                      <option value="super_admin">Đối tượng: Super Admin</option>
+                    )}
+                    <option value="admin">Đối tượng: Admin</option>
+                  </select>
+                </div>
+
+                {canManageSuperAdminTier && newRefIssuerTier === 'super_admin' && (
+                  <div className="sm:col-span-2">
+                    <select
+                      value={newRefTargetAccountType}
+                      onChange={e => setNewRefTargetAccountType(e.target.value as 'employee' | 'admin')}
+                      className="w-full px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 font-bold text-amber-900 dark:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    >
+                      <option value="employee">Cấp: Cán bộ Y tế</option>
+                      <option value="admin">Cấp: Admin Trạm</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className={canManageSuperAdminTier && newRefIssuerTier === 'super_admin' ? 'sm:col-span-3 flex gap-1.5' : 'sm:col-span-4 flex gap-1.5'}>
+                  <input
+                    type="text"
+                    value={newRefCodeInput}
+                    onChange={e => setNewRefCodeInput(e.target.value.toUpperCase())}
+                    placeholder="Mã tự nhập (hoặc bỏ trống)"
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono uppercase focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNewRefCodeInput(
+                        generateRandomReferralCode(
+                          canManageSuperAdminTier && newRefIssuerTier === 'super_admin'
+                            ? newRefTargetAccountType === 'admin'
+                              ? 'ADM'
+                              : 'SADM'
+                            : 'CBYT'
+                        )
+                      )
+                    }
+                    className="px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold text-slate-700 dark:text-slate-200 cursor-pointer shrink-0"
+                    title="Tạo mã ngẫu nhiên"
+                  >
+                    Ngẫu nhiên
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  value={newRefLabelInput}
+                  onChange={e => setNewRefLabelInput(e.target.value)}
+                  placeholder="Ghi chú (VD: Tổ Tiêm chủng)"
+                  className={canManageSuperAdminTier && newRefIssuerTier === 'super_admin' ? 'sm:col-span-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500' : 'sm:col-span-3 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500'}
+                />
+
+                {!(canManageSuperAdminTier && newRefIssuerTier === 'super_admin' && newRefTargetAccountType === 'admin') && (
+                  <select
+                    value={newRefRole}
+                    onChange={e => setNewRefRole(e.target.value as any)}
+                    className="sm:col-span-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="staff">Nhân viên Y tế</option>
+                    <option value="doctor">Bác sĩ</option>
+                    <option value="nurse">Điều dưỡng</option>
+                    <option value="communicator">Truyền thông</option>
+                    <option value="leadership">Ban Lãnh đạo</option>
+                  </select>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={creatingRef}
+                  className="sm:col-span-2 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{creatingRef ? 'Đang tạo...' : 'Tạo mã mời'}</span>
+                </button>
+              </form>
+
+              {loadingReferrals ? (
+                <div className="text-xs text-slate-400 py-6 text-center">Đang tải danh sách mã giới thiệu...</div>
+              ) : (
+                <div className="space-y-5">
+                  {visibleTiers.map(tierKey => {
+                    const tierList = tierKey === 'super_admin' ? superAdminCodes : adminCodes;
+                    const isSuperTier = tierKey === 'super_admin';
+                    const canModifyTier = isSuperTier ? canManageSuperAdminTier : isAdmin;
+
+                    return (
+                      <div key={tierKey} className="space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase ${
+                                isSuperTier
+                                  ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                                  : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                              }`}
+                            >
+                              {isSuperTier ? 'Đối tượng Super Admin' : 'Đối tượng Admin'}
+                            </span>
+                            <span className="text-slate-500 dark:text-slate-400 font-normal">
+                              ({tierList.length} mã{isSuperTier && !canManageSuperAdminTier ? ' · Chỉ xem' : ''})
+                            </span>
+                          </div>
+                        </div>
+
+                        {tierList.length === 0 ? (
+                          <div className="p-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-xs text-slate-400 text-center">
+                            Chưa có mã giới thiệu thuộc đối tượng {isSuperTier ? 'Super Admin' : 'Admin'}.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider whitespace-nowrap">
+                                  <th className="py-2.5 px-3">Mã giới thiệu</th>
+                                  <th className="py-2.5 px-3">Vai trò cấp</th>
+                                  <th className="py-2.5 px-3">Ghi chú</th>
+                                  <th className="py-2.5 px-3 text-center">Đã dùng</th>
+                                  <th className="py-2.5 px-3">Trạng thái</th>
+                                  <th className="py-2.5 px-3">Đường dẫn mời</th>
+                                  <th className="py-2.5 px-3 text-right">Thao tác</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                                {tierList.map(item => {
+                                  const inviteUrl =
+                                    typeof window !== 'undefined'
+                                      ? `${window.location.origin}/?ref=${item.code}#tai-khoan`
+                                      : `/?ref=${item.code}#tai-khoan`;
+                                  const roleLabel =
+                                    item.targetAccountType === 'admin' || item.targetRole === 'admin'
+                                      ? 'Admin Trạm'
+                                      : item.targetRole === 'doctor'
+                                      ? 'Bác sĩ'
+                                      : item.targetRole === 'nurse'
+                                      ? 'Điều dưỡng'
+                                      : item.targetRole === 'communicator'
+                                      ? 'Truyền thông'
+                                      : item.targetRole === 'leadership'
+                                      ? 'Ban Lãnh đạo'
+                                      : 'Nhân viên Y tế';
+                                  return (
+                                    <tr key={item.code} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition">
+                                      <td className="py-2.5 px-3 whitespace-nowrap">
+                                        <code className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono font-bold">
+                                          {item.code}
+                                        </code>
+                                      </td>
+                                      <td className="py-2.5 px-3 whitespace-nowrap font-semibold text-slate-700 dark:text-slate-300">
+                                        {roleLabel}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 max-w-[160px] truncate" title={item.label || ''}>
+                                        {item.label || '—'}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center font-semibold text-slate-700 dark:text-slate-300 tabular-nums whitespace-nowrap">
+                                        {item.usedCount || 0}
+                                      </td>
+                                      <td className="py-2.5 px-3 whitespace-nowrap">
+                                        <span
+                                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            item.active
+                                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                              : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                                          }`}
+                                        >
+                                          {item.active ? 'Đang bật' : 'Tạm khóa'}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3 max-w-[240px]">
+                                        <span className="block font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate" title={inviteUrl}>
+                                          {inviteUrl}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                        <div className="inline-flex items-center justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyReferralValue(item.code, `code_${item.code}`, 'mã giới thiệu')}
+                                            className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                            title="Sao chép mã"
+                                          >
+                                            {copiedRefText === `code_${item.code}` ? (
+                                              <Check className="w-3 h-3 text-emerald-600" />
+                                            ) : (
+                                              <Copy className="w-3 h-3 text-slate-500" />
+                                            )}
+                                            <span>Mã</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyReferralValue(inviteUrl, `link_${item.code}`, 'đường dẫn giới thiệu')}
+                                            className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                            title="Sao chép đường dẫn giới thiệu"
+                                          >
+                                            {copiedRefText === `link_${item.code}` ? (
+                                              <Check className="w-3 h-3 text-emerald-600" />
+                                            ) : (
+                                              <Link2 className="w-3 h-3" />
+                                            )}
+                                            <span>Link</span>
+                                          </button>
+                                          {canModifyTier && (
+                                            <>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleToggleReferralCode(item)}
+                                                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold cursor-pointer"
+                                              >
+                                                {item.active ? 'Khóa' : 'Mở'}
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteReferralCode(item)}
+                                                className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                                                title="Xóa mã giới thiệu"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Subtab 3: Feedback Processing */}
       {subTab === 'feedback' && (() => {
@@ -6796,6 +7324,171 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         );
       })()}
 
+      {/* Subtab: Quản lý Đánh giá Trải nghiệm & Dịch vụ (Star Ratings) */}
+      {subTab === 'ratings' && (() => {
+        const filteredRatings = serviceRatings.filter(r => {
+          if (ratingCategoryFilter !== 'all' && r.category !== ratingCategoryFilter) return false;
+          if (ratingStarFilter > 0 && r.score !== ratingStarFilter) return false;
+          return true;
+        });
+        const total = serviceRatings.length;
+        const avg =
+          total > 0
+            ? serviceRatings.reduce((acc, r) => acc + (Number(r.score) || 0), 0) / total
+            : 0;
+
+        return (
+          <div className="space-y-5">
+            <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Star className="w-5 h-5 text-amber-500 fill-amber-400 shrink-0" />
+                    <span>Quản Lý Đánh Giá Trải Nghiệm &amp; Dịch Vụ</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Tổng hợp đánh giá sao và nhận xét của người dân từ cuối trang Cổng thông tin.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 px-4 py-2 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 shrink-0">
+                  <div className="text-2xl font-extrabold text-amber-700 dark:text-amber-300 tabular-nums">
+                    {avg.toFixed(1)}★
+                  </div>
+                  <div className="text-[11px] text-amber-800 dark:text-amber-200">
+                    <div className="font-bold">{total} lượt đánh giá</div>
+                    <div>
+                      {total > 0
+                        ? `${Math.round((serviceRatings.filter(r => r.score >= 4).length / total) * 100)}% hài lòng (4–5★)`
+                        : 'Chưa có dữ liệu'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div className={getBalancedMobileGridClass(5)}>
+                  {(['all', 'giao_dien', 'thai_do', 'chuyen_mon', 'tien_ich'] as const).map(
+                    (catKey, idx) => (
+                      <button
+                        key={catKey}
+                        type="button"
+                        onClick={() => setRatingCategoryFilter(catKey)}
+                        className={`${getBalancedMobileItemSpan(idx, 5)} min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                          ratingCategoryFilter === catKey
+                            ? 'bg-emerald-700 text-white shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {catKey === 'all' ? 'Tất cả mục' : SERVICE_RATING_CATEGORY_LABELS[catKey]}
+                      </button>
+                    )
+                  )}
+                </div>
+
+                <select
+                  value={ratingStarFilter}
+                  onChange={e => setRatingStarFilter(Number(e.target.value))}
+                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                >
+                  <option value={0}>Mọi mức sao</option>
+                  <option value={5}>5 sao</option>
+                  <option value={4}>4 sao</option>
+                  <option value={3}>3 sao</option>
+                  <option value={2}>2 sao</option>
+                  <option value={1}>1 sao</option>
+                </select>
+              </div>
+            </div>
+
+            {filteredRatings.length === 0 ? (
+              <div className="p-10 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-400">
+                Không có đánh giá nào phù hợp với bộ lọc hiện tại.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredRatings.map(item => (
+                  <div
+                    key={item.id}
+                    className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between gap-3"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <UserAvatar
+                            src={item.raterAvatarUrl}
+                            name={item.raterName || 'Người dân'}
+                            size={34}
+                            rounded="full"
+                          />
+                          <div className="min-w-0">
+                            <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                              {item.raterName || 'Người dân'}
+                            </div>
+                            <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                              {SERVICE_RATING_CATEGORY_LABELS[item.category] || item.category}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-0.5 text-amber-500 shrink-0">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <Star
+                              key={i}
+                              className={`w-4 h-4 ${
+                                i < item.score ? 'fill-amber-400 text-amber-500' : 'text-slate-300 dark:text-slate-700'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                        {item.comment?.trim() ? item.comment : <span className="italic text-slate-400">Chỉ chấm điểm sao (không kèm nhận xét)</span>}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400">
+                      <span className="tabular-nums">
+                        {item.createdAt ? new Date(item.createdAt).toLocaleString('vi-VN') : ''}
+                        {item.pageView ? ` · Trang: ${item.pageView}` : ''}
+                      </span>
+
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            showConfirm({
+                              title: 'Xóa đánh giá này?',
+                              message: `Xóa đánh giá ${item.score} sao từ "${item.raterName || 'Người dân'}"?`,
+                              confirmText: 'Xóa',
+                              cancelText: 'Hủy',
+                              isDangerous: true,
+                              onConfirm: async () => {
+                                try {
+                                  await deleteServiceRating(item.id);
+                                  showToast('success', 'Đã xóa đánh giá');
+                                } catch (err: any) {
+                                  showToast('error', 'Không thể xóa', err?.message);
+                                }
+                              },
+                            });
+                          }}
+                          className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                          title="Xóa đánh giá"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Subtab 4: GitHub File Storage Manager */}
       {subTab === 'github_storage' && isAdmin && (
         <GitHubFileManager
@@ -7128,6 +7821,271 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                       </button>
                     </div>
                   </div>
+                </div>
+              );
+            })()}
+
+            {/* Phân Quyền Theo Từng Đối Tượng (Super Admin · Admin · User · Khách) */}
+            {(() => {
+              const roleTabs: Array<{ id: 'super_admin' | 'admin' | 'user' | 'organization' | 'guest'; label: string; desc: string }> = [
+                { id: 'super_admin', label: 'Super Admin (Full quyền)', desc: 'Toàn quyền tuyệt đối, không bị giới hạn' },
+                { id: 'admin', label: 'Admin', desc: 'Cấu hình thủ công & Preset nhanh' },
+                { id: 'user', label: 'User (Đã đăng nhập)', desc: 'Cán bộ & Công dân có tài khoản' },
+                { id: 'organization', label: 'Tổ chức / Doanh nghiệp', desc: 'Phòng khám, nhà thuốc, trường học địa bàn' },
+                { id: 'guest', label: 'Khách (Chưa đăng nhập)', desc: 'Chỉ định site bắt buộc đăng nhập' },
+              ];
+
+              const currentPolicy: RolePermissionPolicy =
+                activeRoleConfigTab === 'admin'
+                  ? rolePermissions.admin
+                  : activeRoleConfigTab === 'organization'
+                  ? (rolePermissions.organization || DEFAULT_ROLE_PERMISSIONS.organization!)
+                  : activeRoleConfigTab === 'user'
+                  ? rolePermissions.user
+                  : rolePermissions.guest;
+
+              const updateEditablePolicy = (updater: (prev: RolePermissionPolicy) => RolePermissionPolicy, summary: string) => {
+                if (activeRoleConfigTab === 'super_admin') return;
+                const next = {
+                  ...rolePermissions,
+                  [activeRoleConfigTab]: updater(currentPolicy),
+                };
+                void handleSaveRolePermissions(next, summary);
+              };
+
+              const toggleArrayField = (field: 'blockedTabs' | 'requireLoginForTabs', tabId: string, tabLabel: string) => {
+                updateEditablePolicy(prev => {
+                  const arr = prev[field] || [];
+                  const exists = arr.includes(tabId);
+                  return {
+                    ...prev,
+                    [field]: exists ? arr.filter(id => id !== tabId) : [...arr, tabId],
+                  };
+                }, `${activeRoleConfigTab} · ${field === 'blockedTabs' ? 'Chặn tab' : 'Yêu cầu đăng nhập'}: ${tabLabel}`);
+              };
+
+              const featureFlags: Array<{ key: keyof RolePermissionPolicy; label: string; adminOnly?: boolean }> = [
+                { key: 'canSubmitFeedback', label: 'Gửi phản ánh / kiến nghị' },
+                { key: 'canUseApps', label: 'Truy cập Menu Ứng dụng' },
+                { key: 'canSendRescueSos', label: 'Gửi tín hiệu Cứu hộ SOS' },
+                { key: 'canViewPersonnelDirectory', label: 'Xem danh bạ nhân lực chi tiết' },
+                { key: 'canManageContent', label: 'Quản trị bài viết, thông báo, sự kiện', adminOnly: true },
+                { key: 'canManageSchedules', label: 'Quản trị lịch trực & lịch tiêm', adminOnly: true },
+                { key: 'canAttendanceCheckin', label: 'Chấm công nhanh nhân sự', adminOnly: true },
+                { key: 'canManageUsers', label: 'Quản lý tài khoản & mã giới thiệu Admin', adminOnly: true },
+                { key: 'canManageSystem', label: 'Cấu hình bảo trì & chặn thiết bị', adminOnly: true },
+              ];
+
+              const presetsForRole =
+                activeRoleConfigTab === 'admin'
+                  ? Object.entries(ROLE_PERMISSION_PRESETS.admin)
+                  : activeRoleConfigTab === 'organization'
+                  ? Object.entries(ROLE_PERMISSION_PRESETS.organization)
+                  : activeRoleConfigTab === 'user'
+                  ? Object.entries(ROLE_PERMISSION_PRESETS.user)
+                  : activeRoleConfigTab === 'guest'
+                  ? Object.entries(ROLE_PERMISSION_PRESETS.guest)
+                  : [];
+
+              return (
+                <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-900/60 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3.5">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span>Cấu Hình Quyền Theo Đối Tượng (Super Admin · Admin · User · Khách)</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Thiết lập quyền sử dụng chức năng, ẩn tab hoặc chỉ định trang bắt buộc đăng nhập đối với từng nhóm người dùng.
+                      </p>
+                    </div>
+                    {savingRolePerms && (
+                      <span className="text-[11px] font-semibold text-emerald-600 inline-flex items-center gap-1">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Đang lưu...</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Role selector tabs */}
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+                    {roleTabs.map(rt => {
+                      const active = activeRoleConfigTab === rt.id;
+                      return (
+                        <button
+                          key={rt.id}
+                          type="button"
+                          onClick={() => setActiveRoleConfigTab(rt.id)}
+                          className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                            active
+                              ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                              : 'bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="text-xs font-extrabold">{rt.label}</div>
+                          <div className={`text-[10px] mt-0.5 ${active ? 'text-emerald-100' : 'text-slate-500 dark:text-slate-400'}`}>
+                            {rt.desc}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {activeRoleConfigTab === 'super_admin' ? (
+                    <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200 space-y-1">
+                      <div className="font-extrabold flex items-center gap-1.5">
+                        <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Super Admin: Full quyền (Cố định &amp; Không thể khóa)</span>
+                      </div>
+                      <p className="leading-relaxed">
+                        Tài khoản Super Admin luôn có quyền truy cập toàn bộ phân hệ, cấu hình bảo mật, mã mời đối tượng Super Admin/Admin và miễn trừ mọi chế độ bảo trì hoặc chặn truy cập thiết bị.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Presets ("Cấu hình nhanh phù hợp") */}
+                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-2">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200">
+                          <span>Cấu hình nhanh phù hợp ({roleTabs.find(t => t.id === activeRoleConfigTab)?.label}):</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleSaveRolePermissions(
+                                {
+                                  ...rolePermissions,
+                                  [activeRoleConfigTab]: { ...DEFAULT_ROLE_PERMISSIONS[activeRoleConfigTab] },
+                                },
+                                `Khôi phục mặc định cho ${activeRoleConfigTab}`
+                              )
+                            }
+                            className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                          >
+                            Khôi phục mặc định
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {presetsForRole.map(([presetKey, preset]) => (
+                            <button
+                              key={presetKey}
+                              type="button"
+                              onClick={() =>
+                                void handleSaveRolePermissions(
+                                  {
+                                    ...rolePermissions,
+                                    [activeRoleConfigTab]: { ...preset.policy },
+                                  },
+                                  `Áp dụng preset "${preset.label}" cho ${activeRoleConfigTab}`
+                                )
+                              }
+                              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-300 text-xs font-semibold cursor-pointer transition"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Feature capability switches */}
+                      <div className="space-y-2">
+                        <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                          Quyền thao tác chức năng (Cấu hình thủ công):
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                          {featureFlags
+                            .filter(f => (activeRoleConfigTab === 'admin' ? true : !f.adminOnly))
+                            .map(flag => {
+                              const checked = Boolean(currentPolicy[flag.key]);
+                              return (
+                                <label
+                                  key={flag.key}
+                                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer text-xs"
+                                >
+                                  <span className="font-semibold text-slate-700 dark:text-slate-200">{flag.label}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      updateEditablePolicy(
+                                        prev => ({ ...prev, [flag.key]: !checked }),
+                                        `${activeRoleConfigTab} · ${flag.label}: ${!checked ? 'Bật' : 'Tắt'}`
+                                      )
+                                    }
+                                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                                  />
+                                </label>
+                              );
+                            })}
+                        </div>
+                      </div>
+
+                      {/* Guest Only: Require login before opening specific site/feature */}
+                      {activeRoleConfigTab === 'guest' && (
+                        <div className="p-4 rounded-2xl bg-amber-50/60 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-800/70 space-y-2.5">
+                          <div>
+                            <div className="text-xs font-bold text-amber-950 dark:text-amber-200">
+                              Chỉ định chức năng / site bắt buộc Khách phải đăng nhập mới sử dụng được:
+                            </div>
+                            <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                              Các tab được tick sẽ hiển thị nhãn “Đăng nhập” trên Sidebar; khi Khách bấm vào sẽ yêu cầu đăng nhập tài khoản trước khi sử dụng.
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {CONTROLLABLE_SIDEBAR_TABS.filter(t => t.id !== 'portal').map(tab => {
+                              const required = Boolean(currentPolicy.requireLoginForTabs?.includes(tab.id));
+                              return (
+                                <label
+                                  key={`req_${tab.id}`}
+                                  className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                    required
+                                      ? 'bg-amber-100/80 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 text-amber-950 dark:text-amber-200 font-bold'
+                                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                                  }`}
+                                >
+                                  <span className="truncate">{tab.label}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={required}
+                                    onChange={() => toggleArrayField('requireLoginForTabs', tab.id, tab.label)}
+                                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 shrink-0"
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Blocked Tabs for this Role */}
+                      <div className="space-y-2">
+                        <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                          Ẩn / Chặn hoàn toàn phân hệ đối với đối tượng này:
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                          {CONTROLLABLE_SIDEBAR_TABS.filter(t => t.id !== 'portal').map(tab => {
+                            const blocked = Boolean(currentPolicy.blockedTabs?.includes(tab.id));
+                            return (
+                              <label
+                                key={`blk_${tab.id}`}
+                                className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                  blocked
+                                    ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 font-bold'
+                                    : 'bg-slate-50/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                                }`}
+                              >
+                                <span className="truncate">{tab.label}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={blocked}
+                                  onChange={() => toggleArrayField('blockedTabs', tab.id, tab.label)}
+                                  className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500 shrink-0"
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -7848,7 +8806,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     type="text"
                     value={newLocHours}
                     onChange={e => setNewLocHours(e.target.value)}
-                    placeholder="7:30 - 17:00"
+                    placeholder="07:00 - 11:00 | 13:00 - 17:00"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -8104,7 +9062,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     type="text"
                     value={newLocHours}
                     onChange={e => setNewLocHours(e.target.value)}
-                    placeholder="7:30 - 17:00"
+                    placeholder="07:00 - 11:00 | 13:00 - 17:00"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>

@@ -6,9 +6,10 @@ export type RoleType =
   | 'nurse'
   | 'communicator'
   | 'staff'
-  | 'citizen';
+  | 'citizen'
+  | 'organization';
 
-export type AccountType = 'citizen' | 'employee' | 'admin';
+export type AccountType = 'citizen' | 'employee' | 'admin' | 'organization';
 
 export interface EthnicItem {
   label: string;
@@ -74,6 +75,29 @@ export interface UserProfile {
   allowIdentityEditByAdmin?: boolean;
   googleLinked?: boolean;
   referralCodeUsed?: string;
+  personalReferralCode?: string;
+  referredByUid?: string;
+  referredByCode?: string;
+  expBalance?: number;
+  totalExpEarned?: number;
+  lastRewardClaimRefUid?: string;
+  lastStoreOrderId?: string;
+  migrationStatus?: 'none' | 'pending_review' | 'confirmed' | 'disputed';
+  migrationConfirmedAt?: string;
+  migrationSnapshotId?: string;
+  // Trường thông tin cho Tổ chức / Doanh nghiệp trên địa bàn
+  organizationName?: string;
+  organizationType?: 'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other';
+  taxCode?: string; // Mã số thuế (MST)
+  businessLicenseNumber?: string; // Số Giấy phép hoạt động / ĐKKD
+  licenseIssueDate?: string; // Ngày cấp GP
+  licenseIssuer?: string; // Nơi cấp GP (Sở Y tế, Sở KH&ĐT,...)
+  legalRepresentative?: string; // Người đại diện pháp luật
+  representativeCitizenId?: string; // CCCD người đại diện
+  operatingField?: string; // Lĩnh vực hoạt động chính
+  organizationAddress?: string; // Địa chỉ trụ sở/cơ sở tại địa bàn
+  organizationPhone?: string; // Điện thoại bàn / hotline tổ chức
+  organizationEmail?: string; // Email liên hệ tổ chức
   createdAt: string;
   updatedAt?: string;
   lastLoginAt?: string;
@@ -98,11 +122,14 @@ export interface VerifiedIdentifierLock {
   verifiedAt: string;
 }
 
+export type ReferralIssuerTier = 'super_admin' | 'admin';
+
 export interface ReferralCodeItem {
   code: string;
   label?: string;
   active: boolean;
-  targetAccountType: 'employee';
+  issuerTier?: ReferralIssuerTier;
+  targetAccountType: 'employee' | 'admin';
   targetRole: RoleType;
   createdByUid: string;
   createdByEmail?: string;
@@ -110,6 +137,34 @@ export interface ReferralCodeItem {
   usedCount: number;
   lastUsedAt?: string;
   lastUsedByUid?: string;
+}
+
+export interface UserReferralLink {
+  code: string;
+  ownerUid: string;
+  ownerName: string;
+  createdAt: string;
+}
+
+export interface ReferralTrackingSteps {
+  email: boolean;
+  phone: boolean;
+  password: boolean;
+}
+
+export interface ReferralTrackingItem {
+  referredUid: string;
+  referredName: string;
+  referredEmailMasked?: string;
+  referrerUid: string;
+  referralCode: string;
+  stepsCompleted: ReferralTrackingSteps;
+  qualifiedForReward: boolean;
+  rewarded: boolean;
+  expAwarded: number;
+  createdAt: string;
+  updatedAt: string;
+  rewardedAt?: string;
 }
 
 export interface UserVerifiedDevice {
@@ -382,6 +437,18 @@ export interface QuickLink {
   badge?: string;
 }
 
+export interface PortalAppItem {
+  id: string;
+  name: string;
+  url: string;
+  logoUrl?: string;
+  category?: string;
+  order?: number;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface DocumentItem {
   id: string;
   docNumber: string;
@@ -457,6 +524,15 @@ export interface BackupItem {
     verifiedIdentifiersCount?: number;
     userDevicesCount?: number;
     bhxhServerConfigCount?: number;
+    referralCodesCount?: number;
+    userReferralLinksCount?: number;
+    referralTrackingCount?: number;
+    attendanceRecordsCount?: number;
+    storeItemsCount?: number;
+    storeOrdersCount?: number;
+    serviceRatingsCount?: number;
+    legacyUserSnapshotsCount?: number;
+    userMigrationClaimsCount?: number;
     totalRecords?: number;
   };
   storageType?: 'cloud' | 'github';
@@ -846,6 +922,8 @@ export interface SystemSettings {
   customFunctionsAndDuties?: string; // Chức năng nhiệm vụ chi tiết nhập thủ công, mỗi dòng đầu thụt vào 1cm
   mapLocations?: MapLocation[]; // Danh sách tọa độ các cơ sở/điểm trạm y tế
   quickLinks?: QuickLink[]; // Các nhánh truy cập nhanh đến các site khác
+  portalApps?: PortalAppItem[]; // Danh sách ứng dụng hiển thị ở tab Ứng dụng (kiểu launcher điện thoại)
+  portalAppCategories?: string[]; // Danh mục tùy chỉnh do Admin thêm cho tab Ứng dụng (ngoài 4 danh mục mặc định)
   highlightImages?: HighlightImage[]; // Hình ảnh hoạt động y tế nổi bật (setup thủ công)
   vaccinationSchedules?: VaccinationScheduleItem[]; // Lịch tiêm chủng ưu tiên hàng đầu do Admin thiết lập
   workScheduleConfig?: WorkScheduleConfig; // Lịch làm việc cố định theo tuần của Trạm Y tế
@@ -880,6 +958,7 @@ export interface SystemSettings {
   hiddenTabs?: string[];
   tabMaintenance?: Record<string, boolean>;
   accessControl?: AccessControlConfig;
+  rolePermissions?: RolePermissionsConfig;
   bhxhApi?: BhxhApiPublicConfig;
   aiAutomation?: {
     autoScanOnUpload?: boolean;
@@ -898,7 +977,86 @@ export interface SystemSettings {
   lastAutoGithubBackupAttemptDay?: string;
   lastAutoGithubBackupStatus?: 'success' | 'failed';
   lastAutoGithubBackupError?: string;
+  migrationReconciliationActive?: boolean;
+  migrationBannerNote?: string;
   updatedAt?: string;
+}
+
+export type AttendanceStatus = 'co_quan' | 'truc' | 'ra_truc' | 'nghi';
+
+export interface AttendanceRecord {
+  id: string; // `${date}_${staffId}`
+  date: string; // YYYY-MM-DD
+  staffId: string;
+  staffName: string;
+  department?: string;
+  position?: string;
+  status: AttendanceStatus;
+  note?: string;
+  updatedByUid: string;
+  updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface RolePermissionPolicy {
+  blockedTabs: string[];
+  requireLoginForTabs?: string[]; // Applicable to guest / unauthenticated visitors
+  canSubmitFeedback?: boolean;
+  canUseApps?: boolean;
+  canSendRescueSos?: boolean;
+  canViewPersonnelDirectory?: boolean;
+  canManageContent?: boolean;
+  canManageSchedules?: boolean;
+  canAttendanceCheckin?: boolean;
+  canManageUsers?: boolean;
+  canManageSystem?: boolean;
+}
+
+export interface RolePermissionsConfig {
+  super_admin: { fullAccess: true };
+  admin: RolePermissionPolicy;
+  user: RolePermissionPolicy;
+  organization?: RolePermissionPolicy;
+  guest: RolePermissionPolicy;
+  updatedAt?: string;
+  updatedByUid?: string;
+}
+
+export type StoreItemCategory = 'qua_tang' | 'dich_vu_y_te' | 'voucher' | 'vat_tu' | 'khac';
+
+export interface StoreItem {
+  id: string;
+  name: string;
+  description: string;
+  priceExp: number;
+  stock: number;
+  category: StoreItemCategory;
+  imageUrl?: string;
+  isActive: boolean;
+  redeemCount?: number;
+  createdByUid?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StoreOrderStatus = 'pending' | 'approved' | 'delivered' | 'cancelled';
+
+export interface StoreOrder {
+  id: string;
+  itemId: string;
+  itemName: string;
+  itemImageUrl?: string;
+  buyerUid: string;
+  buyerName: string;
+  buyerEmail?: string;
+  buyerPhone?: string;
+  expCost: number;
+  quantity: number;
+  status: StoreOrderStatus;
+  note?: string;
+  adminNote?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SoftwareTeamContactConfig {
@@ -915,9 +1073,145 @@ export interface SoftwareTeamContactConfig {
   note?: string;
 }
 
+export type ServiceRatingCategory = 'giao_dien' | 'thai_do' | 'chuyen_mon' | 'tien_ich';
+
+export interface ServiceRating {
+  id: string;
+  score: 1 | 2 | 3 | 4 | 5;
+  category: ServiceRatingCategory;
+  comment?: string;
+  raterName?: string;
+  raterAvatarUrl?: string;
+  uid?: string;
+  deviceId: string;
+  pageView?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MigrationClaimStatus = 'pending' | 'confirmed' | 'disputed' | 'resolved' | 'rejected';
+
+export interface LegacyUserSnapshot {
+  id: string;
+  legacyUid?: string;
+  email: string;
+  displayName: string;
+  phoneNumber?: string;
+  verifiedPhone?: string;
+  citizenId?: string;
+  dob?: string;
+  gender?: 'Nam' | 'Nữ' | 'Khác';
+  ethnicity?: string;
+  provinceCode?: string;
+  provinceName?: string;
+  wardCode?: string;
+  wardName?: string;
+  address?: string;
+  department?: string;
+  position?: string;
+  qualification?: string;
+  role: RoleType;
+  accountType: AccountType;
+  expBalance?: number;
+  totalExpEarned?: number;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  citizenIdVerified?: boolean;
+  identityVerifiedFromDatabase?: boolean;
+  personalReferralCode?: string;
+  claimStatus: 'pending' | 'confirmed' | 'disputed' | 'resolved';
+  confirmedByUid?: string;
+  confirmedAt?: string;
+  migratedAt: string;
+  sourceBackupTitle?: string;
+  notes?: string;
+}
+
+export interface UserMigrationClaim {
+  id: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  snapshotId?: string;
+  claimType: 'confirm_exact' | 'request_adjustment';
+  status: MigrationClaimStatus;
+  disputedFields?: string[];
+  userNote?: string;
+  proposedData?: {
+    displayName?: string;
+    phoneNumber?: string;
+    citizenId?: string;
+    dob?: string;
+    gender?: 'Nam' | 'Nữ' | 'Khác';
+    address?: string;
+    department?: string;
+    position?: string;
+    expBalance?: number;
+    roleNote?: string;
+  };
+  adminNote?: string;
+  resolvedByUid?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ToastMessage {
   id: string;
   type: 'success' | 'error' | 'info' | 'warning';
   title: string;
   message?: string;
 }
+
+export type AiProviderType = 'gemini' | 'openai' | 'anthropic' | 'blackbox' | 'grok';
+
+export interface AiProviderConfig {
+  id: AiProviderType;
+  name: string;
+  label: string;
+  apiKey?: string;
+  apiKeyMasked?: string;
+  isConfigured: boolean;
+  model: string;
+  defaultModel: string;
+  availableModels: string[];
+  docsUrl: string;
+  freeGuideSteps: string[];
+  freeGuideNotes?: string;
+}
+
+export interface AiAgentConfig {
+  activeProvider: AiProviderType;
+  fallbackOrder?: AiProviderType[];
+  providers: Partial<Record<AiProviderType, {
+    apiKeyMasked?: string;
+    isConfigured: boolean;
+    model?: string;
+    updatedAt?: string;
+  }>>;
+  updatedAt?: string;
+  updatedByUid?: string;
+}
+
+export interface TourStep {
+  id: string;
+  targetTourId: string;
+  title: string;
+  instruction: string;
+  actionType: 'click' | 'input';
+  expectedInputPlaceholder?: string;
+  position?: 'top' | 'bottom' | 'left' | 'right';
+}
+
+export interface UserGuideTopic {
+  id: string;
+  title: string;
+  description: string;
+  badge: string;
+  iconName?: string;
+  category: 'citizen' | 'medical' | 'admin';
+  targetTab: string;
+  steps: TourStep[];
+}
+

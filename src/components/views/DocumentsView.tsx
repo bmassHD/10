@@ -708,13 +708,13 @@ export const DocumentsView: React.FC = () => {
     <div className="space-y-6">
       {/* Top Banner Header */}
       <RevealOnScroll immediate>
-        <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="p-4 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <FileText className="w-5 h-5 text-emerald-600 shrink-0" />
               <span>Văn Bản &amp; Biểu Mẫu ({accessibleDocs.length})</span>
             </h2>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            <p className="hidden sm:block text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
               Công văn, quyết định và biểu mẫu y tế xem trực tuyến.
             </p>
           </div>
@@ -727,7 +727,7 @@ export const DocumentsView: React.FC = () => {
                   resetFormModal();
                   setShowCreateModal(true);
                 }}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
+                className="min-h-[40px] w-full sm:w-auto px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4 shrink-0" /> Thêm văn bản
               </button>

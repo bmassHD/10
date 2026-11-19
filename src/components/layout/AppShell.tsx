@@ -33,11 +33,13 @@ import {
   Moon,
   Hospital,
   Siren,
+  ShieldAlert,
   PartyPopper,
   CalendarOff,
   CreditCard,
   Users,
   Megaphone,
+  LayoutGrid,
 } from 'lucide-react';
 import { useAuth, PRIMARY_ADMIN_EMAIL } from '../../contexts/AuthContext';
 import { SystemSettings, RoleType, AccountType, VaccinationScheduleItem, HolidayScheduleItem, WorkSchedule } from '../../types';
@@ -54,6 +56,7 @@ import {
   getStationPointLeaders,
   getDutySchedulesForHoliday,
   getVietnamTodayKey,
+  resolveRolePermissions,
 } from '../../services/firebaseService';
 import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
@@ -63,6 +66,7 @@ import { GlobalProgressBar } from '../common/GlobalProgressBar';
 import { OfflineIndicator } from '../common/OfflineIndicator';
 import { NotificationDrawerModal } from '../common/NotificationDrawerModal';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
+import { ServiceRatingSection } from '../common/ServiceRatingSection';
 import { getUserVerificationProgress } from '../../utils/verificationBadge';
 import { Bell } from 'lucide-react';
 import { isFirestoreWriteQuotaExceeded } from '../../utils/firestoreQuotaGuard';
@@ -105,6 +109,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     currentUser,
     userProfile,
     isAdmin,
+    isSuperAdmin,
     isStaff,
     isPrimaryAdmin,
     logout,
@@ -193,7 +198,7 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     try {
-      const saved = localStorage.getItem('tyt_sidebar_open_groups');
+      const saved = localStorage.getItem('tyt_sidebar_open_groups_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object') return parsed;
@@ -202,12 +207,12 @@ export const AppShell: React.FC<AppShellProps> = ({
       // ignore
     }
     return {
-      overview: true,
-      schedules: true,
+      overview: false,
+      schedules: false,
       maps: false,
       media: false,
-      citizen: true,
-      system: true,
+      citizen: false,
+      system: false,
     };
   });
 
@@ -215,7 +220,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     setOpenGroups(prev => {
       const next = { ...prev, [groupId]: !prev[groupId] };
       try {
-        localStorage.setItem('tyt_sidebar_open_groups', JSON.stringify(next));
+        localStorage.setItem('tyt_sidebar_open_groups_v2', JSON.stringify(next));
       } catch {
         // ignore
       }
@@ -624,11 +629,50 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   const hiddenTabSet = new Set(settings.hiddenTabs || []);
   const tabMaintMap = settings.tabMaintenance || {};
+  const rolePerms = resolveRolePermissions(settings);
+  const isFullSuperAdmin = Boolean(isSuperAdmin || isPrimaryAdmin);
+  const isOrganizationAccount = Boolean(
+    currentUser &&
+      !isFullSuperAdmin &&
+      !isAdmin &&
+      (userProfile?.role === 'organization' || userProfile?.accountType === 'organization')
+  );
+  const currentRoleBlockedTabs = new Set<string>(
+    isFullSuperAdmin
+      ? []
+      : isAdmin
+      ? rolePerms.admin.blockedTabs || []
+      : isOrganizationAccount
+      ? rolePerms.organization?.blockedTabs || []
+      : currentUser
+      ? rolePerms.user.blockedTabs || []
+      : rolePerms.guest.blockedTabs || []
+  );
+  const guestRequireLoginSet = new Set<string>(
+    !currentUser ? rolePerms.guest.requireLoginForTabs || [] : []
+  );
 
   const decorateOrFilter = (items: NavItem[]): NavItem[] =>
     items
       .filter(item => {
-        if (item.id === 'personnel_directory' && !isAdmin && !isStaff) return false;
+        if (item.id === 'personnel_directory') {
+          if (isFullSuperAdmin || isAdmin || isStaff) {
+            // allow unless admin blocked
+          } else if (isOrganizationAccount) {
+            if (!rolePerms.organization?.canViewPersonnelDirectory) return false;
+          } else if (currentUser) {
+            if (!rolePerms.user.canViewPersonnelDirectory) return false;
+          } else {
+            if (
+              !rolePerms.guest.canViewPersonnelDirectory &&
+              !guestRequireLoginSet.has('personnel_directory')
+            ) {
+              return false;
+            }
+          }
+        }
+        if (isFullSuperAdmin) return true;
+        if (currentRoleBlockedTabs.has(item.id)) return false;
         return isAdmin || !hiddenTabSet.has(item.id);
       })
       .map(item => {
@@ -638,13 +682,16 @@ export const AppShell: React.FC<AppShellProps> = ({
         if (tabMaintMap[item.id]) {
           return { ...item, badge: 'Bảo trì' };
         }
+        if (!currentUser && guestRequireLoginSet.has(item.id)) {
+          return { ...item, badge: 'Đăng nhập' };
+        }
         return item;
       });
 
   const overviewItems = decorateOrFilter([
     { id: 'portal', label: 'Trang chủ & Giới thiệu', icon: Building2 },
-    { id: 'org_chart', label: 'Sơ đồ tổ chức', icon: Network },
     { id: 'personnel_directory', label: 'Nhân lực & Khoa phòng', icon: Users },
+    { id: 'org_chart', label: 'Sơ đồ tổ chức', icon: Network },
   ]);
 
   const scheduleItems = decorateOrFilter([
@@ -659,20 +706,22 @@ export const AppShell: React.FC<AppShellProps> = ({
   ]);
 
   const mapItems = decorateOrFilter([
+    { id: 'rescue', label: 'Bản đồ Cứu hộ cứu nạn', icon: Siren, badge: 'SOS' },
+    { id: 'offline_emergency', label: 'Cấp cứu Ngoại tuyến (SOS)', icon: ShieldAlert, badge: 'SOS' },
     { id: 'map', label: 'Bản đồ & Định vị trạm', icon: MapPin },
     { id: 'nearby_facilities', label: 'Cơ sở Y tế lân cận', icon: Hospital },
-    { id: 'rescue', label: 'Bản đồ Cứu hộ cứu nạn', icon: Siren, badge: 'SOS' },
-  ]);
-
-  const mediaItems = decorateOrFilter([
-    { id: 'news', label: 'Tin tức & Media', icon: Newspaper },
-    { id: 'documents', label: 'Văn bản & Biểu mẫu', icon: FileText },
   ]);
 
   const citizenItems = decorateOrFilter([
     { id: 'bhyt_lookup', label: 'Tra cứu BHYT', icon: CreditCard },
     { id: 'telehealth', label: 'Bác sĩ cho mọi nhà', icon: Smartphone },
     { id: 'feedback_tracking', label: 'Phản ánh', icon: MessageSquare },
+    { id: 'apps', label: 'Ứng dụng', icon: LayoutGrid },
+  ]);
+
+  const mediaItems = decorateOrFilter([
+    { id: 'news', label: 'Tin tức & Media', icon: Newspaper },
+    { id: 'documents', label: 'Văn bản & Biểu mẫu', icon: FileText },
   ]);
 
   const systemItems: NavItem[] = [];
@@ -691,30 +740,13 @@ export const AppShell: React.FC<AppShellProps> = ({
   });
 
   const navGroups: NavGroup[] = [
-    { id: 'overview', title: 'Tổng quan & Tổ chức', icon: Building2, items: overviewItems },
-    { id: 'schedules', title: 'Lịch trực & Hoạt động', icon: CalendarClock, items: scheduleItems },
-    { id: 'maps', title: 'Bản đồ & Cứu hộ y tế', icon: MapPin, items: mapItems },
+    { id: 'overview', title: 'Tổng quan & Trạm Y tế', icon: Building2, items: overviewItems },
+    { id: 'schedules', title: 'Lịch trực 24/7 & Tiêm chủng', icon: CalendarClock, items: scheduleItems },
+    { id: 'maps', title: 'Cấp cứu SOS & Bản đồ Y tế', icon: Siren, items: mapItems },
+    { id: 'citizen', title: 'Dịch vụ & Tiện ích Dân cư', icon: Smartphone, items: citizenItems },
     { id: 'media', title: 'Tin tức & Văn bản', icon: Newspaper, items: mediaItems },
-    { id: 'citizen', title: 'Tiện ích dân cư', icon: Smartphone, items: citizenItems },
-    { id: 'system', title: 'Hệ thống & Quản trị', icon: Settings, items: systemItems },
+    { id: 'system', title: 'Tài khoản & Quản trị', icon: Settings, items: systemItems },
   ].filter(group => group.items.length > 0);
-
-  // Automatically expand the group containing the currently active route
-  useEffect(() => {
-    const activeGroup = navGroups.find(g => g.items.some(i => i.id === currentView));
-    if (activeGroup && !openGroups[activeGroup.id]) {
-      setOpenGroups(prev => {
-        const next = { ...prev, [activeGroup.id]: true };
-        try {
-          localStorage.setItem('tyt_sidebar_open_groups', JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-        return next;
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentView]);
 
   const mobileBottomItems: NavItem[] = [
     { id: 'portal', label: 'Trang chủ', icon: Building2 },
@@ -722,7 +754,11 @@ export const AppShell: React.FC<AppShellProps> = ({
     { id: 'news', label: 'Tin tức', icon: Newspaper },
     { id: 'map', label: 'Bản đồ', icon: MapPin },
     { id: 'account', label: 'Tài khoản', icon: User },
-  ].filter(item => isAdmin || !hiddenTabSet.has(item.id));
+  ].filter(item => {
+    if (isFullSuperAdmin) return true;
+    if (currentRoleBlockedTabs.has(item.id)) return false;
+    return isAdmin || !hiddenTabSet.has(item.id);
+  });
 
   const isConfigured = settings.stationName && !settings.stationName.includes('Chưa cấu hình');
 
@@ -983,7 +1019,15 @@ export const AppShell: React.FC<AppShellProps> = ({
                         )}
                       </div>
                       <div className="text-[11px] text-slate-400 font-mono truncate">
-                        {isPrimaryAdmin ? 'Super Admin' : userProfile?.accountType === 'employee' ? 'Cán bộ Y tế' : 'Công dân'}
+                        {isPrimaryAdmin
+                          ? 'Super Admin'
+                          : isAdmin
+                          ? 'Quản trị viên'
+                          : userProfile?.accountType === 'organization' || userProfile?.role === 'organization'
+                          ? 'Tổ chức / Doanh nghiệp'
+                          : userProfile?.accountType === 'employee'
+                          ? 'Cán bộ Y tế'
+                          : 'Công dân'}
                       </div>
                     </div>
                   </div>
@@ -1307,6 +1351,20 @@ export const AppShell: React.FC<AppShellProps> = ({
                   <RotateCw className="w-4 h-4" />
                 </button>
 
+                {/* Quick switch button to Standalone Admin Site */}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentView('admin')}
+                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-emerald-700 hover:bg-slate-800 dark:hover:bg-emerald-800 text-white text-xs font-bold transition cursor-pointer shrink-0 whitespace-nowrap shadow-xs"
+                    title="Chuyển sang Trang Quản Trị (Admin)"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 dark:text-white shrink-0" />
+                    <span className="hidden sm:inline">Trang Quản trị</span>
+                    <span className="sm:hidden">Quản trị</span>
+                  </button>
+                )}
+
                 {/* Notification Bell Button */}
                 <button
                   type="button"
@@ -1394,7 +1452,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                       className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-extrabold inline-flex items-center gap-1.5 transition tabular-nums whitespace-nowrap"
                     >
                       <Phone className="w-3.5 h-3.5 text-amber-200 shrink-0" />
-                      <span>Cấp cứu 24/7: {priorityPhone}</span>
+                      <span>Cấp cứu 24/7 (Tuyến trên): {priorityPhone}</span>
                     </a>
                   )}
 
@@ -1606,8 +1664,13 @@ export const AppShell: React.FC<AppShellProps> = ({
         })()}
 
         {/* Main Content Viewport */}
-        <div className="flex-1 px-4 sm:px-8 py-6 w-full space-y-6">
+        <div className="flex-1 px-3 sm:px-8 py-4 sm:py-6 w-full space-y-5 sm:space-y-6">
           {children}
+
+          {/* End-of-Page Star Rating & Experience Feedback Widget */}
+          {currentView !== 'offline_emergency' && currentView !== 'admin' && (
+            <ServiceRatingSection currentView={currentView} />
+          )}
         </div>
 
         {/* Footer */}

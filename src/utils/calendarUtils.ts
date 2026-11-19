@@ -103,7 +103,7 @@ function buildDescription(item: VaccinationScheduleItem, stationName?: string): 
       : '';
   const timeText =
     item.timeRange?.trim() ||
-    (item.startTime && item.endTime ? `${item.startTime} - ${item.endTime}` : '07:30 - 11:00');
+    (item.startTime && item.endTime ? `${item.startTime} - ${item.endTime}` : '07:00 - 11:00');
   const lines = [
     stationName ? `Đơn vị tổ chức: ${stationName}` : '',
     `Thời gian: ${formatVaccinationDateRange(item)} (${timeText})`,

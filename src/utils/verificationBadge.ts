@@ -96,6 +96,42 @@ export function getUserVerificationProgress(
   };
 }
 
+export interface ThreeStepReferralEligibility {
+  emailDone: boolean;
+  phoneDone: boolean;
+  passwordDone: boolean;
+  completedCount: number;
+  totalCount: 3;
+  isQualified: boolean;
+}
+
+/**
+ * Evaluates the 3 mandatory verification steps (excluding Authenticator 2FA)
+ * required for a referred user to unlock +1,000 EXP for their referrer:
+ * 1. Email / Gmail verified
+ * 2. Phone number verified / confirmed
+ * 3. Account password set
+ */
+export function getThreeStepReferralEligibility(
+  profile?: Partial<UserProfile> | null,
+  runtime?: VerificationRuntimeFlags
+): ThreeStepReferralEligibility {
+  const prog = getUserVerificationProgress(profile, runtime);
+  const completedCount =
+    (prog.emailDone ? 1 : 0) +
+    (prog.phoneDone ? 1 : 0) +
+    (prog.passwordDone ? 1 : 0);
+
+  return {
+    emailDone: prog.emailDone,
+    phoneDone: prog.phoneDone,
+    passwordDone: prog.passwordDone,
+    completedCount,
+    totalCount: 3,
+    isQualified: prog.emailDone && prog.phoneDone && prog.passwordDone,
+  };
+}
+
 /**
  * Returns the synchronized ordered list of security & verification items
  * shared across AccountSecurityCard, AccountDeviceView, and AdminConsoleView.

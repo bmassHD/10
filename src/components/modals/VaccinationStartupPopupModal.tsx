@@ -389,9 +389,9 @@ export const VaccinationStartupPopupModal: React.FC<VaccinationStartupPopupModal
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                    <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span className="truncate font-semibold">{leadPoint.locationName}</span>
+                  <div className="flex items-center gap-2 text-blue-700 dark:text-sky-400">
+                    <MapPin className="w-4 h-4 text-blue-600 dark:text-sky-400 shrink-0" />
+                    <span className="truncate font-bold">{leadPoint.locationName}</span>
                   </div>
                 </div>
               </>
@@ -412,8 +412,8 @@ export const VaccinationStartupPopupModal: React.FC<VaccinationStartupPopupModal
                         className="p-2.5 sm:px-3 sm:py-2.5 rounded-xl bg-white dark:bg-slate-900/85 border border-emerald-100 dark:border-emerald-900/50 space-y-1 text-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 min-w-0 font-bold text-slate-900 dark:text-white">
-                            <MapPin className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <div className="flex items-center gap-1.5 min-w-0 font-bold text-blue-700 dark:text-sky-400">
+                            <MapPin className="w-3.5 h-3.5 text-blue-600 dark:text-sky-400 shrink-0" />
                             <span className="truncate">{point.locationName}</span>
                           </div>
                           <span

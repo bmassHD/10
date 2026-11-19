@@ -55,9 +55,7 @@ const colorPalette = [
 ];
 
 const fontFamilies = [
-  { name: 'Inter (Hiện đại / Không chân)', value: 'font-sans' },
-  { name: 'Merriweather (Trang trọng / Có chân)', value: 'font-serif' },
-  { name: 'Mono (Chuyên môn / Mã số)', value: 'font-mono' },
+  { name: 'Plus Jakarta Sans (Đồng nhất hệ thống)', value: 'font-sans' },
 ];
 
 const fontSizes = [

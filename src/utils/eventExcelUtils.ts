@@ -202,8 +202,8 @@ export function downloadEventsExcelTemplate(): void {
       'Tên sự kiện': 'Kỷ niệm Ngày Thầy thuốc Việt Nam 27/02',
       'Ngày diễn ra': `${year}-02-27`,
       'Đến ngày': '',
-      'Giờ bắt đầu': '07:30',
-      'Giờ kết thúc': '11:30',
+      'Giờ bắt đầu': '07:00',
+      'Giờ kết thúc': '11:00',
       'Phân loại': 'Ngày lễ ngành Y tế',
       'Địa điểm': 'Hội trường Trạm Y tế',
       'Mô tả sự kiện':

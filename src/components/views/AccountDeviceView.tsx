@@ -63,6 +63,8 @@ import {
   EthnicItem,
   ProvinceItem,
   WardItem,
+  LegacyUserSnapshot,
+  UserMigrationClaim,
 } from '../../types';
 import {
   isDeviceNotificationEnabled,
@@ -101,6 +103,10 @@ import {
   loadLocalNearbyFacilityHistory,
   upsertLocalNearbyFacilityHistory,
   LocalFeedbackHistoryItem,
+  lookupMyLegacySnapshot,
+  listUserMigrationClaims,
+  confirmMigratedUserProfile,
+  submitUserMigrationAdjustmentRequest,
 } from '../../services/firebaseService';
 import {
   calculateHaversineDistance,
@@ -255,6 +261,50 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
   const [provincesList, setProvincesList] = useState<ProvinceItem[]>([]);
   const [copiedCard, setCopiedCard] = useState(false);
   const personalBackupInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Firebase Migration Verification & Reconciliation states
+  const [migrationSnapshot, setMigrationSnapshot] = useState<LegacyUserSnapshot | null>(null);
+  const [myMigrationClaims, setMyMigrationClaims] = useState<UserMigrationClaim[]>([]);
+  const [loadingMigrationData, setLoadingMigrationData] = useState(false);
+  const [confirmingMigration, setConfirmingMigration] = useState(false);
+  const [showMigrationDisputeForm, setShowMigrationDisputeForm] = useState(false);
+  const [disputeSelectedFields, setDisputeSelectedFields] = useState<string[]>([]);
+  const [disputeNote, setDisputeNote] = useState('');
+  const [disputeExpectedSummary, setDisputeExpectedSummary] = useState('');
+  const [submittingDispute, setSubmittingDispute] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setMigrationSnapshot(null);
+      setMyMigrationClaims([]);
+      return;
+    }
+    let mounted = true;
+    setLoadingMigrationData(true);
+    Promise.all([
+      lookupMyLegacySnapshot(currentUser.email || userProfile?.email || '').catch(() => null),
+      listUserMigrationClaims(currentUser.uid).catch(() => []),
+    ])
+      .then(([snap, claims]) => {
+        if (!mounted) return;
+        setMigrationSnapshot(snap);
+        setMyMigrationClaims(claims);
+      })
+      .finally(() => {
+        if (mounted) setLoadingMigrationData(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [
+    currentUser?.uid,
+    currentUser?.email,
+    userProfile?.verifiedPhone,
+    userProfile?.phoneNumber,
+    userProfile?.citizenId,
+    userProfile?.migrationStatus,
+    settings.migrationReconciliationActive,
+  ]);
 
   // Profile form states
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2132,6 +2182,268 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
         <div className="space-y-4">
           {currentUser ? (
             <>
+              {/* Cross-Firebase Migration Verification & Reconciliation Card */}
+              {(settings.migrationReconciliationActive ||
+                Boolean(migrationSnapshot && migrationSnapshot.claimStatus === 'pending') ||
+                myMigrationClaims.some(c => c.status === 'pending')) &&
+                userProfile?.migrationStatus !== 'confirmed' && (() => {
+                  const latestPendingClaim = myMigrationClaims.find(c => c.status === 'pending');
+                  const DISPUTE_FIELD_OPTIONS = [
+                    'Họ và tên',
+                    'Số điện thoại',
+                    'Số CCCD / Ngày sinh',
+                    'Địa chỉ cư trú',
+                    'Vai trò / Khoa phòng',
+                    'Lịch sử xác minh',
+                  ];
+
+                  const handleConfirmMigration = async () => {
+                    if (!currentUser || !userProfile) {
+                      showToast('warning', 'Hồ sơ tài khoản đang được tải, vui lòng thử lại sau giây lát');
+                      return;
+                    }
+                    setConfirmingMigration(true);
+                    try {
+                      await confirmMigratedUserProfile({
+                        uid: currentUser.uid,
+                        email: currentUser.email || userProfile.email || '',
+                        emailVerified: Boolean(currentUser.emailVerified || userProfile.emailVerified),
+                        currentProfile: userProfile,
+                        snapshot: migrationSnapshot,
+                      });
+                      await refreshCurrentUserState();
+                      showToast(
+                        'success',
+                        'Đã xác nhận & đồng bộ dữ liệu',
+                        migrationSnapshot
+                          ? 'Dữ liệu từ bản sao lưu trước đó đã được cập nhật vào tài khoản mới.'
+                          : 'Hồ sơ tài khoản của bạn đã được đánh dấu Đúng & Đủ.'
+                      );
+                    } catch (err: any) {
+                      showToast('error', 'Chưa thể xác nhận dữ liệu', err?.message);
+                    } finally {
+                      setConfirmingMigration(false);
+                    }
+                  };
+
+                  const handleSubmitMigrationDispute = async (e: React.FormEvent) => {
+                    e.preventDefault();
+                    if (!currentUser) return;
+                    if (disputeSelectedFields.length === 0 && !disputeNote.trim()) {
+                      showToast('warning', 'Vui lòng chọn mục sai/thiếu hoặc nhập mô tả chi tiết');
+                      return;
+                    }
+                    setSubmittingDispute(true);
+                    try {
+                      await submitUserMigrationAdjustmentRequest({
+                        uid: currentUser.uid,
+                        email: currentUser.email || userProfile?.email || '',
+                        displayName: userProfile?.displayName || currentUser.displayName || 'Người dùng',
+                        snapshotId: migrationSnapshot?.id,
+                        emailVerified: Boolean(currentUser.emailVerified || userProfile?.emailVerified),
+                        disputedFields: disputeSelectedFields,
+                        userNote:
+                          disputeNote.trim() ||
+                          disputeExpectedSummary.trim() ||
+                          'Đề nghị Admin đối chiếu lại dữ liệu sau chuyển Firebase mới.',
+                        proposedData: disputeExpectedSummary.trim()
+                          ? { roleNote: disputeExpectedSummary.trim() }
+                          : undefined,
+                      });
+                      const refreshedClaims = await listUserMigrationClaims(currentUser.uid).catch(() => []);
+                      setMyMigrationClaims(refreshedClaims);
+                      setShowMigrationDisputeForm(false);
+                      setDisputeNote('');
+                      setDisputeExpectedSummary('');
+                      setDisputeSelectedFields([]);
+                      await refreshCurrentUserState();
+                      showToast(
+                        'success',
+                        'Đã gửi yêu cầu điều chỉnh tới Quản trị viên',
+                        'Admin sẽ đối chiếu lại bản sao lưu và cập nhật dữ liệu giúp bạn.'
+                      );
+                    } catch (err: any) {
+                      showToast('error', 'Không thể gửi yêu cầu điều chỉnh', err?.message);
+                    } finally {
+                      setSubmittingDispute(false);
+                    }
+                  };
+
+                  return (
+                    <div className="p-4 sm:p-5 rounded-3xl bg-amber-50/90 dark:bg-amber-950/35 border-2 border-amber-300 dark:border-amber-700/80 shadow-xs space-y-3.5">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2.5 rounded-2xl bg-amber-600 text-white shrink-0">
+                          <AlertTriangle className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-sm sm:text-base font-extrabold text-amber-950 dark:text-amber-100">
+                              Xác nhận dữ liệu sau chuyển Firebase mới
+                            </h2>
+                            {latestPendingClaim && (
+                              <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold">
+                                Đang chờ Admin điều chỉnh
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
+                            {settings.migrationBannerNote?.trim() ||
+                              'Hệ thống vừa chuyển đổi máy chủ Firebase (sao lưu loại trừ bảng Tài khoản). Vui lòng kiểm tra thông tin hồ sơ bên dưới xem đã đủ và đúng hay chưa.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {loadingMigrationData ? (
+                        <div className="text-xs text-amber-800 dark:text-amber-300 font-semibold py-2">
+                          Đang kiểm tra dữ liệu đối chiếu từ bản sao lưu trước đó...
+                        </div>
+                      ) : migrationSnapshot ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                          <div className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/70 space-y-1">
+                            <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                              Dữ liệu từ bản sao lưu cũ
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200">
+                              Họ tên: <strong>{migrationSnapshot.displayName || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200 tabular-nums">
+                              SĐT: <strong>{migrationSnapshot.phoneNumber || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200 font-mono">
+                              CCCD: <strong>{migrationSnapshot.citizenId || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200">
+                              Vai trò / Khoa: <strong>{migrationSnapshot.role || 'citizen'}</strong>
+                              {migrationSnapshot.department ? ` · ${migrationSnapshot.department}` : ''}
+                            </div>
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-white/80 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 space-y-1">
+                            <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                              Hồ sơ hiện tại trên Firebase mới
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200">
+                              Họ tên: <strong>{userProfile?.displayName || currentUser.displayName || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200 tabular-nums">
+                              SĐT: <strong>{userProfile?.verifiedPhone || userProfile?.phoneNumber || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200 font-mono">
+                              CCCD: <strong>{userProfile?.citizenId || '—'}</strong>
+                            </div>
+                            <div className="text-slate-700 dark:text-slate-200">
+                              Vai trò / Khoa: <strong>{userProfile?.role || 'citizen'}</strong>
+                              {userProfile?.department ? ` · ${userProfile.department}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-900 border border-amber-200 dark:border-amber-800/70 text-xs text-slate-700 dark:text-slate-200 space-y-1">
+                          <div>
+                            Không tìm thấy bản ghi sao lưu cũ khớp tự động theo Email/SĐT/CCCD. Nếu bạn thấy thiếu vai trò hoặc thông tin định danh cũ, hãy bấm <strong>Sai / Thiếu — Báo Admin</strong> để được đối chiếu thủ công.
+                          </div>
+                        </div>
+                      )}
+
+                      {latestPendingClaim && (
+                        <div className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-xs text-rose-900 dark:text-rose-200 space-y-1">
+                          <div className="font-bold">Yêu cầu điều chỉnh đã gửi của bạn:</div>
+                          <div>Mục cần chỉnh: {(latestPendingClaim.disputedFields || []).join(', ') || 'Thông tin chung'}</div>
+                          {latestPendingClaim.userNote && <div>Ghi chú: {latestPendingClaim.userNote}</div>}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                          type="button"
+                          disabled={confirmingMigration}
+                          onClick={handleConfirmMigration}
+                          className="min-h-[44px] px-3 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
+                        >
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>{confirmingMigration ? 'Đang cập nhật...' : 'Đúng & Đủ — Cập nhật'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowMigrationDisputeForm(v => !v)}
+                          className="min-h-[44px] px-3 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-700 dark:text-rose-300 text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                        >
+                          <ShieldAlert className="w-4 h-4 shrink-0" />
+                          <span>{showMigrationDisputeForm ? 'Đóng biểu mẫu' : 'Sai / Thiếu — Báo Admin'}</span>
+                        </button>
+                      </div>
+
+                      {showMigrationDisputeForm && (
+                        <form
+                          onSubmit={handleSubmitMigrationDispute}
+                          className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800 space-y-3 text-xs"
+                        >
+                          <div className="font-bold text-slate-900 dark:text-white">
+                            Chọn các mục dữ liệu chưa đúng hoặc còn thiếu:
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {DISPUTE_FIELD_OPTIONS.map((fieldLabel, idx) => {
+                              const checked = disputeSelectedFields.includes(fieldLabel);
+                              const isOddLast = DISPUTE_FIELD_OPTIONS.length % 2 === 1 && idx === DISPUTE_FIELD_OPTIONS.length - 1;
+                              return (
+                                <button
+                                  key={fieldLabel}
+                                  type="button"
+                                  onClick={() =>
+                                    setDisputeSelectedFields(prev =>
+                                      prev.includes(fieldLabel)
+                                        ? prev.filter(f => f !== fieldLabel)
+                                        : [...prev, fieldLabel]
+                                    )
+                                  }
+                                  className={`min-h-[40px] px-3 py-2 rounded-xl border text-left font-semibold transition cursor-pointer flex items-center gap-2 ${
+                                    isOddLast ? 'col-span-2' : ''
+                                  } ${
+                                    checked
+                                      ? 'bg-amber-600 text-white border-amber-600'
+                                      : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
+                                  }`}
+                                >
+                                  <Check className={`w-3.5 h-3.5 shrink-0 ${checked ? 'opacity-100' : 'opacity-25'}`} />
+                                  <span className="truncate">{fieldLabel}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <input
+                            type="text"
+                            value={disputeExpectedSummary}
+                            onChange={e => setDisputeExpectedSummary(e.target.value)}
+                            placeholder="Thông tin đúng cần khôi phục (VD: SĐT cũ, CCCD, Số dư EXP, Chức vụ...)"
+                            className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+
+                          <textarea
+                            rows={2}
+                            value={disputeNote}
+                            onChange={e => setDisputeNote(e.target.value)}
+                            placeholder="Ghi chú thêm cho Quản trị viên đối chiếu..."
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+
+                          <div className="flex justify-end">
+                            <button
+                              type="submit"
+                              disabled={submittingDispute}
+                              className="min-h-[42px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>{submittingDispute ? 'Đang gửi...' : 'Gửi yêu cầu Admin điều chỉnh'}</span>
+                            </button>
+                          </div>
+                        </form>
+                      )}
+                    </div>
+                  );
+                })()}
+
               {/* Grouped Summary Card (Smooth Collapsible Accordion) */}
               <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
                 <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3">
@@ -2818,7 +3130,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                       <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                         Sao lưu &amp; Khôi phục dữ liệu cá nhân
                       </h3>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 hidden sm:block">
                         Lưu trữ Định danh Y tế cá nhân, Bảo mật/Xác minh, Khoá định danh, Lịch sử hoạt động &amp; Tuỳ chọn thiết bị ra tệp JSON
                       </p>
                     </div>
@@ -2826,23 +3138,23 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 </div>
 
                 <div className="p-4 sm:p-5 space-y-3.5">
-                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
+                  <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
                     <Info className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
                     <div className="space-y-1">
                       <p className="font-semibold text-slate-800 dark:text-slate-200">
-                        Bảo toàn trọn vẹn Dữ liệu Cá nhân &amp; Bảo mật Tài khoản (Chuẩn v3.0)
+                        Sao lưu trọn vẹn Hồ sơ &amp; Bảo mật (JSON v3.0)
                       </p>
-                      <p>
+                      <p className="hidden sm:block">
                         Tệp sao lưu JSON bao gồm đầy đủ Định danh Y tế cá nhân, Trạng thái xác minh 4 bước &amp; khoá định danh (Email, SĐT, CCCD), cấu hình bảo mật Authenticator 2FA, SMS MFA, Thiết bị tin cậy, Lịch hẹn/Phản ánh/SOS của bạn và các tuỳ chọn thiết bị. Hãy bảo quản tệp ở nơi an toàn.
                       </p>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
                     <button
                       type="button"
                       onClick={handleExportPersonalBackup}
-                      className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer shadow-xs"
+                      className="min-h-[44px] px-3 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer shadow-xs whitespace-nowrap"
                       title="Tải tệp JSON chứa toàn bộ dữ liệu hồ sơ cá nhân về máy"
                     >
                       <HardDriveDownload className="w-4 h-4 shrink-0" />
@@ -2859,7 +3171,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                     <button
                       type="button"
                       onClick={() => personalBackupInputRef.current?.click()}
-                      className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer"
+                      className="min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer whitespace-nowrap"
                       title="Chọn tệp JSON sao lưu cá nhân để phục hồi thông tin định danh"
                     >
                       <RotateCcw className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2869,7 +3181,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                     <button
                       type="button"
                       onClick={handleCopyProfileSummary}
-                      className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer"
+                      className="col-span-2 sm:col-span-1 min-h-[44px] px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition cursor-pointer whitespace-nowrap"
                       title="Sao chép toàn bộ thông tin thẻ định danh vào bộ nhớ tạm"
                     >
                       {copiedCard ? (

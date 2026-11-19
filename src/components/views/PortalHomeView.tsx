@@ -92,22 +92,22 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
           <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
             <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
               {/* Left Column: Station Identity & 2 Symmetrical Primary Buttons */}
-              <div className="lg:col-span-7 p-6 sm:p-7 flex flex-col justify-between gap-5 bg-gradient-to-br from-emerald-800 via-teal-800 to-slate-900 text-white">
-                <div className="flex items-start gap-4">
+              <div className="lg:col-span-7 p-4 sm:p-7 flex flex-col justify-between gap-4 sm:gap-5 bg-gradient-to-br from-emerald-800 via-teal-800 to-slate-900 text-white">
+                <div className="flex items-start gap-3.5 sm:gap-4">
                   <div className="p-1.5 bg-white rounded-2xl shadow-xs shrink-0">
-                    <StationLogo size={60} />
+                    <StationLogo size={54} />
                   </div>
 
-                  <div className="space-y-1.5 min-w-0">
-                    <p className="text-xs font-bold tracking-wider uppercase text-emerald-200 truncate">
+                  <div className="space-y-1 min-w-0">
+                    <p className="text-[11px] sm:text-xs font-bold tracking-wider uppercase text-emerald-200 truncate">
                       {parentUnit}
                     </p>
 
-                    <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight text-balance">
+                    <h1 className="text-xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight text-balance">
                       {isConfigured ? settings.stationName : 'TRẠM Y TẾ XÃ / PHƯỜNG'}
                     </h1>
 
-                    <p className="text-sm text-emerald-100/90 leading-relaxed line-clamp-2 max-w-xl">
+                    <p className="hidden sm:block text-sm text-emerald-100/90 leading-relaxed line-clamp-2 max-w-xl">
                       {settings.subTitle || 'Cổng thông tin điện tử & chăm sóc sức khỏe nhân dân cơ sở.'}
                     </p>
                   </div>
@@ -211,8 +211,8 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
         <div className="space-y-4">
           {/* 1. Official Functions & Duties */}
           <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-5 sm:px-6 flex items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-3.5 min-w-0">
+            <div className="p-4 sm:px-6 flex items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
@@ -220,15 +220,15 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                   <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug truncate">
                     Chức Năng &amp; Nhiệm Vụ
                   </h2>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                  <p className="hidden sm:block text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                     Phạm vi chuyên môn y tế cơ sở Bộ Y tế
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="px-5 sm:px-6 py-5 space-y-3">
-              <div className="bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl p-5 sm:p-6 border border-slate-100 dark:border-slate-800/80">
+            <div className="px-4 sm:px-6 py-4 sm:py-5 space-y-3">
+              <div className="bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl p-4 sm:p-6 border border-slate-100 dark:border-slate-800/80">
                 {settings.customFunctionsAndDuties ? (
                   <div className="space-y-3">
                     {settings.customFunctionsAndDuties
@@ -272,8 +272,8 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
 
           {/* 2. Map & Locations */}
           <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-5 sm:px-6 flex items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-3.5 min-w-0">
+            <div className="p-4 sm:px-6 flex items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 shrink-0">
                   <Compass className="w-5 h-5" />
                 </div>
@@ -281,7 +281,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                   <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug truncate">
                     Bản Đồ Điểm Y Tế &amp; GPS
                   </h2>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                  <p className="hidden sm:block text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                     Chỉ đường đến {settings.mapLocations?.length || 1} cơ sở y tế
                   </p>
                 </div>

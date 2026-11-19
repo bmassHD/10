@@ -10,6 +10,7 @@ import { handleFirestoreError, OperationType } from './firebase/errorHandler';
 import { AuthProvider, useAuth, captureReferralCodeFromUrl } from './contexts/AuthContext';
 import { ToastProvider, useToast } from './contexts/ToastContext';
 import { AppShell } from './components/layout/AppShell';
+import { AdminShell, AdminSubTab } from './components/admin/AdminShell';
 
 import { PortalHomeView } from './components/views/PortalHomeView';
 import { NewsView } from './components/views/NewsView';
@@ -26,7 +27,9 @@ import { RescueMapView } from './components/views/RescueMapView';
 import { NearbyFacilitiesView } from './components/views/NearbyFacilitiesView';
 import { EventsView } from './components/views/EventsView';
 import { BhxhLookupView } from './components/views/BhxhLookupView';
-import { ShieldAlert, LogIn, Wrench, EyeOff, Phone, ArrowLeft, Building2, MapPin, UserCheck, FolderGit2, RefreshCw, Ban, MonitorSmartphone, Clock, LogOut } from 'lucide-react';
+import { AppsLauncherView } from './components/views/AppsLauncherView';
+import { OfflineEmergencyView } from './components/views/OfflineEmergencyView';
+import { ShieldAlert, LogIn, Wrench, EyeOff, Phone, ArrowLeft, Building2, MapPin, UserCheck, FolderGit2, RefreshCw, Ban, MonitorSmartphone, Clock, LogOut, Lock } from 'lucide-react';
 import { evaluateAccessRestriction } from './utils/deviceAccessDetector';
 import { getBannedUntilMs, formatBanTimestampVi, formatBanRemainingVi } from './utils/userBan';
 
@@ -67,6 +70,7 @@ import {
   sortStationEvents,
   getActiveHolidaysToday,
   updateSystemSettings,
+  resolveRolePermissions,
 } from './services/firebaseService';
 import {
   BackupService,
@@ -97,10 +101,12 @@ const VIEW_TO_HASH: Record<string, string> = {
   news: 'tin-tuc',
   documents: 'van-ban',
   bhyt_lookup: 'tra-cuu-bhyt',
+  apps: 'ung-dung',
   telehealth: 'bac-si-cho-moi-nha',
   feedback_tracking: 'phan-anh',
   admin: 'quan-tri',
   account: 'tai-khoan',
+  offline_emergency: 'ngoai-tuyen',
 };
 
 const HASH_TO_VIEW: Record<string, string> = {
@@ -131,7 +137,7 @@ function parseHashRoute(): { view: string; query: string } {
 }
 
 function MainApp() {
-  const { currentUser, userProfile, isPrimaryAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver } = useAuth();
+  const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver } = useAuth();
   const { showToast } = useToast();
 
   const initialReferralRef = useRef<string>(captureReferralCodeFromUrl());
@@ -144,6 +150,7 @@ function MainApp() {
   const [adminRequestedSubTab, setAdminRequestedSubTab] = useState<string | undefined>(
     initialRoute.view === 'admin' ? initialTabParam : undefined
   );
+  const [pendingMigrationClaimsCount, setPendingMigrationClaimsCount] = useState(0);
   const [newsRequestedTab, setNewsRequestedTab] = useState<'api' | 'station' | undefined>(
     initialRoute.view === 'news' && (initialTabParam === 'api' || initialTabParam === 'station')
       ? initialTabParam
@@ -554,9 +561,19 @@ function MainApp() {
         }
       }
     );
+    const unsubClaims = onSnapshot(
+      query(collection(db, 'userMigrationClaims'), where('status', '==', 'pending')),
+      snap => {
+        setPendingMigrationClaimsCount(snap.size);
+      },
+      () => {
+        // Non-fatal if rules not yet updated
+      }
+    );
     return () => {
       unsubUsers();
       unsubAudit();
+      unsubClaims();
     };
   }, [isAdmin]);
 
@@ -666,7 +683,7 @@ function MainApp() {
     () => evaluateAccessRestriction(settings.accessControl),
     [settings.accessControl]
   );
-  const isSuperAdminActual = Boolean(isPrimaryAdmin || userProfile?.role === 'super_admin');
+  const isSuperAdminActual = Boolean(isSuperAdmin || isPrimaryAdmin || userProfile?.role === 'super_admin');
   const exemptAdminsFromBlock = settings.accessControl?.exemptAdmins !== false;
   const blockedByAccessRestriction =
     settingsLoaded &&
@@ -680,6 +697,64 @@ function MainApp() {
   const blockedByGlobalMaintenance = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && isGlobalMaintenance && currentView !== 'account' && currentView !== 'admin';
   const blockedByTabMaintenance = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && !blockedByGlobalMaintenance && isTabUnderMaintenance && currentView !== 'account' && currentView !== 'admin';
   const blockedByHiddenTab = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && !blockedByGlobalMaintenance && !blockedByTabMaintenance && isTabHidden && currentView !== 'account' && currentView !== 'admin';
+
+  const rolePerms = useMemo(() => resolveRolePermissions(settings), [settings]);
+  const isOrganizationAccount = Boolean(
+    currentUser &&
+      !isSuperAdminActual &&
+      !isAdmin &&
+      (userProfile?.role === 'organization' || userProfile?.accountType === 'organization')
+  );
+  const currentRoleKey = useMemo(() => {
+    if (!currentUser) return 'guest' as const;
+    if (isSuperAdminActual) return 'super_admin' as const;
+    if (isAdmin) return 'admin' as const;
+    if (isOrganizationAccount) return 'organization' as const;
+    return 'user' as const;
+  }, [currentUser, isSuperAdminActual, isAdmin, isOrganizationAccount]);
+
+  const currentRoleBlockedTabs = useMemo(() => {
+    if (currentRoleKey === 'super_admin') return [];
+    return rolePerms[currentRoleKey]?.blockedTabs || [];
+  }, [currentRoleKey, rolePerms]);
+
+  const blockedByGuestLoginGate =
+    settingsLoaded &&
+    !blockedByAccessRestriction &&
+    !blockedByGlobalMaintenance &&
+    !blockedByTabMaintenance &&
+    !blockedByHiddenTab &&
+    !currentUser &&
+    !isSuperAdminActual &&
+    currentView !== 'account' &&
+    currentView !== 'admin' &&
+    currentView !== 'offline_emergency' &&
+    Boolean(rolePerms.guest?.requireLoginForTabs?.includes(currentView));
+
+  const blockedByPersonnelDirectoryPerm =
+    settingsLoaded &&
+    currentView === 'personnel_directory' &&
+    !isSuperAdminActual &&
+    !isAdmin &&
+    !isStaff &&
+    (currentUser
+      ? isOrganizationAccount
+        ? !rolePerms.organization?.canViewPersonnelDirectory
+        : !rolePerms.user.canViewPersonnelDirectory
+      : !rolePerms.guest.canViewPersonnelDirectory);
+
+  const blockedByRolePermission =
+    settingsLoaded &&
+    !blockedByAccessRestriction &&
+    !blockedByGlobalMaintenance &&
+    !blockedByTabMaintenance &&
+    !blockedByHiddenTab &&
+    !blockedByGuestLoginGate &&
+    !isSuperAdminActual &&
+    currentView !== 'account' &&
+    currentView !== 'admin' &&
+    currentView !== 'offline_emergency' &&
+    (currentRoleBlockedTabs.includes(currentView) || blockedByPersonnelDirectoryPerm);
   const configuredEmergencies = getConfiguredEmergencyContacts(settings);
   const maintenancePointLeaders = useMemo(() => {
     const baseLeaders = getStationPointLeaders(settings);
@@ -903,18 +978,23 @@ function MainApp() {
     setPreviewEvent(ev);
   }, []);
 
-  return (
-    <AppShell
-      currentView={currentView}
-      setCurrentView={setCurrentView}
-      settings={settings}
-      settingsLoaded={settingsLoaded}
-      hasTodayEvent={todayEvents.length > 0}
-      activeHolidaysToday={activeHolidaysToday}
-      workSchedules={workSchedules}
-      openAuthModal={() => setIsAuthModalOpen(true)}
-      openAdminSetupModal={() => setIsAdminSetupModalOpen(true)}
-    >
+  const activeAdminSubTab = (adminRequestedSubTab || 'notifications') as AdminSubTab;
+
+  const handleSelectAdminSubTab = useCallback((nextTab: AdminSubTab) => {
+    setAdminRequestedSubTab(nextTab);
+    if (typeof window !== 'undefined') {
+      const targetHash = `#quan-tri?tab=${encodeURIComponent(nextTab)}`;
+      if (window.location.hash !== targetHash) {
+        window.history.replaceState(null, '', targetHash);
+      }
+    }
+  }, []);
+
+  const isStandaloneAdminMode =
+    currentView === 'admin' && isAdmin && !requiresTwoFactorVerification && !isBanned && !blockedByAccessRestriction;
+
+  const globalModalsAndOverlays = (
+    <>
       {/* Layer 1: First-session solid white splash overlay (once per session) */}
       <FirstSessionSplashOverlay
         visible={showFirstSessionSplash}
@@ -922,7 +1002,7 @@ function MainApp() {
         settings={settings}
       />
 
-      {/* Layer 2: Initial Startup Splash & Page Loading Overlays (portaled to document.body to cover 100% viewport) */}
+      {/* Layer 2: Initial Startup Splash & Page Loading Overlays */}
       <FullScreenLoadingOverlay
         visible={showInitialSplash}
         fadingOut={isSplashFading}
@@ -939,6 +1019,80 @@ function MainApp() {
         subtitle="Đang tải dữ liệu trang..."
         mode="transition"
       />
+    </>
+  );
+
+  return (
+    <>
+      {isStandaloneAdminMode ? (
+        <AdminShell
+          settings={settings}
+          activeSubTab={activeAdminSubTab}
+          onSelectSubTab={handleSelectAdminSubTab}
+          onExitAdmin={() => setCurrentView('portal')}
+          onRefreshData={fetchAdminData}
+          counts={{
+            newFeedback: feedbackList.filter(f => f.status === 'new').length,
+            disputedMigrations: pendingMigrationClaimsCount,
+          }}
+        >
+          {globalModalsAndOverlays}
+          <AdminConsoleView
+            settings={settings}
+            feedbackList={feedbackList}
+            users={users}
+            auditLogs={auditLogs}
+            events={events}
+            workSchedules={workSchedules}
+            onPreviewEvent={handlePreviewEvent}
+            onPreviewHoliday={handlePreviewHoliday}
+            onRefreshData={fetchAdminData}
+            openAuthModal={() => setIsAuthModalOpen(true)}
+            onNavigateToLogin={() => setCurrentView('account')}
+            onOpenOrgChart={() => setCurrentView('org_chart')}
+            initialSubTab={activeAdminSubTab}
+            activeSubTab={activeAdminSubTab}
+            onSubTabChange={handleSelectAdminSubTab}
+            onExitAdmin={() => setCurrentView('portal')}
+          />
+        </AdminShell>
+      ) : (
+        <AppShell
+          currentView={currentView}
+          setCurrentView={setCurrentView}
+          settings={settings}
+          settingsLoaded={settingsLoaded}
+          hasTodayEvent={todayEvents.length > 0}
+          activeHolidaysToday={activeHolidaysToday}
+          workSchedules={workSchedules}
+          openAuthModal={() => setIsAuthModalOpen(true)}
+          openAdminSetupModal={() => setIsAdminSetupModalOpen(true)}
+        >
+          {globalModalsAndOverlays}
+
+          {/* Signed-in user prompt for cross-Firebase migration verification */}
+          {currentUser &&
+            settingsLoaded &&
+            settings.migrationReconciliationActive &&
+            userProfile?.migrationStatus !== 'confirmed' &&
+            currentView !== 'account' &&
+            !isBanned && (
+              <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/45 border border-amber-300 dark:border-amber-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 dark:text-amber-100">
+                <div className="flex items-center gap-2.5">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>
+                    <strong>Xác nhận dữ liệu tài khoản mới:</strong> Hệ thống vừa chuyển đổi Firebase. Vui lòng kiểm tra thông tin hồ sơ của bạn xem đã đúng &amp; đủ chưa.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('account')}
+                  className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold whitespace-nowrap self-start sm:self-auto transition cursor-pointer"
+                >
+                  Kiểm tra ngay
+                </button>
+              </div>
+            )}
 
       {/* Admin notice bar when viewing while their own environment matches an active block rule */}
       {isAdmin && accessEval.isBlocked && (
@@ -1476,6 +1630,76 @@ function MainApp() {
             </button>
           )}
         </div>
+      ) : blockedByGuestLoginGate ? (
+        <div className="max-w-md mx-auto py-14 px-6 my-6 rounded-3xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/70 shadow-sm text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto">
+            <Lock className="w-7 h-7" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-white">
+              Yêu Cầu Đăng Nhập Tài Khoản
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              Quản trị viên đã cấu hình chức năng này chỉ dành cho người dùng đã đăng nhập. Vui lòng đăng nhập hoặc đăng ký tài khoản để tiếp tục sử dụng.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAuthModalOpen(true)}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Đăng nhập ngay</span>
+            </button>
+            {currentView !== 'portal' && (
+              <button
+                type="button"
+                onClick={() => setCurrentView('portal')}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Quay về Trang chủ</span>
+              </button>
+            )}
+          </div>
+        </div>
+      ) : blockedByRolePermission ? (
+        <div className="max-w-md mx-auto py-14 px-6 my-6 rounded-3xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800/70 shadow-sm text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-white">
+              Không Có Quyền Truy Cập Mục Này
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              Nhóm đối tượng tài khoản hiện tại của bạn không được cấp quyền truy cập phân hệ này theo cấu hình phân quyền của Trạm Y tế.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {!currentUser && (
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(true)}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Đăng nhập tài khoản</span>
+              </button>
+            )}
+            {currentView !== 'portal' && (
+              <button
+                type="button"
+                onClick={() => setCurrentView('portal')}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Quay về Trang chủ</span>
+              </button>
+            )}
+          </div>
+        </div>
       ) : (
         <>
           {currentView === 'portal' && (
@@ -1530,6 +1754,10 @@ function MainApp() {
             />
           )}
 
+          {currentView === 'offline_emergency' && (
+            <OfflineEmergencyView settings={settings} />
+          )}
+
           {currentView === 'map' && (
             <div className="space-y-6">
               <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -1567,6 +1795,13 @@ function MainApp() {
 
           {currentView === 'bhyt_lookup' && (
             <BhxhLookupView settings={settings} />
+          )}
+
+          {currentView === 'apps' && (
+            <AppsLauncherView
+              settings={settings}
+              onOpenAdminAppsSetup={() => setCurrentView('admin', 'tab=apps_setup')}
+            />
           )}
 
           {currentView === 'telehealth' && (
@@ -1623,8 +1858,10 @@ function MainApp() {
           )}
         </>
       )}
+        </AppShell>
+      )}
 
-      {/* Global Modals */}
+      {/* Global Modals (Shared seamlessly between Portal and Standalone Admin Site) */}
       <FeedbackModal
         isOpen={isFeedbackModalOpen}
         onClose={() => setIsFeedbackModalOpen(false)}
@@ -1772,7 +2009,7 @@ function MainApp() {
       })()}
 
       <ConfettiEffect triggerKey={confettiTriggerKey} />
-    </AppShell>
+    </>
   );
 }
 

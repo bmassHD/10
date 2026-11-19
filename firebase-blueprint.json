@@ -9,8 +9,8 @@
         "email": { "type": "string", "maxLength": 256 },
         "displayName": { "type": "string", "maxLength": 128 },
         "phoneNumber": { "type": "string", "maxLength": 32 },
-        "role": { "type": "string", "enum": ["super_admin", "admin", "leadership", "doctor", "nurse", "communicator", "staff", "citizen"] },
-        "accountType": { "type": "string", "enum": ["citizen", "employee", "admin"] },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "leadership", "doctor", "nurse", "communicator", "staff", "citizen", "organization"] },
+        "accountType": { "type": "string", "enum": ["citizen", "employee", "admin", "organization"] },
         "department": { "type": "string", "maxLength": 128 },
         "position": { "type": "string", "maxLength": 128 },
         "qualification": { "type": "string", "maxLength": 128 },
@@ -48,6 +48,28 @@
         "allowIdentityEditByAdmin": { "type": "boolean" },
         "googleLinked": { "type": "boolean" },
         "referralCodeUsed": { "type": "string", "maxLength": 64 },
+        "personalReferralCode": { "type": "string", "maxLength": 64 },
+        "referredByUid": { "type": "string", "maxLength": 128 },
+        "referredByCode": { "type": "string", "maxLength": 64 },
+        "expBalance": { "type": "number" },
+        "totalExpEarned": { "type": "number" },
+        "lastRewardClaimRefUid": { "type": "string", "maxLength": 128 },
+        "lastStoreOrderId": { "type": "string", "maxLength": 128 },
+        "migrationStatus": { "type": "string", "enum": ["none", "pending_review", "confirmed", "disputed"] },
+        "migrationConfirmedAt": { "type": "string", "maxLength": 64 },
+        "migrationSnapshotId": { "type": "string", "maxLength": 128 },
+        "organizationName": { "type": "string", "maxLength": 256 },
+        "organizationType": { "type": "string", "enum": ["clinic", "pharmacy", "school", "enterprise", "agency", "other"] },
+        "taxCode": { "type": "string", "maxLength": 64 },
+        "businessLicenseNumber": { "type": "string", "maxLength": 128 },
+        "licenseIssueDate": { "type": "string", "maxLength": 64 },
+        "licenseIssuer": { "type": "string", "maxLength": 128 },
+        "legalRepresentative": { "type": "string", "maxLength": 128 },
+        "representativeCitizenId": { "type": "string", "maxLength": 32 },
+        "operatingField": { "type": "string", "maxLength": 128 },
+        "organizationAddress": { "type": "string", "maxLength": 256 },
+        "organizationPhone": { "type": "string", "maxLength": 32 },
+        "organizationEmail": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
@@ -101,14 +123,15 @@
     },
     "ReferralCode": {
       "title": "ReferralCode",
-      "description": "Super Admin invite/referral codes that automatically grant Cán bộ Y tế account status on signup",
+      "description": "Two-tier (Super Admin and Admin) invite/referral codes for Admin or Cán bộ Y tế account registration",
       "type": "object",
       "properties": {
         "code": { "type": "string", "maxLength": 64 },
         "label": { "type": "string", "maxLength": 128 },
         "active": { "type": "boolean" },
-        "targetAccountType": { "type": "string", "enum": ["employee"] },
-        "targetRole": { "type": "string", "enum": ["staff", "doctor", "nurse", "communicator", "leadership"] },
+        "issuerTier": { "type": "string", "enum": ["super_admin", "admin"] },
+        "targetAccountType": { "type": "string", "enum": ["employee", "admin"] },
+        "targetRole": { "type": "string", "enum": ["admin", "staff", "doctor", "nurse", "communicator", "leadership"] },
         "createdByUid": { "type": "string", "maxLength": 128 },
         "createdByEmail": { "type": "string", "maxLength": 256 },
         "createdAt": { "type": "string", "maxLength": 64 },
@@ -117,6 +140,100 @@
         "lastUsedByUid": { "type": "string", "maxLength": 128 }
       },
       "required": ["code", "active", "targetAccountType", "targetRole", "createdByUid", "createdAt", "usedCount"]
+    },
+    "UserReferralLink": {
+      "title": "UserReferralLink",
+      "description": "Publicly resolvable personal referral code registry mapping codes to owner UIDs without exposing PII",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 64 },
+        "ownerUid": { "type": "string", "maxLength": 128 },
+        "ownerName": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["code", "ownerUid", "ownerName", "createdAt"]
+    },
+    "ReferralTracking": {
+      "title": "ReferralTracking",
+      "description": "Tracks 3-step verification progress (excluding Authenticator) and +1000 EXP reward disbursement per referred user",
+      "type": "object",
+      "properties": {
+        "referredUid": { "type": "string", "maxLength": 128 },
+        "referredName": { "type": "string", "maxLength": 128 },
+        "referredEmailMasked": { "type": "string", "maxLength": 256 },
+        "referrerUid": { "type": "string", "maxLength": 128 },
+        "referralCode": { "type": "string", "maxLength": 64 },
+        "stepsCompleted": { "type": "object" },
+        "qualifiedForReward": { "type": "boolean" },
+        "rewarded": { "type": "boolean" },
+        "expAwarded": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "rewardedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["referredUid", "referredName", "referrerUid", "referralCode", "stepsCompleted", "qualifiedForReward", "rewarded", "expAwarded", "createdAt", "updatedAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily semi-automatic personnel attendance record (co_quan, truc, ra_truc, nghi)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 16 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "staffName": { "type": "string", "maxLength": 128 },
+        "department": { "type": "string", "maxLength": 128 },
+        "position": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["co_quan", "truc", "ra_truc", "nghi"] },
+        "note": { "type": "string", "maxLength": 512 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedByName": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "date", "staffId", "staffName", "status", "updatedByUid", "updatedAt"]
+    },
+    "StoreItem": {
+      "title": "StoreItem",
+      "description": "EXP reward redemption store catalog managed by Admin and Super Admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "priceExp": { "type": "number" },
+        "stock": { "type": "number" },
+        "category": { "type": "string", "enum": ["qua_tang", "dich_vu_y_te", "voucher", "vat_tu", "khac"] },
+        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "isActive": { "type": "boolean" },
+        "redeemCount": { "type": "number" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "description", "priceExp", "stock", "category", "isActive", "createdAt", "updatedAt"]
+    },
+    "StoreOrder": {
+      "title": "StoreOrder",
+      "description": "EXP store item redemption orders and status tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "itemId": { "type": "string", "maxLength": 128 },
+        "itemName": { "type": "string", "maxLength": 256 },
+        "itemImageUrl": { "type": "string", "maxLength": 2000 },
+        "buyerUid": { "type": "string", "maxLength": 128 },
+        "buyerName": { "type": "string", "maxLength": 128 },
+        "buyerEmail": { "type": "string", "maxLength": 256 },
+        "buyerPhone": { "type": "string", "maxLength": 32 },
+        "expCost": { "type": "number" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "delivered", "cancelled"] },
+        "note": { "type": "string", "maxLength": 1000 },
+        "adminNote": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "itemId", "itemName", "buyerUid", "buyerName", "expCost", "quantity", "status", "createdAt", "updatedAt"]
     },
     "Post": {
       "title": "Post",
@@ -333,8 +450,13 @@
         "lastAutoGithubBackupStatus": { "type": "string", "enum": ["success", "failed"] },
         "lastAutoGithubBackupError": { "type": "string", "maxLength": 512 },
         "accessControl": { "type": "object", "description": "Platform, device, and browser access restriction toggle configuration" },
+        "rolePermissions": { "type": "object", "description": "Per-role permission policies (Super Admin full access, Admin, User, Guest with login-required gates)" },
         "bhxhApi": { "type": "object", "description": "Public non-secret BHXH API gateway integration settings (Cong van 366/BHXH-CNTT)" },
         "aiAutomation": { "type": "object", "description": "Gemini AI automation feature toggles (auto scan documents on upload, auto summary, smart need finder)" },
+        "portalApps": { "type": "array", "description": "Configured smartphone-style launcher apps (name, url, auto-extracted logoUrl, category)" },
+        "portalAppCategories": { "type": "array", "description": "Custom categories configured by Admin for Apps Launcher alongside defaults" },
+        "migrationReconciliationActive": { "type": "boolean", "description": "Prompts signed-in users to review and verify/reconcile their migrated profile after Firebase migration" },
+        "migrationBannerNote": { "type": "string", "maxLength": 512 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["stationName", "address", "hotline"]
@@ -514,6 +636,90 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["title", "eventDate", "category", "description", "enableConfetti", "enableAutoPopup", "isActive", "createdAt", "updatedAt"]
+    },
+    "ServiceRating": {
+      "title": "ServiceRating",
+      "description": "End-of-page citizen and visitor 5-star experience & healthcare service rating",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "score": { "type": "number" },
+        "category": { "type": "string", "enum": ["giao_dien", "thai_do", "chuyen_mon", "tien_ich"] },
+        "comment": { "type": "string", "maxLength": 1000 },
+        "raterName": { "type": "string", "maxLength": 128 },
+        "raterAvatarUrl": { "type": "string", "maxLength": 500000 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "deviceId": { "type": "string", "maxLength": 128 },
+        "pageView": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "score", "category", "deviceId", "createdAt", "updatedAt"]
+    },
+    "LegacyUserSnapshot": {
+      "title": "LegacyUserSnapshot",
+      "description": "Staged user profile snapshot imported from a backup during cross-Firebase migration for verified email owner reconciliation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "legacyUid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "phoneNumber": { "type": "string", "maxLength": 32 },
+        "verifiedPhone": { "type": "string", "maxLength": 32 },
+        "citizenId": { "type": "string", "maxLength": 32 },
+        "dob": { "type": "string", "maxLength": 32 },
+        "gender": { "type": "string", "enum": ["Nam", "Nữ", "Khác"] },
+        "ethnicity": { "type": "string", "maxLength": 64 },
+        "provinceCode": { "type": "string", "maxLength": 16 },
+        "provinceName": { "type": "string", "maxLength": 128 },
+        "wardCode": { "type": "string", "maxLength": 16 },
+        "wardName": { "type": "string", "maxLength": 128 },
+        "address": { "type": "string", "maxLength": 256 },
+        "department": { "type": "string", "maxLength": 128 },
+        "position": { "type": "string", "maxLength": 128 },
+        "qualification": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "leadership", "doctor", "nurse", "communicator", "staff", "citizen", "organization"] },
+        "accountType": { "type": "string", "enum": ["citizen", "employee", "admin", "organization"] },
+        "expBalance": { "type": "number" },
+        "totalExpEarned": { "type": "number" },
+        "emailVerified": { "type": "boolean" },
+        "phoneVerified": { "type": "boolean" },
+        "citizenIdVerified": { "type": "boolean" },
+        "identityVerifiedFromDatabase": { "type": "boolean" },
+        "personalReferralCode": { "type": "string", "maxLength": 64 },
+        "claimStatus": { "type": "string", "enum": ["pending", "confirmed", "disputed", "resolved"] },
+        "confirmedByUid": { "type": "string", "maxLength": 128 },
+        "confirmedAt": { "type": "string", "maxLength": 64 },
+        "migratedAt": { "type": "string", "maxLength": 64 },
+        "sourceBackupTitle": { "type": "string", "maxLength": 256 },
+        "notes": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["id", "email", "displayName", "role", "accountType", "claimStatus", "migratedAt"]
+    },
+    "UserMigrationClaim": {
+      "title": "UserMigrationClaim",
+      "description": "Signed-in user verification confirmation or discrepancy adjustment request after cross-Firebase migration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "snapshotId": { "type": "string", "maxLength": 128 },
+        "claimType": { "type": "string", "enum": ["confirm_exact", "request_adjustment"] },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "disputed", "resolved", "rejected"] },
+        "disputedFields": { "type": "array" },
+        "userNote": { "type": "string", "maxLength": 2000 },
+        "proposedData": { "type": "object" },
+        "adminNote": { "type": "string", "maxLength": 2000 },
+        "resolvedByUid": { "type": "string", "maxLength": 128 },
+        "resolvedByName": { "type": "string", "maxLength": 128 },
+        "resolvedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "uid", "email", "displayName", "claimType", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -611,7 +817,39 @@
     },
     "/referralCodes/{codeId}": {
       "schema": { "$ref": "#/entities/ReferralCode" },
-      "description": "Super Admin referral codes and links for Cán bộ Y tế registration"
+      "description": "Two-tier (Super Admin and Admin) referral codes and links for Admin and Cán bộ Y tế registration"
+    },
+    "/userReferralLinks/{codeId}": {
+      "schema": { "$ref": "#/entities/UserReferralLink" },
+      "description": "Personal referral code lookup registry for all signed-in users"
+    },
+    "/referralTracking/{referredUid}": {
+      "schema": { "$ref": "#/entities/ReferralTracking" },
+      "description": "3-step verification tracking and +1000 EXP reward state per referred user"
+    },
+    "/attendanceRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Daily semi-automatic personnel attendance records (co_quan, truc, ra_truc, nghi)"
+    },
+    "/storeItems/{itemId}": {
+      "schema": { "$ref": "#/entities/StoreItem" },
+      "description": "EXP reward store items managed by Admin and Super Admin"
+    },
+    "/storeOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/StoreOrder" },
+      "description": "EXP store redemption orders"
+    },
+    "/serviceRatings/{ratingId}": {
+      "schema": { "$ref": "#/entities/ServiceRating" },
+      "description": "Citizen 5-star experience & healthcare service ratings"
+    },
+    "/legacyUserSnapshots/{snapshotId}": {
+      "schema": { "$ref": "#/entities/LegacyUserSnapshot" },
+      "description": "Staged user snapshots for post-migration email owner reconciliation"
+    },
+    "/userMigrationClaims/{claimId}": {
+      "schema": { "$ref": "#/entities/UserMigrationClaim" },
+      "description": "User confirmation and Admin adjustment requests after Firebase migration"
     }
   }
 }

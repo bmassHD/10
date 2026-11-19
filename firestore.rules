@@ -16,15 +16,29 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function isAdmin() {
+    function isSuperAdmin() {
       return isSignedIn() && (
         (
           'email' in request.auth.token &&
           request.auth.token.email is string &&
           'email_verified' in request.auth.token &&
           request.auth.token.email_verified == true &&
-          request.auth.token.email.lower() in ['sonlyhongduc@gmail.com', 'sonlyhongduc2003@gmail.com', 'tytvtd@gmail.com']
+          request.auth.token.email.lower() in ['sonlyhongduc@gmail.com', 'sonlyhongduc2003@gmail.com', 'tytvtd@gmail.com', 'bmassk3@gmail.com']
         ) ||
+        (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', '') == 'super_admin'
+        ) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'super_admin'
+        )
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isSuperAdmin() ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
@@ -140,14 +154,19 @@ service cloud.firestore {
     function isValidReferralCode(data, codeId) {
       return data.keys().hasAll(['code', 'active', 'targetAccountType', 'targetRole', 'createdByUid', 'createdAt', 'usedCount']) &&
         data.keys().hasOnly([
-          'code', 'label', 'active', 'targetAccountType', 'targetRole',
+          'code', 'label', 'active', 'issuerTier', 'targetAccountType', 'targetRole',
           'createdByUid', 'createdByEmail', 'createdAt', 'usedCount',
           'lastUsedAt', 'lastUsedByUid'
         ]) &&
         data.code is string && data.code == codeId && data.code.size() >= 4 && data.code.size() <= 64 &&
         data.active is bool &&
-        data.targetAccountType == 'employee' &&
-        data.targetRole in ['staff', 'doctor', 'nurse', 'communicator', 'leadership'] &&
+        (!('issuerTier' in data) || data.issuerTier in ['super_admin', 'admin']) &&
+        data.targetAccountType in ['employee', 'admin'] &&
+        data.targetRole in ['admin', 'staff', 'doctor', 'nurse', 'communicator', 'leadership'] &&
+        (
+          (data.targetAccountType == 'admin' && data.targetRole == 'admin') ||
+          (data.targetAccountType == 'employee' && data.targetRole in ['staff', 'doctor', 'nurse', 'communicator', 'leadership'])
+        ) &&
         data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
         data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64 &&
         data.usedCount is int && data.usedCount >= 0 &&
@@ -157,17 +176,40 @@ service cloud.firestore {
         (!('lastUsedByUid' in data) || (data.lastUsedByUid is string && data.lastUsedByUid.size() <= 128));
     }
 
-    // Referral Codes for automatic Cán bộ Y tế registration (only Admins list/manage, public get by exact code)
+    // Two-tier Referral Codes (Super Admin tier & Admin tier)
     match /referralCodes/{codeId} {
       allow get: if isValidId(codeId);
       allow list: if isAdmin();
-      allow create, delete: if isValidId(codeId) && isAdmin() &&
-        (request.method == 'delete' || isValidReferralCode(request.resource.data, codeId));
+      allow create: if isValidId(codeId) && isValidReferralCode(request.resource.data, codeId) && (
+        isSuperAdmin() ||
+        (
+          isAdmin() &&
+          request.resource.data.get('issuerTier', 'admin') == 'admin' &&
+          request.resource.data.targetAccountType == 'employee' &&
+          request.resource.data.createdByUid == request.auth.uid
+        )
+      );
+      allow delete: if isValidId(codeId) && (
+        isSuperAdmin() ||
+        (
+          isAdmin() &&
+          resource.data.get('issuerTier', 'admin') == 'admin' &&
+          resource.data.targetAccountType == 'employee'
+        )
+      );
       allow update: if isValidId(codeId) &&
         isValidReferralCode(request.resource.data, codeId) &&
         request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.createdByUid == resource.data.createdByUid && (
-          isAdmin() || (
+          isSuperAdmin() ||
+          (
+            isAdmin() &&
+            resource.data.get('issuerTier', 'admin') == 'admin' &&
+            resource.data.targetAccountType == 'employee' &&
+            request.resource.data.get('issuerTier', 'admin') == 'admin' &&
+            request.resource.data.targetAccountType == 'employee'
+          ) ||
+          (
             isSignedIn() &&
             resource.data.active == true &&
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount', 'lastUsedAt', 'lastUsedByUid']) &&
@@ -176,6 +218,109 @@ service cloud.firestore {
             request.resource.data.lastUsedByUid == request.auth.uid
           )
         );
+    }
+
+    // Personal Referral Links (public lookup by exact code without exposing user PII)
+    match /userReferralLinks/{codeId} {
+      allow get: if isValidId(codeId);
+      allow list: if isAdmin();
+      allow create: if isValidId(codeId) && isSignedIn() && isNotBanned() &&
+        request.resource.data.keys().hasAll(['code', 'ownerUid', 'ownerName', 'createdAt']) &&
+        request.resource.data.keys().hasOnly(['code', 'ownerUid', 'ownerName', 'createdAt']) &&
+        request.resource.data.code == codeId &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.ownerName is string && request.resource.data.ownerName.size() >= 1 && request.resource.data.ownerName.size() <= 128 &&
+        request.resource.data.createdAt is string && request.resource.data.createdAt.size() <= 64;
+      allow update: if isValidId(codeId) && isAdmin();
+      allow delete: if isValidId(codeId) && (isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid));
+    }
+
+    function isValidReferralTracking(data, referredUid) {
+      return data.keys().hasAll(['referredUid', 'referredName', 'referrerUid', 'referralCode', 'stepsCompleted', 'qualifiedForReward', 'rewarded', 'expAwarded', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'referredUid', 'referredName', 'referredEmailMasked', 'referrerUid', 'referralCode',
+          'stepsCompleted', 'qualifiedForReward', 'rewarded', 'expAwarded',
+          'createdAt', 'updatedAt', 'rewardedAt'
+        ]) &&
+        data.referredUid == referredUid &&
+        data.referredName is string && data.referredName.size() >= 1 && data.referredName.size() <= 128 &&
+        (!('referredEmailMasked' in data) || (data.referredEmailMasked is string && data.referredEmailMasked.size() <= 256)) &&
+        data.referrerUid is string && data.referrerUid.size() >= 1 && data.referrerUid.size() <= 128 && data.referrerUid != referredUid &&
+        data.referralCode is string && isValidId(data.referralCode) &&
+        data.stepsCompleted is map &&
+        data.stepsCompleted.keys().hasOnly(['email', 'phone', 'password']) &&
+        data.stepsCompleted.get('email', false) is bool &&
+        data.stepsCompleted.get('phone', false) is bool &&
+        data.stepsCompleted.get('password', false) is bool &&
+        data.qualifiedForReward is bool &&
+        (
+          data.qualifiedForReward == false ||
+          (
+            data.stepsCompleted.get('email', false) == true &&
+            data.stepsCompleted.get('phone', false) == true &&
+            data.stepsCompleted.get('password', false) == true
+          )
+        ) &&
+        data.rewarded is bool &&
+        data.expAwarded is int &&
+        data.expAwarded in [0, 1000] &&
+        (data.rewarded == false || (data.qualifiedForReward == true && data.expAwarded == 1000)) &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('rewardedAt' in data) || (data.rewardedAt is string && data.rewardedAt.size() <= 64));
+    }
+
+    // Referral Verification & +1000 EXP Reward Tracking
+    match /referralTracking/{referredUid} {
+      allow get: if isValidId(referredUid) && (
+        isAdmin() ||
+        isOwner(referredUid) ||
+        (isSignedIn() && resource.data.referrerUid == request.auth.uid)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() &&
+        (resource.data.referrerUid == request.auth.uid || resource.data.referredUid == request.auth.uid)
+      );
+      allow create: if isValidId(referredUid) && (
+        isAdmin() ||
+        (
+          isOwner(referredUid) &&
+          isNotBanned() &&
+          isValidReferralTracking(request.resource.data, referredUid) &&
+          request.resource.data.rewarded == false &&
+          request.resource.data.expAwarded == 0 &&
+          exists(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.referralCode)) &&
+          get(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.referralCode)).data.ownerUid == request.resource.data.referrerUid
+        )
+      );
+      allow update: if isValidId(referredUid) && isValidReferralTracking(request.resource.data, referredUid) && (
+        isAdmin() ||
+        (
+          isNotBanned() &&
+          request.resource.data.referredUid == resource.data.referredUid &&
+          request.resource.data.referrerUid == resource.data.referrerUid &&
+          request.resource.data.referralCode == resource.data.referralCode &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          (
+            (
+              isOwner(referredUid) &&
+              resource.data.rewarded == false &&
+              request.resource.data.rewarded == false &&
+              request.resource.data.expAwarded == 0
+            ) ||
+            (
+              (isOwner(referredUid) || (isSignedIn() && resource.data.referrerUid == request.auth.uid)) &&
+              resource.data.rewarded == false &&
+              request.resource.data.qualifiedForReward == true &&
+              request.resource.data.rewarded == true &&
+              request.resource.data.expAwarded == 1000 &&
+              getAfter(/databases/$(database)/documents/users/$(resource.data.referrerUid)).data.get('lastRewardClaimRefUid', '') == referredUid &&
+              getAfter(/databases/$(database)/documents/users/$(resource.data.referrerUid)).data.get('expBalance', 0) == get(/databases/$(database)/documents/users/$(resource.data.referrerUid)).data.get('expBalance', 0) + 1000
+            )
+          )
+        )
+      );
+      allow delete: if isValidId(referredUid) && isAdmin();
     }
 
     // Users collection
@@ -187,6 +332,10 @@ service cloud.firestore {
         (
           isOwner(userId) &&
           request.resource.data.uid == userId &&
+          request.resource.data.get('expBalance', 0) == 0 &&
+          request.resource.data.get('totalExpEarned', 0) == 0 &&
+          !('lastRewardClaimRefUid' in request.resource.data) &&
+          !('lastStoreOrderId' in request.resource.data) &&
           !('banType' in request.resource.data) &&
           !('bannedUntil' in request.resource.data) &&
           !('bannedUntilMs' in request.resource.data) &&
@@ -194,6 +343,17 @@ service cloud.firestore {
           !('bannedAt' in request.resource.data) &&
           !('bannedByUid' in request.resource.data) &&
           !('bannedByName' in request.resource.data) &&
+          (
+            !('referredByUid' in request.resource.data) ||
+            (
+              request.resource.data.referredByUid is string &&
+              request.resource.data.referredByUid != userId &&
+              'referredByCode' in request.resource.data &&
+              isValidId(request.resource.data.referredByCode) &&
+              exists(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.referredByCode)) &&
+              get(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.referredByCode)).data.ownerUid == request.resource.data.referredByUid
+            )
+          ) &&
           (
             (
               request.resource.data.role == 'citizen' &&
@@ -206,7 +366,7 @@ service cloud.firestore {
               exists(/databases/$(database)/documents/referralCodes/$(request.resource.data.referralCodeUsed)) &&
               get(/databases/$(database)/documents/referralCodes/$(request.resource.data.referralCodeUsed)).data.active == true &&
               request.resource.data.role == get(/databases/$(database)/documents/referralCodes/$(request.resource.data.referralCodeUsed)).data.targetRole &&
-              request.resource.data.accountType == 'employee' &&
+              request.resource.data.accountType == get(/databases/$(database)/documents/referralCodes/$(request.resource.data.referralCodeUsed)).data.targetAccountType &&
               request.resource.data.status == 'active'
             )
           )
@@ -214,9 +374,89 @@ service cloud.firestore {
       );
       allow update: if isValidId(userId) && (
         isAdmin() ||
+        // Atomic +1000 EXP claim from a qualified referralTracking record (triggerable by referrer or referred user upon completing step 3)
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expBalance', 'totalExpEarned', 'lastRewardClaimRefUid', 'updatedAt']) &&
+          'lastRewardClaimRefUid' in request.resource.data &&
+          isValidId(request.resource.data.lastRewardClaimRefUid) &&
+          request.resource.data.get('expBalance', 0) is int &&
+          request.resource.data.get('totalExpEarned', 0) is int &&
+          request.resource.data.get('expBalance', 0) == resource.data.get('expBalance', 0) + 1000 &&
+          request.resource.data.get('totalExpEarned', 0) == resource.data.get('totalExpEarned', 0) + 1000 &&
+          exists(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)) &&
+          get(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)).data.referrerUid == userId &&
+          get(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)).data.qualifiedForReward == true &&
+          get(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)).data.rewarded == false &&
+          getAfter(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)).data.rewarded == true &&
+          getAfter(/databases/$(database)/documents/referralTracking/$(request.resource.data.lastRewardClaimRefUid)).data.expAwarded == 1000
+        ) ||
+        // Atomic EXP deduction when redeeming a Store item
+        (
+          isOwner(userId) &&
+          isNotBanned() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expBalance', 'lastStoreOrderId', 'updatedAt']) &&
+          'lastStoreOrderId' in request.resource.data &&
+          isValidId(request.resource.data.lastStoreOrderId) &&
+          request.resource.data.get('expBalance', 0) is int &&
+          request.resource.data.get('expBalance', 0) >= 0 &&
+          !exists(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)) &&
+          existsAfter(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)) &&
+          getAfter(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)).data.buyerUid == userId &&
+          getAfter(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)).data.expCost is int &&
+          getAfter(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)).data.expCost > 0 &&
+          request.resource.data.get('expBalance', 0) == resource.data.get('expBalance', 0) - getAfter(/databases/$(database)/documents/storeOrders/$(request.resource.data.lastStoreOrderId)).data.expCost
+        ) ||
+        // Verified owner claim of an Admin-staged LegacyUserSnapshot after cross-Firebase migration
+        (
+          isOwner(userId) &&
+          isNotBanned() &&
+          request.resource.data.uid == userId &&
+          'email' in request.auth.token &&
+          'email_verified' in request.auth.token &&
+          request.auth.token.email_verified == true &&
+          'migrationSnapshotId' in request.resource.data &&
+          isValidId(request.resource.data.migrationSnapshotId) &&
+          exists(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)) &&
+          get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.claimStatus == 'pending' &&
+          get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.email.lower() == request.auth.token.email.lower() &&
+          getAfter(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.claimStatus == 'confirmed' &&
+          getAfter(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.confirmedByUid == userId &&
+          request.resource.data.migrationStatus == 'confirmed' &&
+          request.resource.data.role == get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.role &&
+          request.resource.data.accountType == get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.accountType &&
+          request.resource.data.get('expBalance', 0) is int &&
+          request.resource.data.get('totalExpEarned', 0) is int &&
+          request.resource.data.get('expBalance', 0) == resource.data.get('expBalance', 0) + get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.get('expBalance', 0) &&
+          request.resource.data.get('totalExpEarned', 0) == resource.data.get('totalExpEarned', 0) + get(/databases/$(database)/documents/legacyUserSnapshots/$(request.resource.data.migrationSnapshotId)).data.get('totalExpEarned', 0) &&
+          request.resource.data.get('status', 'active') == resource.data.get('status', 'active') &&
+          request.resource.data.get('banType', '') == resource.data.get('banType', '') &&
+          request.resource.data.get('bannedUntil', '') == resource.data.get('bannedUntil', '') &&
+          request.resource.data.get('bannedUntilMs', 0) == resource.data.get('bannedUntilMs', 0) &&
+          request.resource.data.get('banReason', '') == resource.data.get('banReason', '') &&
+          request.resource.data.get('bannedAt', '') == resource.data.get('bannedAt', '') &&
+          request.resource.data.get('bannedByUid', '') == resource.data.get('bannedByUid', '') &&
+          request.resource.data.get('bannedByName', '') == resource.data.get('bannedByName', '')
+        ) ||
+        // Normal owner profile edits (cannot mutate EXP balances or previously locked referrer)
         (isOwner(userId) && isNotBanned() && request.resource.data.uid == userId &&
           request.resource.data.role == resource.data.role &&
           request.resource.data.accountType == resource.data.accountType &&
+          request.resource.data.get('expBalance', 0) == resource.data.get('expBalance', 0) &&
+          request.resource.data.get('totalExpEarned', 0) == resource.data.get('totalExpEarned', 0) &&
+          request.resource.data.get('lastRewardClaimRefUid', '') == resource.data.get('lastRewardClaimRefUid', '') &&
+          request.resource.data.get('lastStoreOrderId', '') == resource.data.get('lastStoreOrderId', '') &&
+          (
+            request.resource.data.get('referredByUid', '') == resource.data.get('referredByUid', '') ||
+            (
+              resource.data.get('referredByUid', '') == '' &&
+              request.resource.data.get('referredByUid', '') != userId &&
+              isValidId(request.resource.data.get('referredByCode', '')) &&
+              exists(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.get('referredByCode', ''))) &&
+              get(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.get('referredByCode', ''))).data.ownerUid == request.resource.data.get('referredByUid', '')
+            )
+          ) &&
           request.resource.data.get('status', 'active') == resource.data.get('status', 'active') &&
           request.resource.data.get('banType', '') == resource.data.get('banType', '') &&
           request.resource.data.get('bannedUntil', '') == resource.data.get('bannedUntil', '') &&
@@ -286,6 +526,125 @@ service cloud.firestore {
         allow create, update: if isValidId(userId) && isValidId(deviceId) && ((isOwner(userId) && isNotBanned()) || isAdmin()) && isValidUserDevice(request.resource.data, deviceId);
         allow delete: if isValidId(userId) && isValidId(deviceId) && ((isOwner(userId) && isNotBanned()) || isAdmin());
       }
+    }
+
+    // Semi-automatic Personnel Attendance Records (co_quan, truc, ra_truc, nghi)
+    function isValidAttendanceRecord(data, recordId) {
+      return data.keys().hasAll(['id', 'date', 'staffId', 'staffName', 'status', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'date', 'staffId', 'staffName', 'department', 'position',
+          'status', 'note', 'updatedByUid', 'updatedByName', 'updatedAt'
+        ]) &&
+        data.id == recordId &&
+        data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 128 &&
+        data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 128 &&
+        data.status in ['co_quan', 'truc', 'ra_truc', 'nghi'] &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 128)) &&
+        (!('position' in data) || (data.position is string && data.position.size() <= 128)) &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 512)) &&
+        (!('updatedByName' in data) || (data.updatedByName is string && data.updatedByName.size() <= 128));
+    }
+
+    match /attendanceRecords/{recordId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(recordId) && isStaff() && isNotBanned() &&
+        isValidAttendanceRecord(request.resource.data, recordId);
+      allow delete: if isValidId(recordId) && isStaff() && isNotBanned();
+    }
+
+    // EXP Storefront Items & Orders
+    function isValidStoreItem(data, itemId) {
+      return data.keys().hasAll(['id', 'name', 'description', 'priceExp', 'stock', 'category', 'isActive', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'name', 'description', 'priceExp', 'stock', 'category',
+          'imageUrl', 'isActive', 'redeemCount', 'createdByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == itemId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 256 &&
+        data.description is string && data.description.size() <= 2000 &&
+        data.priceExp is int && data.priceExp > 0 &&
+        data.stock is int && data.stock >= 0 &&
+        data.category in ['qua_tang', 'dich_vu_y_te', 'voucher', 'vat_tu', 'khac'] &&
+        data.isActive is bool &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000)) &&
+        (!('redeemCount' in data) || (data.redeemCount is int && data.redeemCount >= 0)) &&
+        (!('createdByUid' in data) || (data.createdByUid is string && data.createdByUid.size() <= 128));
+    }
+
+    function isValidStoreOrder(data, orderId) {
+      return data.keys().hasAll(['id', 'itemId', 'itemName', 'buyerUid', 'buyerName', 'expCost', 'quantity', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'itemId', 'itemName', 'itemImageUrl', 'buyerUid', 'buyerName',
+          'buyerEmail', 'buyerPhone', 'expCost', 'quantity', 'status',
+          'note', 'adminNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == orderId &&
+        data.itemId is string && isValidId(data.itemId) &&
+        data.itemName is string && data.itemName.size() >= 1 && data.itemName.size() <= 256 &&
+        data.buyerUid is string && data.buyerUid.size() >= 1 && data.buyerUid.size() <= 128 &&
+        data.buyerName is string && data.buyerName.size() >= 1 && data.buyerName.size() <= 128 &&
+        data.expCost is int && data.expCost > 0 &&
+        data.quantity is int && data.quantity >= 1 &&
+        data.status in ['pending', 'approved', 'delivered', 'cancelled'] &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('itemImageUrl' in data) || (data.itemImageUrl is string && data.itemImageUrl.size() <= 2000)) &&
+        (!('buyerEmail' in data) || (data.buyerEmail is string && data.buyerEmail.size() <= 256)) &&
+        (!('buyerPhone' in data) || (data.buyerPhone is string && data.buyerPhone.size() <= 32)) &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 1000)) &&
+        (!('adminNote' in data) || (data.adminNote is string && data.adminNote.size() <= 1000));
+    }
+
+    match /storeItems/{itemId} {
+      allow get, list: if true;
+      allow create: if isValidId(itemId) && isAdmin() && isValidStoreItem(request.resource.data, itemId);
+      allow delete: if isValidId(itemId) && isAdmin();
+      allow update: if isValidId(itemId) && isValidStoreItem(request.resource.data, itemId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          resource.data.isActive == true &&
+          resource.data.stock >= 1 &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'redeemCount', 'updatedAt']) &&
+          request.resource.data.stock == resource.data.stock - 1 &&
+          request.resource.data.get('redeemCount', 0) == resource.data.get('redeemCount', 0) + 1
+        )
+      );
+    }
+
+    match /storeOrders/{orderId} {
+      allow get: if isValidId(orderId) && (
+        isAdmin() ||
+        (isSignedIn() && resource.data.buyerUid == request.auth.uid)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource.data.buyerUid == request.auth.uid
+      );
+      allow create: if isValidId(orderId) && isValidStoreOrder(request.resource.data, orderId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          request.resource.data.buyerUid == request.auth.uid &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.quantity == 1 &&
+          exists(/databases/$(database)/documents/storeItems/$(request.resource.data.itemId)) &&
+          get(/databases/$(database)/documents/storeItems/$(request.resource.data.itemId)).data.isActive == true &&
+          get(/databases/$(database)/documents/storeItems/$(request.resource.data.itemId)).data.stock >= 1 &&
+          request.resource.data.expCost == get(/databases/$(database)/documents/storeItems/$(request.resource.data.itemId)).data.priceExp &&
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('lastStoreOrderId', '') == orderId &&
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('expBalance', 0) == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('expBalance', 0) - request.resource.data.expCost
+        )
+      );
+      allow update: if isValidId(orderId) && isAdmin() && isValidStoreOrder(request.resource.data, orderId) &&
+        request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isValidId(orderId) && isAdmin();
     }
 
     // Posts (News, health communication)
@@ -810,6 +1169,155 @@ service cloud.firestore {
       allow update: if isValidId(eventId) && isAdmin() && isValidStationEvent(request.resource.data) &&
         request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if isValidId(eventId) && isAdmin();
+    }
+
+    function isValidServiceRating(data, ratingId) {
+      return data.keys().hasAll(['id', 'score', 'category', 'deviceId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'score', 'category', 'comment', 'raterName', 'raterAvatarUrl',
+          'uid', 'deviceId', 'pageView', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == ratingId &&
+        data.score is int && data.score >= 1 && data.score <= 5 &&
+        data.category in ['giao_dien', 'thai_do', 'chuyen_mon', 'tien_ich'] &&
+        data.deviceId is string && data.deviceId.size() >= 4 && data.deviceId.size() <= 128 &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('comment' in data) || (data.comment is string && data.comment.size() <= 1000)) &&
+        (!('raterName' in data) || (data.raterName is string && data.raterName.size() <= 128)) &&
+        (!('raterAvatarUrl' in data) || (data.raterAvatarUrl is string && data.raterAvatarUrl.size() <= 500000)) &&
+        (!('pageView' in data) || (data.pageView is string && data.pageView.size() <= 64)) &&
+        (!('uid' in data) || (data.uid is string && data.uid.size() <= 128));
+    }
+
+    // End-of-page 5-star Experience & Healthcare Service Ratings
+    match /serviceRatings/{ratingId} {
+      allow get, list: if true;
+      allow create: if isValidId(ratingId) && isNotBanned() &&
+        isValidServiceRating(request.resource.data, ratingId) &&
+        (!('uid' in request.resource.data) || request.resource.data.uid == '' || (isSignedIn() && request.resource.data.uid == request.auth.uid));
+      allow update: if isValidId(ratingId) && isNotBanned() &&
+        isValidServiceRating(request.resource.data, ratingId) &&
+        request.resource.data.createdAt == resource.data.createdAt && (
+          isAdmin() ||
+          (isSignedIn() && ('uid' in resource.data) && resource.data.uid == request.auth.uid && request.resource.data.get('uid', '') == request.auth.uid)
+        );
+      allow delete: if isValidId(ratingId) && isNotBanned() && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          ('uid' in resource.data) &&
+          resource.data.uid is string &&
+          resource.data.uid.size() > 0 &&
+          resource.data.uid == request.auth.uid
+        )
+      );
+    }
+
+    function isValidLegacyUserSnapshot(data, snapshotId) {
+      return data.keys().hasAll(['id', 'email', 'displayName', 'role', 'accountType', 'claimStatus', 'migratedAt']) &&
+        data.keys().hasOnly([
+          'id', 'legacyUid', 'email', 'displayName', 'phoneNumber', 'verifiedPhone',
+          'citizenId', 'dob', 'gender', 'ethnicity',
+          'provinceCode', 'provinceName', 'wardCode', 'wardName', 'address',
+          'department', 'position', 'qualification', 'role', 'accountType',
+          'expBalance', 'totalExpEarned', 'emailVerified', 'phoneVerified',
+          'citizenIdVerified', 'identityVerifiedFromDatabase', 'personalReferralCode',
+          'claimStatus', 'confirmedByUid', 'confirmedAt', 'migratedAt', 'sourceBackupTitle', 'notes'
+        ]) &&
+        data.id == snapshotId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 256 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 128 &&
+        data.role in ['super_admin', 'admin', 'leadership', 'doctor', 'nurse', 'communicator', 'staff', 'citizen', 'organization'] &&
+        data.accountType in ['citizen', 'employee', 'admin', 'organization'] &&
+        data.claimStatus in ['pending', 'confirmed', 'disputed', 'resolved'] &&
+        data.migratedAt is string && data.migratedAt.size() <= 64 &&
+        (!('expBalance' in data) || (data.expBalance is int && data.expBalance >= 0)) &&
+        (!('totalExpEarned' in data) || (data.totalExpEarned is int && data.totalExpEarned >= 0));
+    }
+
+    // Admin-staged legacy user snapshots for cross-Firebase owner reconciliation
+    match /legacyUserSnapshots/{snapshotId} {
+      allow get: if isValidId(snapshotId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          resource.data.email.lower() == request.auth.token.email.lower()
+        )
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() &&
+        'email' in request.auth.token &&
+        request.auth.token.email is string &&
+        resource.data.email.lower() == request.auth.token.email.lower()
+      );
+      allow create: if isValidId(snapshotId) && isAdmin() && isValidLegacyUserSnapshot(request.resource.data, snapshotId);
+      allow update: if isValidId(snapshotId) && isValidLegacyUserSnapshot(request.resource.data, snapshotId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          request.auth.token.email_verified == true &&
+          resource.data.email.lower() == request.auth.token.email.lower() &&
+          resource.data.claimStatus == 'pending' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimStatus', 'confirmedByUid', 'confirmedAt']) &&
+          request.resource.data.claimStatus in ['confirmed', 'disputed'] &&
+          request.resource.data.confirmedByUid == request.auth.uid
+        )
+      );
+      allow delete: if isValidId(snapshotId) && isAdmin();
+    }
+
+    function isValidUserMigrationClaim(data, claimId) {
+      return data.keys().hasAll(['id', 'uid', 'email', 'displayName', 'claimType', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'uid', 'email', 'displayName', 'snapshotId', 'claimType', 'status',
+          'disputedFields', 'userNote', 'proposedData',
+          'adminNote', 'resolvedByUid', 'resolvedByName', 'resolvedAt',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == claimId &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() <= 256 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 128 &&
+        data.claimType in ['confirm_exact', 'request_adjustment'] &&
+        data.status in ['pending', 'confirmed', 'disputed', 'resolved', 'rejected'] &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('disputedFields' in data) || (data.disputedFields is list && data.disputedFields.size() <= 20)) &&
+        (!('userNote' in data) || (data.userNote is string && data.userNote.size() <= 2000)) &&
+        (!('adminNote' in data) || (data.adminNote is string && data.adminNote.size() <= 2000));
+    }
+
+    // User Migration Verification & Discrepancy Claims (User submits -> Admin reviews/adjusts)
+    match /userMigrationClaims/{claimId} {
+      allow get: if isValidId(claimId) && (isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isValidId(claimId) && isValidUserMigrationClaim(request.resource.data, claimId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.status in ['pending', 'confirmed', 'disputed']
+        )
+      );
+      allow update: if isValidId(claimId) && isValidUserMigrationClaim(request.resource.data, claimId) && (
+        isAdmin() ||
+        (
+          isSignedIn() &&
+          isNotBanned() &&
+          resource.data.uid == request.auth.uid &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.status in ['pending', 'confirmed', 'disputed']
+        )
+      );
+      allow delete: if isValidId(claimId) && isAdmin();
     }
   }
 }

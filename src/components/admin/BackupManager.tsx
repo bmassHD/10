@@ -9,6 +9,7 @@ import {
   getVietnamTimeParts,
   hasGithubBackupForDay,
   isDailyGithubBackupMissing,
+  RestoreProgressInfo,
 } from '../../services/backupService';
 import { updateSystemSettings } from '../../services/firebaseService';
 import { useToast } from '../../contexts/ToastContext';
@@ -33,8 +34,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Layers,
+  UserCheck,
 } from 'lucide-react';
 import { GitHubService } from '../../services/githubService';
+import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 
 interface BackupManagerProps {
   userEmail: string;
@@ -80,12 +83,15 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [isBackingUpGitHub, setIsBackingUpGitHub] = useState(false);
   const [isExportingLocal, setIsExportingLocal] = useState(false);
+  const [isExportingNoUsers, setIsExportingNoUsers] = useState(false);
   const [isExportingUsers, setIsExportingUsers] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState<RestoreProgressInfo | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [savingAutoToggle, setSavingAutoToggle] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'github' | 'cloud'>('all');
   const [customTitle, setCustomTitle] = useState('');
+  const [enableMigrationPrompt, setEnableMigrationPrompt] = useState(true);
 
   // GitHub restore modal state
   const [showGitHubModal, setShowGitHubModal] = useState(false);
@@ -264,21 +270,29 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     }
   };
 
-  const handleExportLocal = async () => {
-    setIsExportingLocal(true);
+  const handleExportLocal = async (excludeUsers = false) => {
+    if (excludeUsers) {
+      setIsExportingNoUsers(true);
+    } else {
+      setIsExportingLocal(true);
+    }
     try {
-      const res = await BackupService.exportLocalBackup(userEmail, customTitle);
+      const res = await BackupService.exportLocalBackup(userEmail, customTitle, { excludeUsers });
       if (res.success) {
         showToast(
           'success',
-          'Đã tải tệp sao lưu JSON về máy',
+          excludeUsers ? 'Đã tải JSON sao lưu hệ thống (Trừ User)' : 'Đã tải tệp sao lưu JSON về máy',
           `Tổng ${res.totalRecords ?? 0} bản ghi (${Math.max(1, Math.round((res.sizeBytes || 0) / 1024))} KB)`
         );
       } else {
         showToast('error', 'Xuất tệp sao lưu thất bại', res.error);
       }
     } finally {
-      setIsExportingLocal(false);
+      if (excludeUsers) {
+        setIsExportingNoUsers(false);
+      } else {
+        setIsExportingLocal(false);
+      }
     }
   };
 
@@ -382,8 +396,28 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       isDangerous: true,
       onConfirm: async () => {
         setIsRestoring(true);
+        setRestoreProgress({
+          phase: 'parsing',
+          phaseLabel: 'Đang chuẩn bị khôi phục từ GitHub',
+          processedCollections: 0,
+          totalCollections: 0,
+          processedRecords: 0,
+          totalRecords: 0,
+          restoredCount: 0,
+          skippedCount: 0,
+          stagedSnapshotsCount: 0,
+          percent: 2,
+          message: `Đang khởi tạo tiến trình khôi phục từ "${fileName}"...`,
+        });
         try {
-          const res = await BackupService.restoreFromBackup(rawContent, userEmail);
+          const res = await BackupService.restoreFromBackup(
+            rawContent,
+            userEmail,
+            undefined,
+            {
+              onProgress: progress => setRestoreProgress(progress),
+            }
+          );
           if (res.success) {
             showToast('success', 'Khôi phục dữ liệu từ GitHub hoàn tất', res.message);
             setShowGitHubModal(false);
@@ -417,7 +451,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     });
   };
 
-  const handleConfirmSelectiveRestore = () => {
+  const handleConfirmSelectiveRestore = (migrationMode = false) => {
     if (!restorePicker || restorePicker.selectedCollections.length === 0) {
       showToast('warning', 'Chưa chọn phân hệ nào', 'Vui lòng chọn ít nhất 1 phân hệ dữ liệu để khôi phục.');
       return;
@@ -433,21 +467,57 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         : '';
 
     showConfirm({
-      title: `Khôi phục ${restorePicker.selectedCollections.length} phân hệ đã chọn?`,
-      message: `Hệ thống sẽ phục hồi từ "${restorePicker.title}" cho các phân hệ: ${selectedLabels}${extraCount}. Các bản ghi trùng ID sẽ được cập nhật theo bản sao lưu này.`,
-      confirmText: 'Tiến hành khôi phục',
+      title: migrationMode
+        ? 'Khôi phục Chế độ Chuyển Firebase Mới?'
+        : `Khôi phục ${restorePicker.selectedCollections.length} phân hệ đã chọn?`,
+      message: migrationMode
+        ? `Hệ thống sẽ khôi phục cấu hình & nội dung từ "${restorePicker.title}", KHÔNG ghi đè bảng User hiện tại, đồng thời đưa hồ sơ User cũ vào kho đối chiếu để người dùng đăng nhập xác nhận lại.`
+        : `Hệ thống sẽ phục hồi từ "${restorePicker.title}" cho các phân hệ: ${selectedLabels}${extraCount}. Các bản ghi trùng ID sẽ được cập nhật theo bản sao lưu này.`,
+      confirmText: migrationMode ? 'Thực hiện chuyển đổi' : 'Tiến hành khôi phục',
       cancelText: 'Huỷ',
       isDangerous: true,
       onConfirm: async () => {
         setIsRestoring(true);
+        setRestoreProgress({
+          phase: 'parsing',
+          phaseLabel: migrationMode
+            ? 'Đang chuẩn bị di trú sang Firebase mới'
+            : 'Đang chuẩn bị khôi phục chọn lọc',
+          processedCollections: 0,
+          totalCollections: restorePicker.selectedCollections.length,
+          processedRecords: 0,
+          totalRecords: restorePicker.selectedCollections.reduce(
+            (sum, key) => sum + (restorePicker.collectionCounts[key] ?? 0),
+            0
+          ),
+          restoredCount: 0,
+          skippedCount: 0,
+          stagedSnapshotsCount: 0,
+          percent: 2,
+          message: `Đang khởi tạo tiến trình khôi phục "${restorePicker.title}"...`,
+        });
         try {
           const res = await BackupService.restoreFromBackup(
             restorePicker.rawContent,
             userEmail,
-            restorePicker.selectedCollections
+            restorePicker.selectedCollections,
+            {
+              ...(migrationMode
+                ? {
+                    migrationMode: true,
+                    enableMigrationPrompt,
+                    sourceBackupTitle: restorePicker.title,
+                  }
+                : {}),
+              onProgress: progress => setRestoreProgress(progress),
+            }
           );
           if (res.success) {
-            showToast('success', 'Khôi phục chọn lọc hoàn tất', res.message);
+            showToast(
+              'success',
+              migrationMode ? 'Khôi phục & Kích hoạt đối chiếu User hoàn tất' : 'Khôi phục chọn lọc hoàn tất',
+              res.message
+            );
             setRestorePicker(null);
             setShowGitHubModal(false);
             setPreviewingGitHubFile(null);
@@ -606,14 +676,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Hệ Thống Sao Lưu &amp; Phục Hồi Dữ Liệu
+                  Hệ Thống Sao Lưu &amp; Phục Hồi ({BACKUP_COLLECTIONS.length} Phân Hệ)
                 </h3>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
                   {CURRENT_SYSTEM_VERSION}
                 </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Sao lưu toàn bộ {BACKUP_COLLECTIONS.length} phân hệ dữ liệu Firestore: cấu hình trạm, bản đồ, tin tức, dịch vụ, văn bản, lịch trực 24/7, phản ánh, lịch hẹn, tài khoản (định danh Y tế, trạng thái bảo mật/xác minh &amp; thiết bị tin cậy) và khoá định danh.
+              <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Sao lưu đồng bộ toàn bộ {BACKUP_COLLECTIONS.length} phân hệ Firestore, hỗ trợ xuất trừ User và chế độ đối chiếu tài khoản khi chuyển sang dự án Firebase mới.
               </p>
               {latestBackupDate && (
                 <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium mt-1.5 flex items-center gap-1.5 tabular-nums">
@@ -624,53 +694,54 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              disabled={loading}
-              onClick={fetchBackups}
-              className="p-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 rounded-xl bg-slate-100 dark:bg-slate-800 transition cursor-pointer"
-              title="Tải lại danh sách"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={handleFileImport}
-            />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleFileImport}
+          />
+          <div className={getBalancedMobileGridClass(7, 'w-full lg:w-auto shrink-0')}>
             <button
               type="button"
               disabled={isRestoring}
               onClick={() => fileInputRef.current?.click()}
-              className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+              className="min-h-[42px] px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Phục hồi từ tệp JSON</span>
+              <Upload className="w-3.5 h-3.5 shrink-0" />
+              <span>Khôi phục JSON</span>
             </button>
 
             <button
               type="button"
               disabled={isExportingLocal}
-              onClick={handleExportLocal}
-              className="px-3.5 py-2 text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 border border-teal-200 dark:border-teal-800 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+              onClick={() => void handleExportLocal(false)}
+              className="min-h-[42px] px-3 py-2 text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 border border-teal-200 dark:border-teal-800 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <HardDriveDownload className={`w-3.5 h-3.5 ${isExportingLocal ? 'animate-pulse' : ''}`} />
-              <span>{isExportingLocal ? 'Đang xuất...' : 'Tải JSON về máy'}</span>
+              <HardDriveDownload className={`w-3.5 h-3.5 shrink-0 ${isExportingLocal ? 'animate-pulse' : ''}`} />
+              <span>{isExportingLocal ? 'Đang xuất...' : 'Tải JSON đầy đủ'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isExportingNoUsers}
+              onClick={() => void handleExportLocal(true)}
+              title="Xuất toàn bộ dữ liệu hệ thống trừ bảng Users & Khoá định danh (dùng khi chuyển Firebase mới)"
+              className="min-h-[42px] px-3 py-2 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <UserCheck className={`w-3.5 h-3.5 shrink-0 ${isExportingNoUsers ? 'animate-pulse' : ''}`} />
+              <span>{isExportingNoUsers ? 'Đang xuất...' : 'Tải JSON (Trừ User)'}</span>
             </button>
 
             <button
               type="button"
               disabled={isExportingUsers}
               onClick={handleExportUsers}
-              className="px-3.5 py-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-800 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
-              title="Xuất bản sao lưu toàn bộ Định danh Y tế cá nhân, Trạng thái bảo mật, Xác minh tài khoản & Thiết bị tin cậy"
+              className="min-h-[42px] px-3 py-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-800 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              title="Xuất bản sao lưu riêng cho tài khoản Người dùng & Bảo mật"
             >
-              <Users className={`w-3.5 h-3.5 ${isExportingUsers ? 'animate-pulse' : ''}`} />
-              <span>{isExportingUsers ? 'Đang xuất...' : 'Sao lưu Người dùng & Bảo mật'}</span>
+              <Users className={`w-3.5 h-3.5 shrink-0 ${isExportingUsers ? 'animate-pulse' : ''}`} />
+              <span>{isExportingUsers ? 'Đang xuất...' : 'Sao lưu User'}</span>
             </button>
 
             <button
@@ -682,14 +753,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   ? 'Đẩy bản sao lưu JSON đầy đủ (mã hoá Base64) lên kho GitHub và lưu lịch sử'
                   : 'Cần cấu hình Kho tệp GitHub trước'
               }
-              className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer border ${
+              className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer border whitespace-nowrap ${
                 isGitHubConfigured
                   ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 border-indigo-200 dark:border-indigo-800'
                   : 'text-slate-500 bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 opacity-75'
               }`}
             >
-              <FolderGit2 className={`w-3.5 h-3.5 ${isBackingUpGitHub ? 'animate-pulse' : ''}`} />
-              <span>{isBackingUpGitHub ? 'Đang đẩy GitHub...' : 'Sao lưu lên GitHub'}</span>
+              <FolderGit2 className={`w-3.5 h-3.5 shrink-0 ${isBackingUpGitHub ? 'animate-pulse' : ''}`} />
+              <span>{isBackingUpGitHub ? 'Đang đẩy...' : 'Lưu GitHub'}</span>
             </button>
 
             <button
@@ -701,24 +772,24 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   ? 'Xem danh sách và khôi phục dữ liệu từ các bản sao lưu đã lưu trên kho GitHub'
                   : 'Cần cấu hình Kho tệp GitHub trước'
               }
-              className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer border ${
+              className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer border whitespace-nowrap ${
                 isGitHubConfigured
                   ? 'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 border-purple-200 dark:border-purple-800'
                   : 'text-slate-500 bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 opacity-75'
               }`}
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${loadingGitHubBackups ? 'animate-spin' : ''}`} />
-              <span>Khôi phục từ GitHub</span>
+              <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${loadingGitHubBackups ? 'animate-spin' : ''}`} />
+              <span>Từ GitHub</span>
             </button>
 
             <button
               type="button"
               disabled={isCreating}
               onClick={handleCreateBackup}
-              className="px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              className={`${getBalancedMobileItemSpan(6, 7)} min-h-[42px] px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap`}
             >
-              {isCreating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              <span>Sao lưu lên Cloud</span>
+              {isCreating ? <RefreshCw className="w-4 h-4 animate-spin shrink-0" /> : <Plus className="w-4 h-4 shrink-0" />}
+              <span>Sao lưu Cloud</span>
             </button>
           </div>
         </div>
@@ -844,12 +915,100 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         </div>
       </div>
 
-      {isRestoring && (
-        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex items-center gap-3">
-          <RefreshCw className="w-5 h-5 text-amber-600 animate-spin" />
-          <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">
-            Đang phục hồi cơ sở dữ liệu từ bản sao lưu... Vui lòng không đóng trình duyệt.
-          </span>
+      {(isRestoring || restoreProgress) && (
+        <div
+          className={`p-4 sm:p-5 rounded-2xl border shadow-xs space-y-3 ${
+            restoreProgress?.phase === 'completed'
+              ? 'bg-emerald-50/90 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800'
+              : restoreProgress?.phase === 'error'
+              ? 'bg-rose-50/90 dark:bg-rose-950/35 border-rose-200 dark:border-rose-800'
+              : 'bg-amber-50/90 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              {restoreProgress?.phase === 'completed' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              ) : restoreProgress?.phase === 'error' ? (
+                <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0" />
+              ) : (
+                <RefreshCw className="w-5 h-5 text-amber-600 dark:text-amber-400 animate-spin shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                  <span>{restoreProgress?.phaseLabel || 'Đang phục hồi cơ sở dữ liệu...'}</span>
+                  {restoreProgress?.currentCollectionLabel && restoreProgress.phase === 'restoring' && (
+                    <span className="px-2 py-0.5 rounded-md bg-white/80 dark:bg-slate-900/80 border border-amber-200 dark:border-amber-800 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                      {restoreProgress.currentCollectionLabel}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 break-words">
+                  {restoreProgress?.message ||
+                    'Đang phục hồi cơ sở dữ liệu từ bản sao lưu... Vui lòng không đóng trình duyệt.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-sm font-extrabold font-mono tabular-nums text-slate-900 dark:text-white">
+                {restoreProgress?.percent ?? 0}%
+              </span>
+              {!isRestoring && (
+                <button
+                  type="button"
+                  onClick={() => setRestoreProgress(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800 cursor-pointer"
+                  title="Đóng thông báo tiến trình"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="w-full h-2.5 rounded-full bg-white/80 dark:bg-slate-800 overflow-hidden border border-slate-200/70 dark:border-slate-700">
+            <div
+              className={`h-full transition-all duration-300 rounded-full ${
+                restoreProgress?.phase === 'completed'
+                  ? 'bg-emerald-600'
+                  : restoreProgress?.phase === 'error'
+                  ? 'bg-rose-600'
+                  : 'bg-teal-600'
+              }`}
+              style={{ width: `${Math.min(100, Math.max(2, restoreProgress?.percent ?? 5))}%` }}
+            />
+          </div>
+
+          {restoreProgress && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+              <span>
+                Phân hệ:{' '}
+                <strong>
+                  {restoreProgress.processedCollections}/{restoreProgress.totalCollections}
+                </strong>
+              </span>
+              <span>
+                Bản ghi:{' '}
+                <strong>
+                  {restoreProgress.processedRecords}/{restoreProgress.totalRecords}
+                </strong>
+              </span>
+              <span className="text-emerald-700 dark:text-emerald-400">
+                Đã khôi phục: <strong>{restoreProgress.restoredCount}</strong>
+              </span>
+              {restoreProgress.stagedSnapshotsCount > 0 && (
+                <span className="text-amber-700 dark:text-amber-300">
+                  Hồ sơ đối chiếu User: <strong>{restoreProgress.stagedSnapshotsCount}</strong>
+                </span>
+              )}
+              {restoreProgress.skippedCount > 0 && (
+                <span className="text-slate-500 dark:text-slate-400">
+                  Giữ nguyên / bỏ qua: <strong>{restoreProgress.skippedCount}</strong>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1246,11 +1405,43 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                         })}
                       </div>
 
+                      {isRestoring && restoreProgress && (
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <div className="flex items-center gap-2 font-bold text-purple-900 dark:text-purple-200 truncate">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-600 shrink-0" />
+                              <span className="truncate">
+                                {restoreProgress.currentCollectionLabel
+                                  ? `${restoreProgress.phaseLabel}: ${restoreProgress.currentCollectionLabel}`
+                                  : restoreProgress.phaseLabel}
+                              </span>
+                            </div>
+                            <span className="font-mono font-extrabold text-purple-700 dark:text-purple-300 tabular-nums shrink-0">
+                              {restoreProgress.percent}%
+                            </span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-purple-100 dark:bg-slate-800 overflow-hidden">
+                            <div
+                              className="h-full bg-purple-600 transition-all duration-300 rounded-full"
+                              style={{ width: `${Math.min(100, Math.max(4, restoreProgress.percent))}%` }}
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+                            <span className="truncate">{restoreProgress.message}</span>
+                            <span className="shrink-0 font-semibold">
+                              {restoreProgress.processedRecords}/{restoreProgress.totalRecords} bản ghi ·{' '}
+                              {restoreProgress.processedCollections}/{restoreProgress.totalCollections} phân hệ
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-purple-200/60 dark:border-purple-900/40">
                         <button
                           type="button"
+                          disabled={isRestoring}
                           onClick={() => setPreviewingGitHubFile(null)}
-                          className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer disabled:opacity-50"
                         >
                           Đóng xem trước
                         </button>
@@ -1258,7 +1449,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                           type="button"
                           disabled={isRestoring}
                           onClick={handleOpenSelectiveFromGitHubPreview}
-                          className="px-3.5 py-1.5 rounded-xl border border-purple-300 dark:border-purple-700 bg-white dark:bg-slate-900 hover:bg-purple-100/70 dark:hover:bg-purple-950 text-purple-800 dark:text-purple-200 font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                          className="px-3.5 py-1.5 rounded-xl border border-purple-300 dark:border-purple-700 bg-white dark:bg-slate-900 hover:bg-purple-100/70 dark:hover:bg-purple-950 text-purple-800 dark:text-purple-200 font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                         >
                           <Layers className="w-3.5 h-3.5" />
                           <span>Chọn phân hệ khôi phục</span>
@@ -1272,10 +1463,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                               previewingGitHubFile.file.name
                             )
                           }
-                          className="px-4 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          className="px-4 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-60"
                         >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Tiến hành khôi phục toàn bộ</span>
+                          <RotateCcw className={`w-3.5 h-3.5 ${isRestoring ? 'animate-spin' : ''}`} />
+                          <span>
+                            {isRestoring
+                              ? `Đang khôi phục (${restoreProgress?.percent ?? 0}%)...`
+                              : 'Tiến hành khôi phục toàn bộ'}
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -1514,33 +1709,89 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 })}
               </div>
 
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-amber-800 dark:text-amber-200 text-[11px] leading-relaxed">
-                Lưu ý: Dữ liệu trùng ID ở các phân hệ đã chọn sẽ được cập nhật theo bản sao lưu này. Nhật ký kiểm toán hiện tại vẫn được giữ nguyên tính bất biến; khoá 2FA TOTP chỉ được khôi phục cho chính tài khoản đang thao tác nếu có trong gói sao lưu.
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-amber-900 dark:text-amber-200 text-[11px] leading-relaxed space-y-2.5">
+                <p>
+                  Lưu ý: Dữ liệu trùng ID ở các phân hệ đã chọn sẽ được cập nhật theo bản sao lưu này. Nếu đang chuyển sang Firebase mới, hãy dùng nút <strong>&ldquo;Chuyển Firebase mới&rdquo;</strong> để không ghi đè UID xác thực và kích hoạt đối chiếu người dùng khi đăng nhập lại.
+                </p>
+                <label className="flex items-center gap-2 font-semibold cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enableMigrationPrompt}
+                    onChange={e => setEnableMigrationPrompt(e.target.checked)}
+                    className="w-4 h-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>
+                    Kích hoạt nhắc User đăng nhập kiểm tra &amp; xác nhận lại dữ liệu sau chuyển Firebase
+                  </span>
+                </label>
               </div>
             </div>
 
-            <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-end gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={isRestoring}
-                onClick={() => setRestorePicker(null)}
-                className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Huỷ
-              </button>
-              <button
-                type="button"
-                disabled={isRestoring || restorePicker.selectedCollections.length === 0}
-                onClick={handleConfirmSelectiveRestore}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-              >
-                <RotateCcw className={`w-3.5 h-3.5 ${isRestoring ? 'animate-spin' : ''}`} />
-                <span>
-                  {isRestoring
-                    ? 'Đang khôi phục...'
-                    : `Khôi phục ${restorePicker.selectedCollections.length} phân hệ đã chọn`}
-                </span>
-              </button>
+            <div className="px-4 sm:px-6 py-3.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800 shrink-0 space-y-3">
+              {isRestoring && restoreProgress && (
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-teal-200 dark:border-teal-800 shadow-xs space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white min-w-0">
+                      <RefreshCw className="w-4 h-4 text-teal-600 animate-spin shrink-0" />
+                      <span className="truncate">
+                        {restoreProgress.currentCollectionLabel
+                          ? `${restoreProgress.phaseLabel}: ${restoreProgress.currentCollectionLabel}`
+                          : restoreProgress.phaseLabel}
+                      </span>
+                    </div>
+                    <span className="font-mono font-extrabold text-teal-700 dark:text-teal-300 tabular-nums shrink-0">
+                      {restoreProgress.percent}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full bg-teal-600 transition-all duration-300 rounded-full"
+                      style={{ width: `${Math.min(100, Math.max(4, restoreProgress.percent))}%` }}
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-300 tabular-nums">
+                    <span className="truncate">{restoreProgress.message}</span>
+                    <span className="shrink-0 font-semibold">
+                      Phân hệ {restoreProgress.processedCollections}/{restoreProgress.totalCollections} · Bản ghi{' '}
+                      {restoreProgress.processedRecords}/{restoreProgress.totalRecords}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className={getBalancedMobileGridClass(3, 'sm:justify-end')}>
+                <button
+                  type="button"
+                  disabled={isRestoring}
+                  onClick={() => setRestorePicker(null)}
+                  className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                >
+                  Huỷ
+                </button>
+                <button
+                  type="button"
+                  disabled={isRestoring || restorePicker.selectedCollections.length === 0}
+                  onClick={() => handleConfirmSelectiveRestore(true)}
+                  className="min-h-[42px] px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                  title="Giữ nguyên bảng User Auth mới, đưa dữ liệu User cũ vào kho đối chiếu để User tự xác nhận"
+                >
+                  <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span>Chuyển Firebase mới</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isRestoring || restorePicker.selectedCollections.length === 0}
+                  onClick={() => handleConfirmSelectiveRestore(false)}
+                  className={`${getBalancedMobileItemSpan(2, 3)} min-h-[42px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap`}
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isRestoring ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isRestoring
+                      ? `Đang khôi phục (${restoreProgress?.percent ?? 0}%)...`
+                      : `Khôi phục (${restorePicker.selectedCollections.length})`}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

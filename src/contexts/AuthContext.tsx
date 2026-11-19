@@ -72,6 +72,7 @@ export const BOOTSTRAP_ADMIN_EMAILS = [
   'sonlyhongduc@gmail.com',
   'sonlyhongduc2003@gmail.com',
   'tytvtd@gmail.com',
+  'bmassk3@gmail.com',
 ];
 
 const TWO_FA_SESSION_PREFIX = 'tyt_2fa_session_v1_';
@@ -213,6 +214,7 @@ interface AuthContextType {
   isStaff: boolean;
   isCitizen: boolean;
   isPrimaryAdmin: boolean;
+  isSuperAdmin: boolean;
   isBanned: boolean;
   hasPasswordProvider: boolean;
   hasGoogleProvider: boolean;
@@ -856,11 +858,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               if (!isTargetAdmin) {
                 const pendingRef = getPendingReferralCode();
                 if (pendingRef) {
-                  const refCheck = await validateReferralCode(pendingRef);
-                  if (refCheck.valid && refCheck.item) {
-                    resolvedRole = refCheck.item.targetRole || 'staff';
-                    resolvedAccountType = 'employee';
-                    usedReferralCode = refCheck.item.code;
+                  const roleCheck = await validateReferralCode(pendingRef);
+                  if (roleCheck.valid && roleCheck.item) {
+                    resolvedRole = roleCheck.item.targetRole || 'staff';
+                    resolvedAccountType = roleCheck.item.targetAccountType || 'employee';
+                    usedReferralCode = roleCheck.item.code;
                   }
                 }
               }
@@ -1026,13 +1028,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let usedReferralCode = '';
 
     if (!isTargetAdmin && effectiveReferral) {
-      const refCheck = await validateReferralCode(effectiveReferral);
-      if (!refCheck.valid || !refCheck.item) {
-        throw new Error(refCheck.error || 'Mã giới thiệu không hợp lệ hoặc đã ngừng hoạt động.');
+      const roleCheck = await validateReferralCode(effectiveReferral);
+      if (!roleCheck.valid || !roleCheck.item) {
+        throw new Error(roleCheck.error || 'Mã giới thiệu không hợp lệ, không tồn tại hoặc đã ngừng hoạt động.');
       }
-      validatedRefRole = refCheck.item.targetRole || 'staff';
-      validatedAccountType = 'employee';
-      usedReferralCode = refCheck.item.code;
+      validatedRefRole = roleCheck.item.targetRole || 'staff';
+      validatedAccountType = roleCheck.item.targetAccountType || 'employee';
+      usedReferralCode = roleCheck.item.code;
     }
 
     // Enforce uniqueness locks BEFORE creating account
@@ -2177,6 +2179,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const isCitizen = !isAdmin && !isStaff;
 
+  const isSuperAdminActual = Boolean(isPrimaryAdmin || currentActualRole === 'super_admin');
+  const isSuperAdmin = simulatedRole ? activeRole === 'super_admin' : isSuperAdminActual;
+
   const isBanned = Boolean(currentUser && !isActualAdmin && isUserActivelyBanned(userProfile, banNowTick));
 
   const twoFactorEnabled = Boolean(
@@ -2210,6 +2215,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isStaff,
         isCitizen,
         isPrimaryAdmin,
+        isSuperAdmin,
         isBanned,
         hasPasswordProvider,
         hasGoogleProvider,

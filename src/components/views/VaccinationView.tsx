@@ -526,7 +526,7 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
 
           {/* Program Filter Bar + Point Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 w-full sm:w-auto">
               {(
                 [
                   { id: 'all', label: `Tất cả (${activeSchedules.length})` },
@@ -548,7 +548,7 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => setProgramFilter(tab.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 border tabular-nums ${
+                  className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap border tabular-nums text-center ${
                     programFilter === tab.id
                       ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
                       : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -665,13 +665,13 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
                       }
                       className="flex items-start sm:items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
                     >
-                      <span className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-mono font-bold text-xs text-slate-700 dark:text-slate-200 shrink-0">
+                      <span className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-sky-950/60 border border-blue-200 dark:border-sky-800 flex items-center justify-center font-mono font-bold text-xs text-blue-700 dark:text-sky-300 shrink-0">
                         {String(sIdx + 1).padStart(2, '0')}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                          <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white group-hover:text-emerald-600 transition truncate">
-                            {site.name}
+                          <h3 className="text-base sm:text-lg font-black text-blue-700 dark:text-sky-400 group-hover:text-blue-800 dark:group-hover:text-sky-300 transition">
+                            📍 {site.name}
                           </h3>
                           {isNearest && (
                             <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-700 text-white uppercase tracking-wider shadow-2xs">
@@ -904,8 +904,8 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
                                 {card.displayLocation &&
                                   normalizeSiteMatchKey(card.displayLocation) !==
                                     normalizeSiteMatchKey(site.name) && (
-                                    <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
-                                      <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                    <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700 dark:text-sky-400">
+                                      <Building2 className="w-3.5 h-3.5 text-blue-600 dark:text-sky-400 shrink-0" />
                                       <span>{card.displayLocation}</span>
                                     </div>
                                   )}
@@ -923,7 +923,7 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition cursor-pointer"
                                   >
                                     <Clock className="w-3.5 h-3.5 shrink-0" />
-                                    <span>{isSchedExpanded ? 'Ẩn giờ tiêm' : 'Xem thêm giờ tiêm'}</span>
+                                    <span>{isSchedExpanded ? 'Thu gọn' : 'Bấm xem chi tiết'}</span>
                                     {isSchedExpanded ? (
                                       <ChevronUp className="w-3.5 h-3.5 shrink-0" />
                                     ) : (

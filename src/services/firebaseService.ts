@@ -7,6 +7,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   query,
   where,
   orderBy,
@@ -15,7 +16,10 @@ import {
   increment,
   writeBatch,
 } from 'firebase/firestore';
-import { db, auth } from '../firebase/config';
+import { initializeApp as initSecondaryApp, deleteApp as deleteSecondaryApp } from 'firebase/app';
+import { getAuth as getSecondaryAuth, createUserWithEmailAndPassword, signOut as signSecondaryOut } from 'firebase/auth';
+import * as XLSX from 'xlsx';
+import { db, auth, firebaseConfig } from '../firebase/config';
 import { handleFirestoreError, OperationType } from '../firebase/errorHandler';
 import {
   isFirestoreWriteQuotaExceeded,
@@ -46,7 +50,23 @@ import {
   WorkScheduleConfig,
   HolidayScheduleItem,
   ReferralCodeItem,
+  ReferralIssuerTier,
+  UserReferralLink,
+  ReferralTrackingItem,
+  ReferralTrackingSteps,
   RoleType,
+  AttendanceRecord,
+  AttendanceStatus,
+  RolePermissionPolicy,
+  RolePermissionsConfig,
+  StoreItem,
+  StoreItemCategory,
+  StoreOrder,
+  StoreOrderStatus,
+  ServiceRating,
+  ServiceRatingCategory,
+  LegacyUserSnapshot,
+  UserMigrationClaim,
 } from '../types';
 import { getOrCreateDeviceId } from './systemNotificationService';
 
@@ -204,12 +224,42 @@ export const CONTROLLABLE_SIDEBAR_TABS: SidebarTabDefinition[] = [
   { id: 'map', label: 'Bản đồ & Định vị trạm', hash: '#ban-do', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'nearby_facilities', label: 'Cơ sở Y tế lân cận', hash: '#co-so-y-te-lan-can', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'rescue', label: 'Bản đồ Cứu hộ cứu nạn', hash: '#cuu-ho-cuu-nan', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
+  { id: 'offline_emergency', label: 'Cấp cứu Ngoại tuyến (SOS)', hash: '#ngoai-tuyen', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'news', label: 'Tin tức & Media', hash: '#tin-tuc', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'documents', label: 'Văn bản & Biểu mẫu', hash: '#van-ban', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'bhyt_lookup', label: 'Tra cứu thông tin BHYT', hash: '#tra-cuu-bhyt', group: 'TIỆN ÍCH DÂN CƯ' },
+  { id: 'apps', label: 'Ứng dụng', hash: '#ung-dung', group: 'TIỆN ÍCH DÂN CƯ' },
   { id: 'telehealth', label: 'Bác sĩ cho mọi nhà', hash: '#bac-si-cho-moi-nha', group: 'TIỆN ÍCH DÂN CƯ' },
   { id: 'feedback_tracking', label: 'Phản ánh', hash: '#phan-anh', group: 'TIỆN ÍCH DÂN CƯ' },
 ];
+
+export const DEFAULT_PORTAL_APP_CATEGORIES: string[] = [
+  'Dịch vụ công',
+  'Y tế',
+  'Tiện ích',
+  'Khác',
+];
+
+export function resolvePortalAppCategories(
+  settings?: Partial<SystemSettings> | null
+): string[] {
+  const ordered: string[] = [...DEFAULT_PORTAL_APP_CATEGORIES];
+  const pushUnique = (raw?: string) => {
+    const clean = String(raw || '').trim();
+    if (clean && !ordered.includes(clean)) {
+      ordered.push(clean);
+    }
+  };
+  if (Array.isArray(settings?.portalAppCategories)) {
+    settings.portalAppCategories.forEach(pushUnique);
+  }
+  if (Array.isArray(settings?.portalApps)) {
+    settings.portalApps.forEach(app => {
+      if (app?.category) pushUnique(app.category);
+    });
+  }
+  return ordered;
+}
 
 export const DEFAULT_VACCINATION_START_TIME = '07:00';
 export const DEFAULT_VACCINATION_END_TIME = '11:00';
@@ -1164,6 +1214,27 @@ export async function updateUserRole(
   }
 }
 
+export async function updateUserProfile(
+  uid: string,
+  updates: Partial<UserProfile>
+): Promise<void> {
+  const path = `users/${uid}`;
+  try {
+    const payload: Record<string, any> = {};
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value === undefined) {
+        payload[key] = deleteField();
+      } else {
+        payload[key] = value;
+      }
+    });
+    payload.updatedAt = new Date().toISOString();
+    await updateDoc(doc(db, 'users', uid), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function deleteUserProfile(uid: string): Promise<void> {
   const path = `users/${uid}`;
   try {
@@ -1177,6 +1248,8 @@ export async function deleteUserProfile(uid: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export const deleteUserAccount = deleteUserProfile;
 
 // Targeted Notifications (CCCD, Phone, Org, All, Read/Unread + Analytics)
 export async function createTargetedNotification(
@@ -2020,8 +2093,8 @@ export const DEFAULT_WEEKLY_WORK_DAYS: WeeklyWorkDayConfig[] = [
     dayOfWeek: 1,
     label: 'Thứ Hai',
     isWorking: true,
-    morningHours: '07:30 - 11:30',
-    afternoonHours: '13:30 - 17:00',
+    morningHours: '07:00 - 11:00',
+    afternoonHours: '13:00 - 17:00',
     departmentsSummary: 'Khám BHYT, Cấp cứu ban đầu, Hồ sơ sức khỏe, Hành chính',
     notes: '',
   },
@@ -2029,8 +2102,8 @@ export const DEFAULT_WEEKLY_WORK_DAYS: WeeklyWorkDayConfig[] = [
     dayOfWeek: 2,
     label: 'Thứ Ba',
     isWorking: true,
-    morningHours: '07:30 - 11:30',
-    afternoonHours: '13:30 - 17:00',
+    morningHours: '07:00 - 11:00',
+    afternoonHours: '13:00 - 17:00',
     departmentsSummary: 'Khám BHYT, Khám thai & Chăm sóc sức khỏe sinh sản',
     notes: '',
   },
@@ -2038,8 +2111,8 @@ export const DEFAULT_WEEKLY_WORK_DAYS: WeeklyWorkDayConfig[] = [
     dayOfWeek: 3,
     label: 'Thứ Tư',
     isWorking: true,
-    morningHours: '07:30 - 11:30',
-    afternoonHours: '13:30 - 17:00',
+    morningHours: '07:00 - 11:00',
+    afternoonHours: '13:00 - 17:00',
     departmentsSummary: 'Khám BHYT, Tiêm chủng mở rộng (theo lịch), Quản lý bệnh mạn tính',
     notes: '',
   },
@@ -2047,8 +2120,8 @@ export const DEFAULT_WEEKLY_WORK_DAYS: WeeklyWorkDayConfig[] = [
     dayOfWeek: 4,
     label: 'Thứ Năm',
     isWorking: true,
-    morningHours: '07:30 - 11:30',
-    afternoonHours: '13:30 - 17:00',
+    morningHours: '07:00 - 11:00',
+    afternoonHours: '13:00 - 17:00',
     departmentsSummary: 'Khám BHYT, Tư vấn dinh dưỡng, Phòng chống dịch & ATTP',
     notes: '',
   },
@@ -2056,8 +2129,8 @@ export const DEFAULT_WEEKLY_WORK_DAYS: WeeklyWorkDayConfig[] = [
     dayOfWeek: 5,
     label: 'Thứ Sáu',
     isWorking: true,
-    morningHours: '07:30 - 11:30',
-    afternoonHours: '13:30 - 17:00',
+    morningHours: '07:00 - 11:00',
+    afternoonHours: '13:00 - 17:00',
     departmentsSummary: 'Khám BHYT, Cấp thuốc, Tổng hợp báo cáo tuần & Giao ban',
     notes: '',
   },
@@ -2427,7 +2500,7 @@ export function getStationOperationalStatus(
   return {
     mode: 'working_break',
     label: `${nowInfo.weekdayLabel} · Ngoài giờ hành chính`,
-    detail: `Giờ làm việc hôm nay: ${hoursCombined || '07:30 - 11:30 · 13:30 - 17:00'}. Hiện tại đang trực cấp cứu 24/7.`,
+    detail: `Giờ làm việc hôm nay: ${hoursCombined || '07:00 - 11:00 · 13:00 - 17:00'}. Hiện tại đang trực cấp cứu 24/7.`,
     activeHolidays: [],
     todayWorkConfig,
     nowInfo,
@@ -2644,11 +2717,31 @@ export async function listReferralCodes(): Promise<ReferralCodeItem[]> {
 export async function createReferralCode(params: {
   code?: string;
   label?: string;
-  targetRole?: Exclude<RoleType, 'citizen' | 'admin' | 'super_admin'>;
+  issuerTier?: ReferralIssuerTier;
+  targetAccountType?: 'employee' | 'admin';
+  targetRole?: Exclude<RoleType, 'citizen' | 'super_admin'>;
   createdByUid: string;
   createdByEmail?: string;
 }): Promise<ReferralCodeItem> {
-  const code = normalizeReferralCode(params.code || generateRandomReferralCode('CBYT'));
+  const issuerTier: ReferralIssuerTier = params.issuerTier || 'admin';
+  const targetAccountType: 'employee' | 'admin' =
+    issuerTier === 'super_admin' && params.targetAccountType === 'admin'
+      ? 'admin'
+      : 'employee';
+  const targetRole: RoleType =
+    targetAccountType === 'admin'
+      ? 'admin'
+      : params.targetRole && params.targetRole !== 'admin'
+      ? params.targetRole
+      : 'staff';
+
+  const defaultPrefix =
+    targetAccountType === 'admin'
+      ? 'ADM'
+      : issuerTier === 'super_admin'
+      ? 'SADM'
+      : 'CBYT';
+  const code = normalizeReferralCode(params.code || generateRandomReferralCode(defaultPrefix));
   if (code.length < 4) {
     throw new Error('Mã giới thiệu phải có ít nhất 4 ký tự chữ/số (A-Z, 0-9, -, _).');
   }
@@ -2661,8 +2754,9 @@ export async function createReferralCode(params: {
     code,
     ...(params.label?.trim() ? { label: params.label.trim().slice(0, 128) } : {}),
     active: true,
-    targetAccountType: 'employee',
-    targetRole: params.targetRole || 'staff',
+    issuerTier,
+    targetAccountType,
+    targetRole,
     createdByUid: params.createdByUid,
     ...(params.createdByEmail?.trim() ? { createdByEmail: params.createdByEmail.trim().slice(0, 256) } : {}),
     createdAt: now,
@@ -2700,6 +2794,1376 @@ export async function deleteReferralCode(code: string): Promise<void> {
     handleFirestoreError(err, OperationType.DELETE, path);
     throw err;
   }
+}
+
+// ================================
+// Personal Referral & +1,000 EXP Reward System
+// ================================
+export const REFERRAL_EXP_REWARD = 1000;
+
+export function buildPersonalReferralCodeForUid(uid: string): string {
+  const clean = (uid || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 8);
+  return `TYT-${clean || generateRandomReferralCode('U').slice(2)}`;
+}
+
+export async function getUserReferralLinkByCode(rawCode: string): Promise<UserReferralLink | null> {
+  const code = normalizeReferralCode(rawCode);
+  if (!code || code.length < 4) return null;
+  try {
+    const snap = await getDoc(doc(db, 'userReferralLinks', code));
+    if (!snap.exists()) return null;
+    return snap.data() as UserReferralLink;
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveAnyReferralCode(rawCode: string): Promise<
+  | { kind: 'role_invite'; item: ReferralCodeItem }
+  | { kind: 'personal'; item: UserReferralLink }
+  | null
+> {
+  const code = normalizeReferralCode(rawCode);
+  if (!code || code.length < 4) return null;
+  const roleCheck = await validateReferralCode(code);
+  if (roleCheck.valid && roleCheck.item) {
+    return { kind: 'role_invite', item: roleCheck.item };
+  }
+  const personal = await getUserReferralLinkByCode(code);
+  if (personal) {
+    return { kind: 'personal', item: personal };
+  }
+  return null;
+}
+
+export async function ensurePersonalReferralLink(params: {
+  uid: string;
+  displayName: string;
+  existingCode?: string;
+}): Promise<string> {
+  const code = normalizeReferralCode(params.existingCode || buildPersonalReferralCodeForUid(params.uid));
+  const linkRef = doc(db, 'userReferralLinks', code);
+  const existing = await getDoc(linkRef).catch(() => null);
+  const now = new Date().toISOString();
+  if (!existing || !existing.exists()) {
+    await setDoc(linkRef, {
+      code,
+      ownerUid: params.uid,
+      ownerName: (params.displayName || 'Thành viên Trạm Y tế').slice(0, 128),
+      createdAt: now,
+    });
+  }
+  if (params.existingCode !== code) {
+    await setDoc(
+      doc(db, 'users', params.uid),
+      { personalReferralCode: code, updatedAt: now },
+      { merge: true }
+    );
+  }
+  return code;
+}
+
+export async function ensureReferralTrackingForUser(params: {
+  referredUid: string;
+  referredName: string;
+  referredEmailMasked?: string;
+  referrerUid: string;
+  referralCode: string;
+  stepsCompleted: ReferralTrackingSteps;
+}): Promise<void> {
+  if (!params.referredUid || !params.referrerUid || params.referredUid === params.referrerUid) return;
+  const trackingRef = doc(db, 'referralTracking', params.referredUid);
+  const existingSnap = await getDoc(trackingRef).catch(() => null);
+  const now = new Date().toISOString();
+  const qualified = Boolean(
+    params.stepsCompleted.email &&
+      params.stepsCompleted.phone &&
+      params.stepsCompleted.password
+  );
+
+  if (!existingSnap || !existingSnap.exists()) {
+    const docData: ReferralTrackingItem = {
+      referredUid: params.referredUid,
+      referredName: (params.referredName || 'Người dùng mới').slice(0, 128),
+      ...(params.referredEmailMasked ? { referredEmailMasked: params.referredEmailMasked.slice(0, 256) } : {}),
+      referrerUid: params.referrerUid,
+      referralCode: normalizeReferralCode(params.referralCode),
+      stepsCompleted: params.stepsCompleted,
+      qualifiedForReward: qualified,
+      rewarded: false,
+      expAwarded: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await setDoc(trackingRef, cleanDataForFirestore(docData));
+    return;
+  }
+
+  const current = existingSnap.data() as ReferralTrackingItem;
+  if (current.rewarded) return;
+
+  const sameSteps =
+    current.stepsCompleted?.email === params.stepsCompleted.email &&
+    current.stepsCompleted?.phone === params.stepsCompleted.phone &&
+    current.stepsCompleted?.password === params.stepsCompleted.password &&
+    current.qualifiedForReward === qualified;
+
+  if (!sameSteps) {
+    await updateDoc(trackingRef, {
+      stepsCompleted: params.stepsCompleted,
+      qualifiedForReward: qualified,
+      referredName: (params.referredName || current.referredName || 'Người dùng').slice(0, 128),
+      updatedAt: now,
+    });
+  }
+}
+
+export async function claimReferralRewardBatch(tracking: ReferralTrackingItem): Promise<boolean> {
+  if (!tracking.qualifiedForReward || tracking.rewarded) return false;
+  const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  const trackingRef = doc(db, 'referralTracking', tracking.referredUid);
+  const referrerRef = doc(db, 'users', tracking.referrerUid);
+
+  batch.update(trackingRef, {
+    qualifiedForReward: true,
+    rewarded: true,
+    expAwarded: REFERRAL_EXP_REWARD,
+    rewardedAt: now,
+    updatedAt: now,
+  });
+
+  batch.update(referrerRef, {
+    expBalance: increment(REFERRAL_EXP_REWARD),
+    totalExpEarned: increment(REFERRAL_EXP_REWARD),
+    lastRewardClaimRefUid: tracking.referredUid,
+    updatedAt: now,
+  });
+
+  await batch.commit();
+  return true;
+}
+
+export async function listMyReferrals(referrerUid: string): Promise<ReferralTrackingItem[]> {
+  if (!referrerUid) return [];
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'referralTracking'), where('referrerUid', '==', referrerUid))
+    );
+    return snap.docs
+      .map(d => d.data() as ReferralTrackingItem)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  } catch (err) {
+    console.warn('listMyReferrals error:', err);
+    return [];
+  }
+}
+
+export async function getMyReferralTrackingStatus(referredUid: string): Promise<ReferralTrackingItem | null> {
+  if (!referredUid) return null;
+  try {
+    const snap = await getDoc(doc(db, 'referralTracking', referredUid));
+    return snap.exists() ? (snap.data() as ReferralTrackingItem) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ================================
+// Semi-automatic Personnel Attendance (Chấm công nhanh)
+// ================================
+export const ATTENDANCE_STATUS_META: Record<
+  AttendanceStatus,
+  { label: string; shortLabel: string; badgeClass: string; buttonActiveClass: string }
+> = {
+  co_quan: {
+    label: 'Làm việc cơ quan',
+    shortLabel: 'Cơ quan',
+    badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800',
+    buttonActiveClass: 'bg-emerald-700 text-white border-emerald-700',
+  },
+  truc: {
+    label: 'Trực',
+    shortLabel: 'Trực',
+    badgeClass: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800',
+    buttonActiveClass: 'bg-rose-600 text-white border-rose-600',
+  },
+  ra_truc: {
+    label: 'Ra trực',
+    shortLabel: 'Ra trực',
+    badgeClass: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800',
+    buttonActiveClass: 'bg-amber-600 text-white border-amber-600',
+  },
+  nghi: {
+    label: 'Nghỉ',
+    shortLabel: 'Nghỉ',
+    badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+    buttonActiveClass: 'bg-slate-700 text-white border-slate-700',
+  },
+};
+
+export function sanitizeAttendanceKeyPart(raw: string): string {
+  return (raw || 'staff').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+}
+
+export function buildAttendanceRecordId(date: string, staffId: string): string {
+  return `${date}_${sanitizeAttendanceKeyPart(staffId)}`;
+}
+
+export async function upsertAttendanceRecord(
+  record: Omit<AttendanceRecord, 'id' | 'updatedAt'>
+): Promise<AttendanceRecord> {
+  const id = buildAttendanceRecordId(record.date, record.staffId);
+  const now = new Date().toISOString();
+  const payload: AttendanceRecord = cleanDataForFirestore({
+    ...record,
+    id,
+    staffName: (record.staffName || 'Nhân sự').slice(0, 128),
+    ...(record.department ? { department: record.department.slice(0, 128) } : {}),
+    ...(record.position ? { position: record.position.slice(0, 128) } : {}),
+    ...(record.note?.trim() ? { note: record.note.trim().slice(0, 512) } : {}),
+    ...(record.updatedByName ? { updatedByName: record.updatedByName.slice(0, 128) } : {}),
+    updatedAt: now,
+  });
+  await setDoc(doc(db, 'attendanceRecords', id), payload);
+  return payload;
+}
+
+export async function batchApplyAttendanceRecords(
+  records: Array<Omit<AttendanceRecord, 'id' | 'updatedAt'>>
+): Promise<number> {
+  if (records.length === 0) return 0;
+  const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  for (const rec of records) {
+    const id = buildAttendanceRecordId(rec.date, rec.staffId);
+    const payload: AttendanceRecord = cleanDataForFirestore({
+      ...rec,
+      id,
+      staffName: (rec.staffName || 'Nhân sự').slice(0, 128),
+      ...(rec.department ? { department: rec.department.slice(0, 128) } : {}),
+      ...(rec.position ? { position: rec.position.slice(0, 128) } : {}),
+      ...(rec.note?.trim() ? { note: rec.note.trim().slice(0, 512) } : {}),
+      ...(rec.updatedByName ? { updatedByName: rec.updatedByName.slice(0, 128) } : {}),
+      updatedAt: now,
+    });
+    batch.set(doc(db, 'attendanceRecords', id), payload);
+  }
+  await batch.commit();
+  return records.length;
+}
+
+export async function deleteAttendanceRecord(date: string, staffId: string): Promise<void> {
+  const id = buildAttendanceRecordId(date, staffId);
+  await deleteDoc(doc(db, 'attendanceRecords', id));
+}
+
+// ================================
+// Per-Role Permissions Configuration (Super Admin, Admin, User, Guest)
+// ================================
+export const DEFAULT_ORGANIZATION_PERMISSION_POLICY: RolePermissionPolicy = {
+  blockedTabs: [],
+  canSubmitFeedback: true,
+  canUseApps: true,
+  canSendRescueSos: false,
+  canViewPersonnelDirectory: false,
+  canManageContent: false,
+  canManageSchedules: false,
+  canAttendanceCheckin: false,
+  canManageUsers: false,
+  canManageSystem: false,
+};
+
+export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsConfig = {
+  super_admin: { fullAccess: true },
+  admin: {
+    blockedTabs: [],
+    requireLoginForTabs: [],
+    canSubmitFeedback: true,
+    canUseApps: true,
+    canSendRescueSos: true,
+    canViewPersonnelDirectory: true,
+    canManageContent: true,
+    canManageSchedules: true,
+    canAttendanceCheckin: true,
+    canManageUsers: true,
+    canManageSystem: true,
+  },
+  user: {
+    blockedTabs: [],
+    canSubmitFeedback: true,
+    canUseApps: true,
+    canSendRescueSos: true,
+    canViewPersonnelDirectory: false,
+  },
+  organization: DEFAULT_ORGANIZATION_PERMISSION_POLICY,
+  guest: {
+    blockedTabs: [],
+    requireLoginForTabs: [],
+    canSubmitFeedback: true,
+    canUseApps: true,
+    canSendRescueSos: true,
+    canViewPersonnelDirectory: false,
+  },
+};
+
+export function resolveRolePermissions(settings?: Partial<SystemSettings> | null): RolePermissionsConfig {
+  const raw = settings?.rolePermissions;
+  const orgPolicy: RolePermissionPolicy = {
+    ...DEFAULT_ORGANIZATION_PERMISSION_POLICY,
+    ...(raw?.organization || {}),
+    blockedTabs: Array.isArray(raw?.organization?.blockedTabs)
+      ? raw.organization.blockedTabs
+      : DEFAULT_ORGANIZATION_PERMISSION_POLICY.blockedTabs,
+  };
+  return {
+    super_admin: { fullAccess: true },
+    admin: {
+      ...DEFAULT_ROLE_PERMISSIONS.admin,
+      ...(raw?.admin || {}),
+      blockedTabs: Array.isArray(raw?.admin?.blockedTabs)
+        ? raw.admin.blockedTabs
+        : DEFAULT_ROLE_PERMISSIONS.admin.blockedTabs,
+    },
+    user: {
+      ...DEFAULT_ROLE_PERMISSIONS.user,
+      ...(raw?.user || {}),
+      blockedTabs: Array.isArray(raw?.user?.blockedTabs)
+        ? raw.user.blockedTabs
+        : DEFAULT_ROLE_PERMISSIONS.user.blockedTabs,
+    },
+    organization: orgPolicy,
+    guest: {
+      ...DEFAULT_ROLE_PERMISSIONS.guest,
+      ...(raw?.guest || {}),
+      blockedTabs: Array.isArray(raw?.guest?.blockedTabs)
+        ? raw.guest.blockedTabs
+        : DEFAULT_ROLE_PERMISSIONS.guest.blockedTabs,
+    },
+    updatedAt: raw?.updatedAt,
+    updatedByUid: raw?.updatedByUid,
+  };
+}
+
+export const ROLE_PERMISSION_PRESETS = {
+  admin: {
+    full_admin: {
+      label: 'Toàn quyền Admin (Mặc định)',
+      policy: { ...DEFAULT_ROLE_PERMISSIONS.admin } as RolePermissionPolicy,
+    },
+    operations_only: {
+      label: 'Admin Vận hành & Lịch (Khóa sửa hệ thống)',
+      policy: {
+        ...DEFAULT_ROLE_PERMISSIONS.admin,
+        canManageSystem: false,
+        canManageUsers: false,
+      } as RolePermissionPolicy,
+    },
+    content_only: {
+      label: 'Admin Nội dung & Lịch trực',
+      policy: {
+        ...DEFAULT_ROLE_PERMISSIONS.admin,
+        canManageUsers: false,
+        canManageSystem: false,
+      } as RolePermissionPolicy,
+    },
+  },
+  user: {
+    standard_citizen: {
+      label: 'Chuẩn Công dân & Cán bộ',
+      policy: { ...DEFAULT_ROLE_PERMISSIONS.user } as RolePermissionPolicy,
+    },
+    essential_only: {
+      label: 'Tối giản Y tế Cơ bản',
+      policy: {
+        blockedTabs: ['apps', 'telehealth', 'events'],
+        canSubmitFeedback: true,
+        canUseApps: false,
+        canSendRescueSos: true,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+  },
+  organization: {
+    standard_org: {
+      label: 'Tổ chức / Doanh nghiệp Chuẩn',
+      policy: {
+        blockedTabs: ['telehealth'],
+        canSubmitFeedback: true,
+        canUseApps: true,
+        canSendRescueSos: false,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+    medical_partner: {
+      label: 'Phòng khám / Nhà thuốc Đối tác (Liên kết chuyên môn)',
+      policy: {
+        blockedTabs: [],
+        canSubmitFeedback: true,
+        canUseApps: true,
+        canSendRescueSos: true,
+        canViewPersonnelDirectory: true,
+      } as RolePermissionPolicy,
+    },
+    school_enterprise: {
+      label: 'Trường học / Công ty Địa bàn (Y tế cơ quan)',
+      policy: {
+        blockedTabs: ['telehealth'],
+        canSubmitFeedback: true,
+        canUseApps: true,
+        canSendRescueSos: false,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+  },
+  guest: {
+    public_portal_with_feedback_login: {
+      label: 'Chuẩn Cổng Công khai (Yêu cầu đăng nhập: Phản ánh)',
+      policy: {
+        blockedTabs: [],
+        requireLoginForTabs: ['feedback_tracking'],
+        canSubmitFeedback: true,
+        canUseApps: true,
+        canSendRescueSos: true,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+    strict_guest: {
+      label: 'Khách Hạn chế (Chỉ xem Thông tin & Lịch; bắt buộc đăng nhập Tiện ích)',
+      policy: {
+        blockedTabs: [],
+        requireLoginForTabs: ['apps', 'bhyt_lookup', 'telehealth', 'feedback_tracking'],
+        canSubmitFeedback: false,
+        canUseApps: false,
+        canSendRescueSos: true,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+    open_public: {
+      label: 'Mở Công khai Toàn bộ',
+      policy: {
+        blockedTabs: [],
+        requireLoginForTabs: [],
+        canSubmitFeedback: true,
+        canUseApps: true,
+        canSendRescueSos: true,
+        canViewPersonnelDirectory: false,
+      } as RolePermissionPolicy,
+    },
+  },
+};
+
+// ================================
+// EXP Reward Storefront & Redemption
+// ================================
+export const STORE_CATEGORY_LABELS: Record<StoreItemCategory, string> = {
+  qua_tang: 'Quà tặng sức khỏe',
+  dich_vu_y_te: 'Dịch vụ y tế',
+  voucher: 'Phiếu ưu đãi',
+  vat_tu: 'Vật tư y tế',
+  khac: 'Khác',
+};
+
+export async function listStoreItems(): Promise<StoreItem[]> {
+  try {
+    const snap = await getDocs(query(collection(db, 'storeItems'), orderBy('createdAt', 'desc')));
+    return snap.docs.map(d => d.data() as StoreItem);
+  } catch (err) {
+    console.warn('listStoreItems error:', err);
+    return [];
+  }
+}
+
+export async function upsertStoreItem(
+  item: Omit<StoreItem, 'createdAt' | 'updatedAt'> & { createdAt?: string }
+): Promise<StoreItem> {
+  const now = new Date().toISOString();
+  const payload: StoreItem = cleanDataForFirestore({
+    ...item,
+    priceExp: Math.max(1, Math.round(Number(item.priceExp) || 1)),
+    stock: Math.max(0, Math.round(Number(item.stock) || 0)),
+    redeemCount: Math.max(0, Math.round(Number(item.redeemCount) || 0)),
+    createdAt: item.createdAt || now,
+    updatedAt: now,
+  });
+  await setDoc(doc(db, 'storeItems', payload.id), payload);
+  return payload;
+}
+
+export async function deleteStoreItem(itemId: string): Promise<void> {
+  await deleteDoc(doc(db, 'storeItems', itemId));
+}
+
+export async function listUserStoreOrders(buyerUid: string): Promise<StoreOrder[]> {
+  if (!buyerUid) return [];
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'storeOrders'), where('buyerUid', '==', buyerUid))
+    );
+    return snap.docs
+      .map(d => d.data() as StoreOrder)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  } catch (err) {
+    console.warn('listUserStoreOrders error:', err);
+    return [];
+  }
+}
+
+export async function listAllStoreOrders(): Promise<StoreOrder[]> {
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'storeOrders'), orderBy('createdAt', 'desc'))
+    );
+    return snap.docs.map(d => d.data() as StoreOrder);
+  } catch (err) {
+    console.warn('listAllStoreOrders error:', err);
+    return [];
+  }
+}
+
+export async function redeemStoreItemWithExp(params: {
+  item: StoreItem;
+  buyerUid: string;
+  buyerName: string;
+  buyerEmail?: string;
+  buyerPhone?: string;
+  note?: string;
+}): Promise<StoreOrder> {
+  const { item, buyerUid, buyerName, buyerEmail, buyerPhone, note } = params;
+  const now = new Date().toISOString();
+  const orderId = `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const order: StoreOrder = cleanDataForFirestore({
+    id: orderId,
+    itemId: item.id,
+    itemName: item.name.slice(0, 256),
+    ...(item.imageUrl ? { itemImageUrl: item.imageUrl.slice(0, 2000) } : {}),
+    buyerUid,
+    buyerName: (buyerName || 'Thành viên').slice(0, 128),
+    ...(buyerEmail ? { buyerEmail: buyerEmail.slice(0, 256) } : {}),
+    ...(buyerPhone ? { buyerPhone: buyerPhone.slice(0, 32) } : {}),
+    expCost: Math.round(item.priceExp),
+    quantity: 1,
+    status: 'pending',
+    ...(note?.trim() ? { note: note.trim().slice(0, 1000) } : {}),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'storeOrders', orderId), order);
+  batch.update(doc(db, 'storeItems', item.id), {
+    stock: increment(-1),
+    redeemCount: increment(1),
+    updatedAt: now,
+  });
+  batch.update(doc(db, 'users', buyerUid), {
+    expBalance: increment(-Math.round(item.priceExp)),
+    lastStoreOrderId: orderId,
+    updatedAt: now,
+  });
+
+  await batch.commit();
+  return order;
+}
+
+export async function updateStoreOrderStatus(params: {
+  order: StoreOrder;
+  nextStatus: StoreOrderStatus;
+  adminNote?: string;
+}): Promise<void> {
+  const { order, nextStatus, adminNote } = params;
+  const now = new Date().toISOString();
+
+  if (nextStatus === 'cancelled' && order.status !== 'cancelled') {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'storeOrders', order.id), cleanDataForFirestore({
+      status: 'cancelled',
+      ...(adminNote !== undefined ? { adminNote: adminNote.slice(0, 1000) } : {}),
+      updatedAt: now,
+    }));
+    batch.update(doc(db, 'users', order.buyerUid), {
+      expBalance: increment(order.expCost),
+      updatedAt: now,
+    });
+    const itemSnap = await getDoc(doc(db, 'storeItems', order.itemId)).catch(() => null);
+    if (itemSnap?.exists()) {
+      batch.update(doc(db, 'storeItems', order.itemId), {
+        stock: increment(order.quantity || 1),
+        updatedAt: now,
+      });
+    }
+    await batch.commit();
+    return;
+  }
+
+  await updateDoc(
+    doc(db, 'storeOrders', order.id),
+    cleanDataForFirestore({
+      status: nextStatus,
+      ...(adminNote !== undefined ? { adminNote: adminNote.slice(0, 1000) } : {}),
+      updatedAt: now,
+    })
+  );
+}
+
+// ================================
+// End-of-Page Experience & Service Star Ratings
+// ================================
+export const SERVICE_RATING_CATEGORY_LABELS: Record<ServiceRatingCategory, string> = {
+  giao_dien: 'Giao diện & Dễ dùng',
+  thai_do: 'Thái độ phục vụ',
+  chuyen_mon: 'Khám & Tiêm chủng',
+  tien_ich: 'Tốc độ & Tiện ích',
+};
+
+export async function submitServiceRating(params: {
+  score: 1 | 2 | 3 | 4 | 5;
+  category: ServiceRatingCategory;
+  comment?: string;
+  raterName?: string;
+  raterAvatarUrl?: string;
+  uid?: string;
+  pageView?: string;
+}): Promise<ServiceRating> {
+  const now = new Date().toISOString();
+  const deviceId = getOrCreateDeviceId().slice(0, 128);
+  const safeUid = (params.uid || '').trim().slice(0, 128);
+  // Deterministic per-device or per-user ID so users can cleanly update their rating without spamming duplicates
+  const docId = safeUid
+    ? `rate_u_${safeUid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96)}`
+    : `rate_d_${deviceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96)}`;
+
+  let existingCreatedAt = now;
+  try {
+    const existingSnap = await getDoc(doc(db, 'serviceRatings', docId));
+    if (existingSnap.exists() && typeof existingSnap.data()?.createdAt === 'string') {
+      existingCreatedAt = existingSnap.data().createdAt;
+    }
+  } catch {
+    // ignore lookup errors
+  }
+
+  const cleanComment = params.comment?.trim().slice(0, 1000);
+  const cleanName = params.raterName?.trim().slice(0, 128);
+  const rawAvatar = params.raterAvatarUrl?.trim() || '';
+  const cleanAvatar = rawAvatar && rawAvatar.length <= 500000 ? rawAvatar : undefined;
+
+  const payload: ServiceRating = cleanDataForFirestore({
+    id: docId,
+    score: Math.min(5, Math.max(1, Math.round(params.score))) as 1 | 2 | 3 | 4 | 5,
+    category: params.category,
+    ...(cleanComment ? { comment: cleanComment } : {}),
+    ...(cleanName ? { raterName: cleanName } : {}),
+    ...(cleanAvatar ? { raterAvatarUrl: cleanAvatar } : {}),
+    ...(safeUid ? { uid: safeUid } : {}),
+    deviceId,
+    ...(params.pageView ? { pageView: params.pageView.slice(0, 64) } : {}),
+    createdAt: existingCreatedAt,
+    updatedAt: now,
+  });
+
+  await setDoc(doc(db, 'serviceRatings', docId), payload);
+  return payload;
+}
+
+export async function deleteServiceRating(ratingId: string): Promise<void> {
+  await deleteDoc(doc(db, 'serviceRatings', ratingId));
+}
+
+// ================================
+// Cross-Firebase User Migration Reconciliation
+// ================================
+export function computeLegacySnapshotId(email: string): string {
+  const norm = (email || '').trim().toLowerCase();
+  if (!norm) return `snap_${Date.now()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < norm.length; i++) {
+    hash ^= norm.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  const safePrefix = norm.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 48);
+  return `snap_${safePrefix}_${hash.toString(36)}`;
+}
+
+export async function lookupMyLegacySnapshot(email: string): Promise<LegacyUserSnapshot | null> {
+  const norm = (email || '').trim().toLowerCase();
+  if (!norm) return null;
+  try {
+    const directId = computeLegacySnapshotId(norm);
+    const directSnap = await getDoc(doc(db, 'legacyUserSnapshots', directId));
+    if (directSnap.exists()) {
+      return directSnap.data() as LegacyUserSnapshot;
+    }
+    const q = query(collection(db, 'legacyUserSnapshots'), where('email', '==', norm));
+    const listSnap = await getDocs(q);
+    if (!listSnap.empty) {
+      return listSnap.docs[0].data() as LegacyUserSnapshot;
+    }
+    return null;
+  } catch (err) {
+    console.warn('lookupMyLegacySnapshot error:', err);
+    return null;
+  }
+}
+
+export async function listLegacyUserSnapshots(): Promise<LegacyUserSnapshot[]> {
+  try {
+    const snap = await getDocs(collection(db, 'legacyUserSnapshots'));
+    return snap.docs
+      .map(d => d.data() as LegacyUserSnapshot)
+      .sort((a, b) => (b.migratedAt || '').localeCompare(a.migratedAt || ''));
+  } catch (err) {
+    console.warn('listLegacyUserSnapshots error:', err);
+    return [];
+  }
+}
+
+export async function listUserMigrationClaims(uid?: string): Promise<UserMigrationClaim[]> {
+  try {
+    const q = uid
+      ? query(collection(db, 'userMigrationClaims'), where('uid', '==', uid))
+      : collection(db, 'userMigrationClaims');
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => d.data() as UserMigrationClaim)
+      .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  } catch (err) {
+    console.warn('listUserMigrationClaims error:', err);
+    return [];
+  }
+}
+
+export async function confirmMigratedUserProfile(params: {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  currentProfile: UserProfile;
+  snapshot?: LegacyUserSnapshot | null;
+}): Promise<{ mode: 'merged_snapshot' | 'confirmed_current' | 'queued_for_admin'; claim: UserMigrationClaim }> {
+  const { uid, email, emailVerified, currentProfile, snapshot } = params;
+  const now = new Date().toISOString();
+  const claimId = `mig_${uid}_${Date.now()}`;
+
+  // Case 1: Matching staged snapshot exists from previous Firebase & owner's email is verified
+  if (snapshot && snapshot.claimStatus === 'pending' && emailVerified) {
+    const batch = writeBatch(db);
+    const mergedUserPatch: Record<string, any> = cleanDataForFirestore({
+      uid,
+      email: currentProfile.email || email,
+      displayName: snapshot.displayName || currentProfile.displayName,
+      phoneNumber: snapshot.phoneNumber || currentProfile.phoneNumber,
+      verifiedPhone: snapshot.verifiedPhone || currentProfile.verifiedPhone,
+      citizenId: snapshot.citizenId || currentProfile.citizenId,
+      dob: snapshot.dob || currentProfile.dob,
+      gender: snapshot.gender || currentProfile.gender,
+      ethnicity: snapshot.ethnicity || currentProfile.ethnicity,
+      provinceCode: snapshot.provinceCode || currentProfile.provinceCode,
+      provinceName: snapshot.provinceName || currentProfile.provinceName,
+      wardCode: snapshot.wardCode || currentProfile.wardCode,
+      wardName: snapshot.wardName || currentProfile.wardName,
+      address: snapshot.address || currentProfile.address,
+      department: snapshot.department || currentProfile.department,
+      position: snapshot.position || currentProfile.position,
+      qualification: snapshot.qualification || currentProfile.qualification,
+      role: snapshot.role,
+      accountType: snapshot.accountType,
+      expBalance: Math.round((currentProfile.expBalance || 0) + (snapshot.expBalance || 0)),
+      totalExpEarned: Math.round((currentProfile.totalExpEarned || 0) + (snapshot.totalExpEarned || 0)),
+      emailVerified: Boolean(snapshot.emailVerified || currentProfile.emailVerified || emailVerified),
+      phoneVerified: Boolean(snapshot.phoneVerified || currentProfile.phoneVerified),
+      citizenIdVerified: Boolean(snapshot.citizenIdVerified || currentProfile.citizenIdVerified),
+      identityVerifiedFromDatabase: Boolean(
+        snapshot.identityVerifiedFromDatabase || currentProfile.identityVerifiedFromDatabase
+      ),
+      personalReferralCode: snapshot.personalReferralCode || currentProfile.personalReferralCode,
+      migrationStatus: 'confirmed',
+      migrationConfirmedAt: now,
+      migrationSnapshotId: snapshot.id,
+      updatedAt: now,
+    });
+
+    batch.update(doc(db, 'users', uid), mergedUserPatch);
+    batch.update(doc(db, 'legacyUserSnapshots', snapshot.id), {
+      claimStatus: 'confirmed',
+      confirmedByUid: uid,
+      confirmedAt: now,
+    });
+
+    const claimDoc: UserMigrationClaim = cleanDataForFirestore({
+      id: claimId,
+      uid,
+      email: (currentProfile.email || email).slice(0, 256),
+      displayName: (snapshot.displayName || currentProfile.displayName || 'Thành viên').slice(0, 128),
+      snapshotId: snapshot.id,
+      claimType: 'confirm_exact',
+      status: 'confirmed',
+      userNote: 'Người dùng đã đăng nhập xác nhận dữ liệu cũ đầy đủ và chính xác, tự động đồng bộ vào hồ sơ mới.',
+      createdAt: now,
+      updatedAt: now,
+    });
+    batch.set(doc(db, 'userMigrationClaims', claimId), claimDoc);
+
+    await batch.commit();
+    return { mode: 'merged_snapshot', claim: claimDoc };
+  }
+
+  // Case 2: Staged snapshot exists, but email is not yet verified — queue confirmation for Admin safety approval
+  if (snapshot && snapshot.claimStatus === 'pending' && !emailVerified) {
+    const claimDoc: UserMigrationClaim = cleanDataForFirestore({
+      id: claimId,
+      uid,
+      email: (currentProfile.email || email).slice(0, 256),
+      displayName: (snapshot.displayName || currentProfile.displayName || 'Thành viên').slice(0, 128),
+      snapshotId: snapshot.id,
+      claimType: 'confirm_exact',
+      status: 'pending',
+      userNote:
+        'Người dùng xác nhận dữ liệu trước đó đã đúng & đủ nhưng Email trên hệ thống mới chưa xác minh. Đề nghị Admin duyệt áp dụng đồng bộ.',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await setDoc(doc(db, 'userMigrationClaims', claimId), claimDoc);
+    await updateDoc(doc(db, 'users', uid), {
+      migrationStatus: 'pending_review',
+      updatedAt: now,
+    });
+    return { mode: 'queued_for_admin', claim: claimDoc };
+  }
+
+  // Case 3: Migration backup excluded `users` data — user reviews & confirms their current/updated profile is complete and accurate
+  const claimDoc: UserMigrationClaim = cleanDataForFirestore({
+    id: claimId,
+    uid,
+    email: (currentProfile.email || email).slice(0, 256),
+    displayName: (currentProfile.displayName || 'Thành viên').slice(0, 128),
+    claimType: 'confirm_exact',
+    status: 'confirmed',
+    userNote: 'Người dùng đã đăng nhập rà soát và xác nhận dữ liệu hồ sơ trên hệ thống mới đầy đủ & chính xác.',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'users', uid), {
+    migrationStatus: 'confirmed',
+    migrationConfirmedAt: now,
+    updatedAt: now,
+  });
+  batch.set(doc(db, 'userMigrationClaims', claimId), claimDoc);
+  await batch.commit();
+
+  return { mode: 'confirmed_current', claim: claimDoc };
+}
+
+export async function submitUserMigrationAdjustmentRequest(params: {
+  uid: string;
+  email: string;
+  displayName: string;
+  snapshotId?: string;
+  emailVerified?: boolean;
+  disputedFields: string[];
+  userNote: string;
+  proposedData?: UserMigrationClaim['proposedData'];
+}): Promise<UserMigrationClaim> {
+  const now = new Date().toISOString();
+  const claimId = `mig_adj_${params.uid}_${Date.now()}`;
+
+  const claimDoc: UserMigrationClaim = cleanDataForFirestore({
+    id: claimId,
+    uid: params.uid,
+    email: params.email.slice(0, 256),
+    displayName: (params.displayName || 'Thành viên').slice(0, 128),
+    ...(params.snapshotId ? { snapshotId: params.snapshotId } : {}),
+    claimType: 'request_adjustment',
+    status: 'disputed',
+    disputedFields: params.disputedFields.slice(0, 20),
+    userNote: params.userNote.trim().slice(0, 2000),
+    ...(params.proposedData ? { proposedData: params.proposedData } : {}),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'userMigrationClaims', claimId), claimDoc);
+  batch.update(doc(db, 'users', params.uid), {
+    migrationStatus: 'disputed',
+    updatedAt: now,
+  });
+
+  if (params.snapshotId && params.emailVerified) {
+    try {
+      const snapDoc = await getDoc(doc(db, 'legacyUserSnapshots', params.snapshotId));
+      if (snapDoc.exists() && snapDoc.data()?.claimStatus === 'pending') {
+        batch.update(doc(db, 'legacyUserSnapshots', params.snapshotId), {
+          claimStatus: 'disputed',
+          confirmedByUid: params.uid,
+          confirmedAt: now,
+        });
+      }
+    } catch {
+      // ignore if snapshot update is restricted
+    }
+  }
+
+  await batch.commit();
+  return claimDoc;
+}
+
+export async function resolveUserMigrationClaim(params: {
+  claim: UserMigrationClaim;
+  action: 'resolve' | 'reject';
+  adminUid: string;
+  adminName: string;
+  adminNote?: string;
+  updatedUserFields?: Partial<
+    Pick<
+      UserProfile,
+      | 'displayName'
+      | 'phoneNumber'
+      | 'citizenId'
+      | 'dob'
+      | 'gender'
+      | 'address'
+      | 'department'
+      | 'position'
+      | 'qualification'
+      | 'role'
+      | 'accountType'
+      | 'expBalance'
+      | 'totalExpEarned'
+    >
+  >;
+}): Promise<void> {
+  const { claim, action, adminUid, adminName, adminNote, updatedUserFields } = params;
+  const now = new Date().toISOString();
+
+  if (action === 'reject') {
+    const batch = writeBatch(db);
+    batch.update(
+      doc(db, 'userMigrationClaims', claim.id),
+      cleanDataForFirestore({
+        status: 'rejected',
+        adminNote: (adminNote || 'Không đủ cơ sở điều chỉnh').slice(0, 2000),
+        resolvedByUid: adminUid,
+        resolvedByName: adminName,
+        resolvedAt: now,
+        updatedAt: now,
+      })
+    );
+    batch.update(doc(db, 'users', claim.uid), {
+      migrationStatus: 'confirmed',
+      migrationConfirmedAt: now,
+      updatedAt: now,
+    });
+    await batch.commit();
+    return;
+  }
+
+  const userSnap = await getDoc(doc(db, 'users', claim.uid));
+  const currentUserData = userSnap.exists() ? (userSnap.data() as UserProfile) : null;
+
+  const userPatch: Record<string, any> = cleanDataForFirestore({
+    ...(updatedUserFields || {}),
+    migrationStatus: 'confirmed',
+    migrationConfirmedAt: now,
+    ...(claim.snapshotId ? { migrationSnapshotId: claim.snapshotId } : {}),
+    updatedAt: now,
+  });
+
+  if (typeof userPatch.expBalance === 'number') {
+    userPatch.expBalance = Math.max(0, Math.round(userPatch.expBalance));
+  }
+  if (typeof userPatch.totalExpEarned === 'number') {
+    userPatch.totalExpEarned = Math.max(0, Math.round(userPatch.totalExpEarned));
+  }
+
+  const batch = writeBatch(db);
+  if (currentUserData) {
+    batch.update(doc(db, 'users', claim.uid), userPatch);
+  }
+
+  batch.update(
+    doc(db, 'userMigrationClaims', claim.id),
+    cleanDataForFirestore({
+      status: 'resolved',
+      adminNote: (adminNote || 'Admin đã kiểm tra và cập nhật dữ liệu mới cho tài khoản').slice(0, 2000),
+      resolvedByUid: adminUid,
+      resolvedByName: adminName,
+      resolvedAt: now,
+      updatedAt: now,
+    })
+  );
+
+  if (claim.snapshotId) {
+    const snapRef = doc(db, 'legacyUserSnapshots', claim.snapshotId);
+    const snapExist = await getDoc(snapRef).catch(() => null);
+    if (snapExist?.exists()) {
+      batch.update(snapRef, {
+        claimStatus: 'resolved',
+        confirmedByUid: claim.uid,
+        confirmedAt: now,
+      });
+    }
+  }
+
+  await batch.commit();
+
+  // Keep admins registry in sync if role changed
+  const nextRole = userPatch.role || currentUserData?.role;
+  const nextAccountType = userPatch.accountType || currentUserData?.accountType;
+  if (nextRole === 'admin' || nextRole === 'super_admin' || nextAccountType === 'admin') {
+    try {
+      await setDoc(
+        doc(db, 'admins', claim.uid),
+        cleanDataForFirestore({
+          uid: claim.uid,
+          email: currentUserData?.email || claim.email,
+          displayName: userPatch.displayName || currentUserData?.displayName || claim.displayName,
+          role: nextRole || 'admin',
+          accountType: 'admin',
+          updatedAt: now,
+        }),
+        { merge: true }
+      );
+    } catch {
+      // ignore if already synced
+    }
+  }
+}
+
+// ==========================================
+// Organization / Business Account Management
+// ==========================================
+
+export interface CreateOrganizationAccountParams {
+  email: string;
+  password?: string;
+  displayName?: string;
+  organizationName: string;
+  organizationType: 'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other';
+  taxCode?: string;
+  businessLicenseNumber?: string;
+  licenseIssueDate?: string;
+  licenseIssuer?: string;
+  legalRepresentative?: string;
+  representativeCitizenId?: string;
+  operatingField?: string;
+  organizationAddress?: string;
+  organizationPhone?: string;
+  organizationEmail?: string;
+  notes?: string;
+}
+
+export async function createOrganizationAccountManually(params: CreateOrganizationAccountParams): Promise<UserProfile> {
+  const emailClean = params.email.trim().toLowerCase();
+  if (!emailClean) throw new Error('Email tài khoản không được để trống.');
+  if (!params.organizationName.trim()) throw new Error('Tên Doanh nghiệp / Tổ chức không được để trống.');
+
+  const secondaryAppName = `org_prov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const secondaryApp = initSecondaryApp(firebaseConfig, secondaryAppName);
+  const secondaryAuth = getSecondaryAuth(secondaryApp);
+
+  try {
+    const rawPass = params.password && params.password.trim().length >= 6 ? params.password.trim() : 'TYT@DoanhNghiep2026';
+    const credential = await createUserWithEmailAndPassword(secondaryAuth, emailClean, rawPass);
+    const uid = credential.user.uid;
+
+    const userDoc: UserProfile = {
+      uid,
+      email: emailClean,
+      displayName: params.displayName?.trim() || params.organizationName.trim(),
+      role: 'organization',
+      accountType: 'organization',
+      organizationName: params.organizationName.trim(),
+      organizationType: params.organizationType || 'enterprise',
+      taxCode: params.taxCode?.trim() || undefined,
+      businessLicenseNumber: params.businessLicenseNumber?.trim() || undefined,
+      licenseIssueDate: params.licenseIssueDate?.trim() || undefined,
+      licenseIssuer: params.licenseIssuer?.trim() || undefined,
+      legalRepresentative: params.legalRepresentative?.trim() || undefined,
+      representativeCitizenId: params.representativeCitizenId?.trim() || undefined,
+      operatingField: params.operatingField?.trim() || undefined,
+      organizationAddress: params.organizationAddress?.trim() || undefined,
+      organizationPhone: params.organizationPhone?.trim() || undefined,
+      organizationEmail: params.organizationEmail?.trim() || emailClean,
+      phoneNumber: params.organizationPhone?.trim() || undefined,
+      status: 'active',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString(),
+      notes: params.notes?.trim() || undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await setDoc(doc(db, 'users', uid), cleanDataForFirestore(userDoc));
+    return userDoc;
+  } catch (err: any) {
+    if (err?.code === 'auth/email-already-in-use') {
+      throw new Error(`Email "${emailClean}" đã tồn tại trong hệ thống.`);
+    }
+    throw new Error(err?.message || 'Không thể tạo tài khoản tổ chức.');
+  } finally {
+    await signSecondaryOut(secondaryAuth).catch(() => {});
+    await deleteSecondaryApp(secondaryApp).catch(() => {});
+  }
+}
+
+export interface ImportOrgResult {
+  total: number;
+  successCount: number;
+  failedCount: number;
+  createdAccounts: UserProfile[];
+  errors: { row: number; name: string; email: string; error: string }[];
+}
+
+export async function batchImportOrganizationAccounts(
+  rows: Record<string, any>[],
+  onProgress?: (current: number, total: number) => void
+): Promise<ImportOrgResult> {
+  const result: ImportOrgResult = {
+    total: rows.length,
+    successCount: 0,
+    failedCount: 0,
+    createdAccounts: [],
+    errors: [],
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (onProgress) onProgress(i + 1, rows.length);
+
+    const getVal = (...keys: string[]): string => {
+      for (const k of keys) {
+        for (const rowKey of Object.keys(row)) {
+          const normRowKey = rowKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const normTarget = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (normRowKey === normTarget || normRowKey.includes(normTarget)) {
+            const val = String(row[rowKey] ?? '').trim();
+            if (val) return val;
+          }
+        }
+      }
+      return '';
+    };
+
+    const orgName = getVal('tento chuc', 'tendoanhnghiep', 'ten', 'organizationname', 'name');
+    const email = getVal('email', 'emaildangnhap', 'taikhoan', 'organizationemail');
+    const password = getVal('matkhau', 'password', 'pass') || 'TYT@DoanhNghiep2026';
+    const taxCode = getVal('masothue', 'mst', 'taxcode');
+    const licenseNumber = getVal('sogiayphep', 'giayphep', 'gpdkkd', 'businesslicensenumber');
+    const licenseDate = getVal('ngaycap', 'licenseissuedate');
+    const licenseIssuer = getVal('noicap', 'licenseissuer');
+    const repName = getVal('nguoidaidien', 'daidien', 'legalrepresentative');
+    const repCccd = getVal('cccd', 'cccdnguoidaidien', 'representativecitizenid');
+    const field = getVal('linhvuc', 'operatingfield');
+    const address = getVal('diachi', 'organizationaddress', 'address');
+    const phone = getVal('sodienthoai', 'sdt', 'phone', 'organizationphone');
+    const notes = getVal('ghichu', 'notes');
+
+    const rawType = getVal('loaihinh', 'organizationtype', 'type').toLowerCase();
+    let orgType: 'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other' = 'enterprise';
+    if (rawType.includes('kham') || rawType.includes('clinic')) orgType = 'clinic';
+    else if (rawType.includes('thuoc') || rawType.includes('pharmacy')) orgType = 'pharmacy';
+    else if (rawType.includes('truong') || rawType.includes('school')) orgType = 'school';
+    else if (rawType.includes('co quan') || rawType.includes('agency')) orgType = 'agency';
+    else if (rawType.includes('khac') || rawType.includes('other')) orgType = 'other';
+
+    if (!orgName || !email) {
+      result.failedCount++;
+      result.errors.push({
+        row: i + 2,
+        name: orgName || '(Chưa có tên)',
+        email: email || '(Chưa có email)',
+        error: 'Thiếu Tên tổ chức hoặc Email đăng nhập bắt buộc.',
+      });
+      continue;
+    }
+
+    try {
+      const created = await createOrganizationAccountManually({
+        email,
+        password,
+        organizationName: orgName,
+        organizationType: orgType,
+        taxCode: taxCode || undefined,
+        businessLicenseNumber: licenseNumber || undefined,
+        licenseIssueDate: licenseDate || undefined,
+        licenseIssuer: licenseIssuer || undefined,
+        legalRepresentative: repName || undefined,
+        representativeCitizenId: repCccd || undefined,
+        operatingField: field || undefined,
+        organizationAddress: address || undefined,
+        organizationPhone: phone || undefined,
+        organizationEmail: email,
+        notes: notes || undefined,
+      });
+      result.successCount++;
+      result.createdAccounts.push(created);
+    } catch (err: any) {
+      result.failedCount++;
+      result.errors.push({
+        row: i + 2,
+        name: orgName,
+        email,
+        error: err?.message || 'Lỗi không xác định khi tạo tài khoản.',
+      });
+    }
+
+    // Small delay between auth requests
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  return result;
+}
+
+export function downloadOrganizationImportTemplateExcel(): void {
+  const templateRows = [
+    {
+      'Tên Tổ chức / Doanh nghiệp (*)': 'Phòng khám Đa khoa Hoàn Mỹ Sài Gòn',
+      'Email đăng nhập (*)': 'hoanmy.clinic@gmail.com',
+      'Mật khẩu ban đầu': 'TYT@DoanhNghiep2026',
+      'Loại hình (clinic/pharmacy/school/enterprise/agency/other)': 'clinic',
+      'Mã số thuế (MST)': '0301234567',
+      'Số Giấy phép / ĐKKD': '08942/SYT-GPHĐ',
+      'Ngày cấp GP (YYYY-MM-DD)': '2022-05-15',
+      'Nơi cấp GP': 'Sở Y tế TP.HCM',
+      'Người đại diện pháp luật': 'BS.CKII Nguyễn Văn An',
+      'CCCD Người đại diện': '079085001234',
+      'Lĩnh vực hoạt động': 'Khám chữa bệnh đa khoa, xét nghiệm, chẩn đoán hình ảnh',
+      'Địa chỉ cơ sở tại địa bàn': '124 Đường số 7, Phường Tân Tạo, Quận Bình Tân',
+      'Số điện thoại liên hệ': '02838776655',
+      'Ghi chú': 'Phòng khám đối tác liên kết chuyển viện trạm y tế',
+    },
+    {
+      'Tên Tổ chức / Doanh nghiệp (*)': 'Nhà thuốc GPP Bình An 2',
+      'Email đăng nhập (*)': 'nhathuoc.binhan2@gmail.com',
+      'Mật khẩu ban đầu': 'TYT@DoanhNghiep2026',
+      'Loại hình (clinic/pharmacy/school/enterprise/agency/other)': 'pharmacy',
+      'Mã số thuế (MST)': '0309876543',
+      'Số Giấy phép / ĐKKD': '04123/ĐKKD-BYT',
+      'Ngày cấp GP (YYYY-MM-DD)': '2023-01-10',
+      'Nơi cấp GP': 'Sở Y tế TP.HCM',
+      'Người đại diện pháp luật': 'Dược sĩ Trần Thị Bích',
+      'CCCD Người đại diện': '079188002345',
+      'Lĩnh vực hoạt động': 'Bán lẻ thuốc thành phẩm, thực phẩm chức năng, thiết bị y tế',
+      'Địa chỉ cơ sở tại địa bàn': '45 Đường số 2, Khu phố 4',
+      'Số điện thoại liên hệ': '0908123456',
+      'Ghi chú': 'Nhà thuốc tham gia mạng lưới theo dõi dược cộng đồng',
+    },
+    {
+      'Tên Tổ chức / Doanh nghiệp (*)': 'Công ty TNHH Dược Phẩm & Thiết Bị Y Tế Tâm Đức',
+      'Email đăng nhập (*)': 'tamduc.medical@gmail.com',
+      'Mật khẩu ban đầu': 'TYT@DoanhNghiep2026',
+      'Loại hình (clinic/pharmacy/school/enterprise/agency/other)': 'enterprise',
+      'Mã số thuế (MST)': '0315678901',
+      'Số Giấy phép / ĐKKD': '0315678901',
+      'Ngày cấp GP (YYYY-MM-DD)': '2021-08-20',
+      'Nơi cấp GP': 'Sở Kế hoạch và Đầu tư',
+      'Người đại diện pháp luật': 'Lê Minh Tuấn',
+      'CCCD Người đại diện': '079090003456',
+      'Lĩnh vực hoạt động': 'Cung ứng vật tư y tế, hóa chất xét nghiệm',
+      'Địa chỉ cơ sở tại địa bàn': 'Lô B2, Khu công nghiệp Tân Tạo',
+      'Số điện thoại liên hệ': '02837543210',
+      'Ghi chú': 'Doanh nghiệp tài trợ thiết bị sơ cấp cứu cơ sở',
+    },
+    {
+      'Tên Tổ chức / Doanh nghiệp (*)': 'Trường Tiểu học Nguyễn Văn Trỗi',
+      'Email đăng nhập (*)': 'c1.nguyenvantroi@gmail.com',
+      'Mật khẩu ban đầu': 'TYT@DoanhNghiep2026',
+      'Loại hình (clinic/pharmacy/school/enterprise/agency/other)': 'school',
+      'Mã số thuế (MST)': '0305544332',
+      'Số Giấy phép / ĐKKD': 'QĐ-892/UBND',
+      'Ngày cấp GP (YYYY-MM-DD)': '2018-09-01',
+      'Nơi cấp GP': 'UBND Quận/Huyện',
+      'Người đại diện pháp luật': 'Phạm Hoàng Yến (Hiệu trưởng)',
+      'CCCD Người đại diện': '079175004567',
+      'Lĩnh vực hoạt động': 'Giáo dục tiểu học & Y tế học đường',
+      'Địa chỉ cơ sở tại địa bàn': '88 Hương Lộ 2, Khu phố 6',
+      'Số điện thoại liên hệ': '02838751234',
+      'Ghi chú': 'Điểm phối hợp tiêm chủng học đường & nha học đường',
+    },
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(templateRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Mau_Import_DoanhNghiep');
+
+  ws['!cols'] = [
+    { wch: 38 },
+    { wch: 28 },
+    { wch: 22 },
+    { wch: 24 },
+    { wch: 16 },
+    { wch: 20 },
+    { wch: 16 },
+    { wch: 22 },
+    { wch: 26 },
+    { wch: 18 },
+    { wch: 35 },
+    { wch: 38 },
+    { wch: 16 },
+    { wch: 30 },
+  ];
+
+  XLSX.writeFile(wb, 'Mau_Import_TaiKhoan_DoanhNghiep.xlsx');
+}
+
+export function exportOrganizationsToExcel(organizations: UserProfile[]): void {
+  const typeMap: Record<string, string> = {
+    clinic: 'Phòng khám',
+    pharmacy: 'Nhà thuốc GPP',
+    school: 'Trường học',
+    enterprise: 'Doanh nghiệp / Công ty',
+    agency: 'Cơ quan / Đơn vị hành chính',
+    other: 'Khác',
+  };
+
+  const exportRows = organizations.map((org, index) => ({
+    'STT': index + 1,
+    'Tên Tổ chức / Doanh nghiệp': org.organizationName || org.displayName || '—',
+    'Email đăng nhập': org.email || '—',
+    'Loại hình': (org.organizationType && typeMap[org.organizationType]) || org.organizationType || 'Doanh nghiệp',
+    'Mã số thuế (MST)': org.taxCode || '—',
+    'Số Giấy phép / ĐKKD': org.businessLicenseNumber || '—',
+    'Ngày cấp GP': org.licenseIssueDate || '—',
+    'Nơi cấp GP': org.licenseIssuer || '—',
+    'Người đại diện pháp luật': org.legalRepresentative || '—',
+    'CCCD Người đại diện': org.representativeCitizenId || '—',
+    'Lĩnh vực hoạt động': org.operatingField || '—',
+    'Địa chỉ trụ sở / Cơ sở': org.organizationAddress || org.address || '—',
+    'Số điện thoại': org.organizationPhone || org.phoneNumber || '—',
+    'Email liên hệ': org.organizationEmail || org.email || '—',
+    'Trạng thái': org.status === 'banned' ? 'Đã khóa' : org.status === 'pending_approval' ? 'Chờ duyệt' : 'Đang hoạt động',
+    'Ngày tạo': org.createdAt ? org.createdAt.split('T')[0] : '—',
+    'Ghi chú': org.notes || '',
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(exportRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'DanhSach_ToChuc_DoanhNghiep');
+
+  ws['!cols'] = [
+    { wch: 6 },
+    { wch: 36 },
+    { wch: 28 },
+    { wch: 20 },
+    { wch: 16 },
+    { wch: 22 },
+    { wch: 14 },
+    { wch: 20 },
+    { wch: 26 },
+    { wch: 18 },
+    { wch: 32 },
+    { wch: 36 },
+    { wch: 16 },
+    { wch: 26 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 30 },
+  ];
+
+  XLSX.writeFile(wb, `Danh_sach_Tai_khoan_To_chuc_Doanh_nghiep_${new Date().toISOString().split('T')[0]}.xlsx`);
 }
 
 

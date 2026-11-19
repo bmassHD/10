@@ -347,7 +347,7 @@ export const HolidayNoticeModal: React.FC<HolidayNoticeModalProps> = ({
                   <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/70 space-y-2">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-300">
                       <ShieldAlert className="w-4 h-4 shrink-0" />
-                      <span>Đường dây nóng Cấp cứu trực lễ 24/7</span>
+                      <span>Đường dây nóng Cấp cứu 24/7 (Bệnh viện tuyến trên tiếp nhận)</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {holiday.emergencyPhone?.trim() && (
@@ -364,11 +364,12 @@ export const HolidayNoticeModal: React.FC<HolidayNoticeModalProps> = ({
                           key={ec.id}
                           href={`tel:${ec.phone}`}
                           className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-rose-100 dark:hover:bg-rose-950/60 tabular-nums whitespace-nowrap"
+                          title={ec.note ? `Bệnh viện tuyến trên: ${ec.note}` : 'Cấp cứu tuyến trên'}
                         >
                           <Phone className="w-3.5 h-3.5 shrink-0" />
                           <span>
                             {ec.phone}
-                            {ec.note ? ` · ${ec.note.slice(0, 32)}` : ''}
+                            {ec.note ? ` · ${ec.note}` : ' · Tuyến trên'}
                           </span>
                         </a>
                       ))}

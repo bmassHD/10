@@ -393,101 +393,19 @@ export const OrgChartView: React.FC<OrgChartViewProps> = ({
               Sơ Đồ Tổ Chức Bộ Máy Trạm Y Tế
             </h1>
 
-            <p className="text-sm sm:text-[15px] text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
-              Ban Giám đốc đến từng Khoa/Phòng, Trưởng/Phó khoa và chức danh chuyên môn của nhân sự.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-start lg:justify-end gap-2 shrink-0 self-start lg:self-center">
-            {onOpenPersonnelDirectory && (
-              <button
-                type="button"
-                onClick={onOpenPersonnelDirectory}
-                className="px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+            <div className="w-full md:w-80">
+              <select
+                value={selectedDeptId}
+                onChange={e => setSelectedDeptId(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
               >
-                <Table className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Danh sách nhân lực / khoa phòng</span>
-              </button>
-            )}
-
-            {isAdmin && (
-              <div className="hidden lg:flex flex-wrap items-center justify-end gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleDownloadSampleExcel}
-                  className="px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Download className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Tải mẫu Excel (6 sheet)</span>
-                </button>
-
-                <label className="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0">
-                  <Upload className="w-4 h-4 shrink-0" />
-                  <span>Import Excel</span>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={handleImportExcelFile}
-                    className="hidden"
-                  />
-                </label>
-
-                {!hasPersistedOrgData && (
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={handleApplyDefaultStructure}
-                    className="px-3.5 py-2.5 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-xs sm:text-sm font-semibold text-emerald-800 dark:text-emerald-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Lưu mặc định</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={openEditorModal}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs sm:text-sm transition inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Settings className="w-4 h-4 shrink-0" />
-                  <span>Chỉnh sửa sơ đồ</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </RevealOnScroll>
-
-      {/* Filter & Search Bar */}
-      {hasAnyOrgData && orgChart.departments.length > 0 && (
-        <RevealOnScroll title="Tra cứu khoa phòng & nhân sự">
-          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-              <button
-                type="button"
-                onClick={() => setSelectedDeptId('all')}
-                className={`px-3.5 py-2 rounded-xl text-sm font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                  selectedDeptId === 'all'
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
-              >
-                Tất cả ({orgChart.departments.length})
-              </button>
-              {orgChart.departments.map((dept, deptIdx) => (
-                <button
-                  key={dept.id}
-                  type="button"
-                  onClick={() => setSelectedDeptId(dept.id)}
-                  className={`px-3.5 py-2 rounded-xl text-sm font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                    selectedDeptId === dept.id
-                      ? 'bg-emerald-700 text-white'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  {formatNumberedDepartmentName(dept.name, deptIdx)}
-                </button>
-              ))}
+                <option value="all">Tất cả Khoa / Phòng ({orgChart.departments.length})</option>
+                {orgChart.departments.map((dept, deptIdx) => (
+                  <option key={dept.id} value={dept.id}>
+                    {formatNumberedDepartmentName(dept.name, deptIdx)}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="relative md:w-72 shrink-0">
@@ -501,8 +419,8 @@ export const OrgChartView: React.FC<OrgChartViewProps> = ({
               />
             </div>
           </div>
-        </RevealOnScroll>
-      )}
+        </div>
+      </RevealOnScroll>
 
       {/* Main Top-Down Branching Hierarchy */}
       {!hasAnyOrgData ? (

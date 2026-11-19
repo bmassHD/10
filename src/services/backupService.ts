@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../firebase/config';
 import { BackupItem, GitHubConfig, SystemSettings } from '../types';
-import { cleanDataForFirestore, logAuditEvent } from './firebaseService';
+import { cleanDataForFirestore, logAuditEvent, computeLegacySnapshotId } from './firebaseService';
 import { GitHubService } from './githubService';
 import {
   exportBhxhServerConfigForBackup,
@@ -21,6 +21,22 @@ import {
 import { utf8ToBase64, base64ToUtf8 } from '../utils/base64Utils';
 
 export const AUTO_GITHUB_BACKUP_HOUR_VN = 3; // 03:00 AM giờ Việt Nam
+
+export interface RestoreProgressInfo {
+  phase: 'parsing' | 'staging_users' | 'restoring' | 'finalizing' | 'completed' | 'error';
+  phaseLabel: string;
+  currentCollection?: string;
+  currentCollectionLabel?: string;
+  processedCollections: number;
+  totalCollections: number;
+  processedRecords: number;
+  totalRecords: number;
+  restoredCount: number;
+  skippedCount: number;
+  stagedSnapshotsCount: number;
+  percent: number;
+  message: string;
+}
 
 export function getVietnamTimeParts(date: Date = new Date()): {
   dayKey: string;
@@ -148,11 +164,20 @@ export const BACKUP_COLLECTIONS: ReadonlyArray<{ key: string; label: string }> =
   { key: 'services', label: 'Danh mục dịch vụ' },
   { key: 'documents', label: 'Văn bản & Biểu mẫu' },
   { key: 'workSchedules', label: 'Lịch trực 24/7' },
+  { key: 'attendanceRecords', label: 'Chấm công nhân sự' },
   { key: 'feedback', label: 'Phản ánh kiến nghị' },
+  { key: 'serviceRatings', label: 'Đánh giá dịch vụ (★)' },
   { key: 'appointments', label: 'Lịch hẹn khám' },
   { key: 'targetedNotifications', label: 'Thông báo mục tiêu' },
+  { key: 'storeItems', label: 'Cửa hàng đổi EXP (Mặt hàng)' },
+  { key: 'storeOrders', label: 'Đơn đổi quà EXP' },
+  { key: 'referralCodes', label: 'Mã giới thiệu Admin/Cán bộ' },
+  { key: 'userReferralLinks', label: 'Link giới thiệu cá nhân' },
+  { key: 'referralTracking', label: 'Theo dõi giới thiệu (+1000 EXP)' },
   { key: 'users', label: 'Tài khoản, Định danh Y tế & Bảo mật người dùng' },
   { key: 'verifiedIdentifiers', label: 'Khoá định danh đã xác minh (Email/SĐT/CCCD)' },
+  { key: 'legacyUserSnapshots', label: 'Hồ sơ đối chiếu di trú Firebase' },
+  { key: 'userMigrationClaims', label: 'Yêu cầu xác nhận/điều chỉnh di trú' },
   { key: 'admins', label: 'Danh sách Quản trị viên' },
   { key: 'tasks', label: 'Nhiệm vụ công việc' },
   { key: 'rescueSignals', label: 'Tín hiệu cứu hộ SOS' },
@@ -172,11 +197,20 @@ const RESTORABLE_COLLECTIONS = new Set<string>([
   'services',
   'documents',
   'workSchedules',
+  'attendanceRecords',
   'feedback',
+  'serviceRatings',
   'appointments',
   'targetedNotifications',
+  'storeItems',
+  'storeOrders',
+  'referralCodes',
+  'userReferralLinks',
+  'referralTracking',
   'users',
   'verifiedIdentifiers',
+  'legacyUserSnapshots',
+  'userMigrationClaims',
   'admins',
   'tasks',
   'rescueSignals',
@@ -193,7 +227,7 @@ export class BackupService {
   /**
    * Collect snapshot across all system Firestore collections
    */
-  private static async collectSnapshot(): Promise<{
+  private static async collectSnapshot(options?: { excludeUsers?: boolean }): Promise<{
     backupData: Record<string, any[]>;
     stats: BackupItem['stats'];
     collectionsIncluded: string[];
@@ -201,6 +235,7 @@ export class BackupService {
     dataJson: string;
     sizeBytes: number;
   }> {
+    const excludeUsers = Boolean(options?.excludeUsers);
     const backupData: Record<string, any[]> = {};
     const collectionsIncluded: string[] = [];
     const failedCollections: string[] = [];
@@ -228,12 +263,24 @@ export class BackupService {
       verifiedIdentifiersCount: 0,
       userDevicesCount: 0,
       bhxhServerConfigCount: 0,
+      referralCodesCount: 0,
+      userReferralLinksCount: 0,
+      referralTrackingCount: 0,
+      attendanceRecordsCount: 0,
+      storeItemsCount: 0,
+      storeOrdersCount: 0,
+      serviceRatingsCount: 0,
+      legacyUserSnapshotsCount: 0,
+      userMigrationClaimsCount: 0,
       totalRecords: 0,
     };
 
     const currentUid = auth.currentUser?.uid || '';
 
     for (const { key: collName } of BACKUP_COLLECTIONS) {
+      if (excludeUsers && (collName === 'users' || collName === 'verifiedIdentifiers')) {
+        continue;
+      }
       if (collName === 'bhxhServerConfig') {
         try {
           const bhxhRecords = await exportBhxhServerConfigForBackup();
@@ -325,6 +372,15 @@ export class BackupService {
         if (collName === 'events') stats.eventsCount = count;
         if (collName === 'siteStats') stats.siteStatsCount = count;
         if (collName === 'pushSubscriptions') stats.pushSubscriptionsCount = count;
+        if (collName === 'referralCodes') stats.referralCodesCount = count;
+        if (collName === 'userReferralLinks') stats.userReferralLinksCount = count;
+        if (collName === 'referralTracking') stats.referralTrackingCount = count;
+        if (collName === 'attendanceRecords') stats.attendanceRecordsCount = count;
+        if (collName === 'storeItems') stats.storeItemsCount = count;
+        if (collName === 'storeOrders') stats.storeOrdersCount = count;
+        if (collName === 'serviceRatings') stats.serviceRatingsCount = count;
+        if (collName === 'legacyUserSnapshots') stats.legacyUserSnapshotsCount = count;
+        if (collName === 'userMigrationClaims') stats.userMigrationClaimsCount = count;
       } catch (collectionErr) {
         console.warn(`Snapshot reading collection ${collName} failed:`, collectionErr);
         backupData[collName] = [];
@@ -433,14 +489,19 @@ export class BackupService {
    */
   public static async exportLocalBackup(
     userEmail: string,
-    title?: string
+    title?: string,
+    options?: { excludeUsers?: boolean }
   ): Promise<{ success: boolean; totalRecords?: number; sizeBytes?: number; error?: string }> {
     try {
-      const { stats, collectionsIncluded, dataJson, sizeBytes } = await this.collectSnapshot();
+      const { stats, collectionsIncluded, dataJson, sizeBytes } = await this.collectSnapshot(options);
       const nowIso = new Date().toISOString();
       const backupItem: BackupItem = {
         id: `local_${Date.now()}`,
-        title: title?.trim() || `Bản sao lưu cục bộ ${new Date().toLocaleDateString('vi-VN')}`,
+        title:
+          title?.trim() ||
+          (options?.excludeUsers
+            ? `Bản sao lưu hệ thống (Trừ dữ liệu User) ${new Date().toLocaleDateString('vi-VN')}`
+            : `Bản sao lưu cục bộ ${new Date().toLocaleDateString('vi-VN')}`),
         version: CURRENT_SYSTEM_VERSION,
         createdAt: nowIso,
         createdBy: userEmail || 'Admin',
@@ -1070,53 +1131,312 @@ export class BackupService {
   public static async restoreFromBackup(
     dataJson: string,
     userEmail?: string,
-    selectedCollections?: string[]
-  ): Promise<{ success: boolean; message: string }> {
+    selectedCollections?: string[],
+    options?: {
+      migrationMode?: boolean;
+      enableMigrationPrompt?: boolean;
+      sourceBackupTitle?: string;
+      onProgress?: (progress: RestoreProgressInfo) => void;
+    }
+  ): Promise<{ success: boolean; message: string; stagedSnapshotsCount?: number }> {
+    const emitProgress = options?.onProgress;
+    const report = (info: RestoreProgressInfo) => {
+      if (emitProgress) {
+        try {
+          emitProgress(info);
+        } catch {
+          // non-blocking UI callback
+        }
+      }
+    };
+
     try {
+      report({
+        phase: 'parsing',
+        phaseLabel: 'Đang giải mã & kiểm tra bản sao lưu',
+        processedCollections: 0,
+        totalCollections: 0,
+        processedRecords: 0,
+        totalRecords: 0,
+        restoredCount: 0,
+        skippedCount: 0,
+        stagedSnapshotsCount: 0,
+        percent: 4,
+        message: 'Đang giải mã Base64 và phân tích cấu trúc dữ liệu phân hệ...',
+      });
+
       const parsed = this.parseBackupJson(dataJson);
       if (!parsed.valid || !parsed.data) {
-        return { success: false, message: parsed.error || 'Tệp sao lưu không hợp lệ.' };
+        const errMsg = parsed.error || 'Tệp sao lưu không hợp lệ.';
+        report({
+          phase: 'error',
+          phaseLabel: 'Dữ liệu sao lưu không hợp lệ',
+          processedCollections: 0,
+          totalCollections: 0,
+          processedRecords: 0,
+          totalRecords: 0,
+          restoredCount: 0,
+          skippedCount: 0,
+          stagedSnapshotsCount: 0,
+          percent: 0,
+          message: errMsg,
+        });
+        return { success: false, message: errMsg };
       }
+
+      const migrationMode = Boolean(options?.migrationMode);
+      const enableMigrationPrompt = Boolean(options?.enableMigrationPrompt || migrationMode);
 
       const selectedSet =
         Array.isArray(selectedCollections) && selectedCollections.length > 0
           ? new Set(selectedCollections)
           : null;
 
+      const collectionLabelsMap = new Map<string, string>(
+        BACKUP_COLLECTIONS.map(c => [c.key, c.label])
+      );
+      const getCollectionLabel = (key: string) => collectionLabelsMap.get(key) || key;
+
+      const targetCollectionEntries = Object.entries(parsed.data).filter(([collName, items]) => {
+        if (!RESTORABLE_COLLECTIONS.has(collName) || !Array.isArray(items)) return false;
+        if (
+          migrationMode &&
+          (collName === 'users' || collName === 'verifiedIdentifiers' || collName === 'admins')
+        ) {
+          return false;
+        }
+        if (selectedSet && !selectedSet.has(collName)) return false;
+        return true;
+      }) as [string, any[]][];
+
+      const legacyUsersToStage =
+        migrationMode && Array.isArray(parsed.data.users) ? parsed.data.users : [];
+      const totalCollections =
+        targetCollectionEntries.length + (legacyUsersToStage.length > 0 ? 1 : 0);
+      const totalRecords =
+        legacyUsersToStage.length +
+        targetCollectionEntries.reduce((sum, [, items]) => sum + items.length, 0);
+
       let restoredCount = 0;
       let skippedCount = 0;
+      let stagedSnapshotsCount = 0;
+      let processedCollections = 0;
+      let processedRecords = 0;
       const restoredCollections: string[] = [];
 
-      for (const [collName, items] of Object.entries(parsed.data)) {
-        if (!RESTORABLE_COLLECTIONS.has(collName) || !Array.isArray(items)) continue;
-        if (selectedSet && !selectedSet.has(collName)) continue;
+      const calcPercent = (done: number, total: number) => {
+        if (total <= 0) return 90;
+        return Math.min(96, Math.max(8, Math.round(8 + (done / total) * 88)));
+      };
+
+      const shouldEmitStep = (idx: number, len: number) => {
+        if (totalRecords <= 45) return true;
+        return idx === 0 || idx === len - 1 || (idx + 1) % 4 === 0;
+      };
+
+      // If migrationMode is enabled and `users` exists in parsed backup, stage user snapshots cleanly by email
+      // without touching live `users/{oldUid}` documents (because new Firebase Auth generates new UIDs).
+      if (legacyUsersToStage.length > 0) {
+        const nowIso = new Date().toISOString();
+        report({
+          phase: 'staging_users',
+          phaseLabel: 'Đang tạo kho hồ sơ đối chiếu người dùng',
+          currentCollection: 'legacyUserSnapshots',
+          currentCollectionLabel: 'Hồ sơ đối chiếu User (Di trú)',
+          processedCollections,
+          totalCollections,
+          processedRecords,
+          totalRecords,
+          restoredCount,
+          skippedCount,
+          stagedSnapshotsCount,
+          percent: calcPercent(processedRecords, totalRecords),
+          message: `Đang chuẩn bị ${legacyUsersToStage.length} hồ sơ tài khoản để người dùng xác nhận lại...`,
+        });
+
+        for (let uIdx = 0; uIdx < legacyUsersToStage.length; uIdx++) {
+          const u = legacyUsersToStage[uIdx];
+          const rawEmail = typeof u?.email === 'string' ? u.email.trim().toLowerCase() : '';
+          if (rawEmail) {
+            const snapId = computeLegacySnapshotId(rawEmail);
+            try {
+              const snapPayload = cleanDataForFirestore({
+                id: snapId,
+                legacyUid: String(u.uid || u.id || '').slice(0, 128),
+                email: rawEmail.slice(0, 256),
+                displayName: String(u.displayName || rawEmail.split('@')[0] || 'Thành viên').slice(
+                  0,
+                  128
+                ),
+                ...(u.phoneNumber ? { phoneNumber: String(u.phoneNumber).slice(0, 32) } : {}),
+                ...(u.verifiedPhone ? { verifiedPhone: String(u.verifiedPhone).slice(0, 32) } : {}),
+                ...(u.citizenId ? { citizenId: String(u.citizenId).slice(0, 32) } : {}),
+                ...(u.dob ? { dob: String(u.dob).slice(0, 32) } : {}),
+                ...(u.gender === 'Nam' || u.gender === 'Nữ' || u.gender === 'Khác'
+                  ? { gender: u.gender }
+                  : {}),
+                ...(u.ethnicity ? { ethnicity: String(u.ethnicity).slice(0, 64) } : {}),
+                ...(u.provinceCode ? { provinceCode: String(u.provinceCode).slice(0, 16) } : {}),
+                ...(u.provinceName ? { provinceName: String(u.provinceName).slice(0, 128) } : {}),
+                ...(u.wardCode ? { wardCode: String(u.wardCode).slice(0, 16) } : {}),
+                ...(u.wardName ? { wardName: String(u.wardName).slice(0, 128) } : {}),
+                ...(u.address ? { address: String(u.address).slice(0, 256) } : {}),
+                ...(u.department ? { department: String(u.department).slice(0, 128) } : {}),
+                ...(u.position ? { position: String(u.position).slice(0, 128) } : {}),
+                ...(u.qualification ? { qualification: String(u.qualification).slice(0, 128) } : {}),
+                role: u.role || 'citizen',
+                accountType: u.accountType || 'citizen',
+                expBalance: Math.max(0, Math.round(Number(u.expBalance) || 0)),
+                totalExpEarned: Math.max(0, Math.round(Number(u.totalExpEarned) || 0)),
+                emailVerified: Boolean(u.emailVerified),
+                phoneVerified: Boolean(u.phoneVerified),
+                citizenIdVerified: Boolean(u.citizenIdVerified),
+                identityVerifiedFromDatabase: Boolean(u.identityVerifiedFromDatabase),
+                ...(u.personalReferralCode
+                  ? { personalReferralCode: String(u.personalReferralCode).slice(0, 64) }
+                  : {}),
+                claimStatus: 'pending',
+                migratedAt: nowIso,
+                ...(options?.sourceBackupTitle || parsed.metadata?.title
+                  ? {
+                      sourceBackupTitle: String(
+                        options?.sourceBackupTitle || parsed.metadata?.title
+                      ).slice(0, 256),
+                    }
+                  : {}),
+              });
+              await setDoc(doc(db, 'legacyUserSnapshots', snapId), snapPayload, { merge: true });
+              stagedSnapshotsCount++;
+            } catch (snapErr) {
+              console.warn(`Stage legacy snapshot for ${rawEmail} skipped:`, snapErr);
+            }
+          }
+          processedRecords++;
+          if (shouldEmitStep(uIdx, legacyUsersToStage.length)) {
+            report({
+              phase: 'staging_users',
+              phaseLabel: 'Đang tạo kho hồ sơ đối chiếu người dùng',
+              currentCollection: 'legacyUserSnapshots',
+              currentCollectionLabel: 'Hồ sơ đối chiếu User (Di trú)',
+              processedCollections,
+              totalCollections,
+              processedRecords,
+              totalRecords,
+              restoredCount,
+              skippedCount,
+              stagedSnapshotsCount,
+              percent: calcPercent(processedRecords, totalRecords),
+              message: `Đã xử lý ${uIdx + 1}/${legacyUsersToStage.length} hồ sơ đối chiếu...`,
+            });
+          }
+        }
+        processedCollections++;
+        if (stagedSnapshotsCount > 0) {
+          restoredCollections.push('legacyUserSnapshots');
+        }
+      }
+
+      for (const [collName, items] of targetCollectionEntries) {
+        const collLabel = getCollectionLabel(collName);
+
+        report({
+          phase: 'restoring',
+          phaseLabel: 'Đang khôi phục dữ liệu phân hệ',
+          currentCollection: collName,
+          currentCollectionLabel: collLabel,
+          processedCollections,
+          totalCollections,
+          processedRecords,
+          totalRecords,
+          restoredCount,
+          skippedCount,
+          stagedSnapshotsCount,
+          percent: calcPercent(processedRecords, totalRecords),
+          message: `Đang phục hồi "${collLabel}" (${items.length} bản ghi)...`,
+        });
 
         if (collName === 'bhxhServerConfig') {
           let bhxhRestored = 0;
-          for (const item of items) {
-            if (!item || typeof item !== 'object') continue;
-            const ok = await restoreBhxhServerConfigFromBackup(item);
-            if (ok) {
-              restoredCount++;
-              bhxhRestored++;
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item && typeof item === 'object') {
+              const ok = await restoreBhxhServerConfigFromBackup(item);
+              if (ok) {
+                restoredCount++;
+                bhxhRestored++;
+              } else {
+                skippedCount++;
+              }
             } else {
               skippedCount++;
+            }
+            processedRecords++;
+            if (shouldEmitStep(i, items.length)) {
+              report({
+                phase: 'restoring',
+                phaseLabel: 'Đang khôi phục dữ liệu phân hệ',
+                currentCollection: collName,
+                currentCollectionLabel: collLabel,
+                processedCollections,
+                totalCollections,
+                processedRecords,
+                totalRecords,
+                restoredCount,
+                skippedCount,
+                stagedSnapshotsCount,
+                percent: calcPercent(processedRecords, totalRecords),
+                message: `Đang phục hồi "${collLabel}" (${i + 1}/${items.length})...`,
+              });
             }
           }
           if (bhxhRestored > 0) {
             restoredCollections.push(collName);
           }
+          processedCollections++;
           continue;
         }
 
         let collRestored = 0;
-        for (const item of items) {
-          if (!item?.id) continue;
-          if (collName === 'systemSettings' && item.id === 'connection_test') continue;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const emitCurrentStep = () => {
+            if (shouldEmitStep(i, items.length)) {
+              report({
+                phase: 'restoring',
+                phaseLabel: 'Đang khôi phục dữ liệu phân hệ',
+                currentCollection: collName,
+                currentCollectionLabel: collLabel,
+                processedCollections,
+                totalCollections,
+                processedRecords,
+                totalRecords,
+                restoredCount,
+                skippedCount,
+                stagedSnapshotsCount,
+                percent: calcPercent(processedRecords, totalRecords),
+                message: `Đang phục hồi "${collLabel}" (${i + 1}/${items.length})...`,
+              });
+            }
+          };
+
+          if (!item?.id) {
+            skippedCount++;
+            processedRecords++;
+            emitCurrentStep();
+            continue;
+          }
+          if (collName === 'systemSettings' && item.id === 'connection_test') {
+            skippedCount++;
+            processedRecords++;
+            emitCurrentStep();
+            continue;
+          }
 
           // siteStats rules only allow 'summary' document with valid counters
           if (collName === 'siteStats' && item.id !== 'summary') {
             skippedCount++;
+            processedRecords++;
+            emitCurrentStep();
             continue;
           }
 
@@ -1129,14 +1449,16 @@ export class BackupService {
               const existingSnap = await getDoc(docRef);
               if (existingSnap.exists()) {
                 skippedCount++;
-                continue;
+              } else {
+                await setDoc(docRef, cleanDataForFirestore(rawData));
+                restoredCount++;
+                collRestored++;
               }
-              await setDoc(docRef, cleanDataForFirestore(rawData));
-              restoredCount++;
-              collRestored++;
             } catch {
               skippedCount++;
             }
+            processedRecords++;
+            emitCurrentStep();
             continue;
           }
 
@@ -1160,7 +1482,9 @@ export class BackupService {
 
             const secSource =
               (securityStatus && typeof securityStatus === 'object' ? securityStatus : null) ||
-              (securityVerification && typeof securityVerification === 'object' ? securityVerification : null);
+              (securityVerification && typeof securityVerification === 'object'
+                ? securityVerification
+                : null);
 
             const hydratedUserData: Record<string, any> = {
               ...userDocBase,
@@ -1197,22 +1521,41 @@ export class BackupService {
 
               if (Array.isArray(verifiedDevices)) {
                 for (const dev of verifiedDevices) {
-                  const devId = typeof dev?.deviceId === 'string' && dev.deviceId.trim() ? dev.deviceId.trim() : '';
-                  if (!devId || !dev?.deviceName || !dev?.platform || !dev?.verifiedAt || !dev?.lastActiveAt) continue;
+                  const devId =
+                    typeof dev?.deviceId === 'string' && dev.deviceId.trim()
+                      ? dev.deviceId.trim()
+                      : '';
+                  if (
+                    !devId ||
+                    !dev?.deviceName ||
+                    !dev?.platform ||
+                    !dev?.verifiedAt ||
+                    !dev?.lastActiveAt
+                  ) {
+                    continue;
+                  }
                   try {
                     await setDoc(
                       doc(db, 'users', id, 'devices', devId),
                       cleanDataForFirestore({
                         deviceId: devId,
                         deviceName: String(dev.deviceName).slice(0, 128),
-                        platform: ['mobile', 'tablet', 'desktop'].includes(dev.platform) ? dev.platform : 'desktop',
+                        platform: ['mobile', 'tablet', 'desktop'].includes(dev.platform)
+                          ? dev.platform
+                          : 'desktop',
                         isTrusted: Boolean(dev.isTrusted),
                         verifiedAt: String(dev.verifiedAt).slice(0, 64),
                         lastActiveAt: String(dev.lastActiveAt).slice(0, 64),
                         ...(typeof dev.os === 'string' ? { os: dev.os.slice(0, 64) } : {}),
-                        ...(typeof dev.browser === 'string' ? { browser: dev.browser.slice(0, 64) } : {}),
-                        ...(dev.verificationMethod ? { verificationMethod: dev.verificationMethod } : {}),
-                        ...(typeof dev.firstSeenAt === 'string' ? { firstSeenAt: dev.firstSeenAt.slice(0, 64) } : {}),
+                        ...(typeof dev.browser === 'string'
+                          ? { browser: dev.browser.slice(0, 64) }
+                          : {}),
+                        ...(dev.verificationMethod
+                          ? { verificationMethod: dev.verificationMethod }
+                          : {}),
+                        ...(typeof dev.firstSeenAt === 'string'
+                          ? { firstSeenAt: dev.firstSeenAt.slice(0, 64) }
+                          : {}),
                       }),
                       { merge: true }
                     );
@@ -1250,6 +1593,8 @@ export class BackupService {
               console.warn(`Restore user ${id} skipped:`, itemErr);
               skippedCount++;
             }
+            processedRecords++;
+            emitCurrentStep();
             continue;
           }
 
@@ -1261,35 +1606,107 @@ export class BackupService {
             console.warn(`Restore item ${collName}/${id} skipped:`, itemErr);
             skippedCount++;
           }
+          processedRecords++;
+          emitCurrentStep();
         }
+        processedCollections++;
         if (collRestored > 0) {
           restoredCollections.push(collName);
         }
       }
 
+      report({
+        phase: 'finalizing',
+        phaseLabel: 'Đang hoàn tất & đồng bộ nhật ký kiểm toán',
+        processedCollections,
+        totalCollections,
+        processedRecords,
+        totalRecords,
+        restoredCount,
+        skippedCount,
+        stagedSnapshotsCount,
+        percent: 98,
+        message: 'Đang lưu cấu hình đồng bộ và ghi nhật ký thao tác hệ thống...',
+      });
+
+      if (enableMigrationPrompt) {
+        try {
+          const nowIso = new Date().toISOString();
+          await setDoc(
+            doc(db, 'systemSettings', 'general'),
+            cleanDataForFirestore({
+              migrationReconciliationActive: true,
+              migrationBannerNote:
+                stagedSnapshotsCount > 0
+                  ? `Hệ thống vừa chuyển đổi dữ liệu sang máy chủ mới (${stagedSnapshotsCount} hồ sơ đối chiếu sẵn sàng). Vui lòng kiểm tra và xác nhận thông tin tài khoản của bạn.`
+                  : 'Hệ thống vừa khôi phục dữ liệu (không bao gồm tài khoản cũ). Vui lòng đăng nhập và xác nhận hồ sơ của bạn đã đầy đủ & chính xác chưa.',
+              updatedAt: nowIso,
+            }),
+            { merge: true }
+          );
+        } catch (migSettingsErr) {
+          console.warn('Could not enable migrationReconciliationActive:', migSettingsErr);
+        }
+      }
+
       try {
         await logAuditEvent(
-          'Khôi phục dữ liệu hệ thống',
+          migrationMode ? 'Di trú dữ liệu sang Firebase mới' : 'Khôi phục dữ liệu hệ thống',
           'Sao lưu & Phục hồi',
           `Phục hồi ${restoredCount} bản ghi trên ${restoredCollections.length} phân hệ (${restoredCollections.join(', ')})${
-            skippedCount > 0 ? ` · Bỏ qua ${skippedCount} bản ghi bất biến/không hợp lệ` : ''
-          }`,
+            stagedSnapshotsCount > 0 ? ` · Tạo ${stagedSnapshotsCount} hồ sơ đối chiếu user` : ''
+          }${skippedCount > 0 ? ` · Bỏ qua ${skippedCount} bản ghi bất biến/không hợp lệ` : ''}`,
           { uid: userEmail || 'admin', name: userEmail || 'Admin' }
         );
       } catch {
         // Non-blocking audit log
       }
 
+      const finalMsg = `Khôi phục thành công ${restoredCount} bản ghi trên ${restoredCollections.length} phân hệ${
+        stagedSnapshotsCount > 0
+          ? ` và tạo ${stagedSnapshotsCount} hồ sơ đối chiếu cho người dùng khi đăng nhập`
+          : enableMigrationPrompt
+          ? ' (đã bật thông báo yêu cầu người dùng xác nhận dữ liệu khi đăng nhập)'
+          : ''
+      }${skippedCount > 0 ? ` (giữ nguyên ${skippedCount} bản ghi bất biến/đã tồn tại)` : ''}.`;
+
+      report({
+        phase: 'completed',
+        phaseLabel: 'Khôi phục dữ liệu hoàn tất',
+        processedCollections: totalCollections,
+        totalCollections,
+        processedRecords: totalRecords,
+        totalRecords,
+        restoredCount,
+        skippedCount,
+        stagedSnapshotsCount,
+        percent: 100,
+        message: finalMsg,
+      });
+
       return {
         success: true,
-        message: `Khôi phục thành công ${restoredCount} bản ghi trên ${restoredCollections.length} phân hệ dữ liệu${
-          skippedCount > 0 ? ` (giữ nguyên ${skippedCount} bản ghi bất biến/đã tồn tại)` : ''
-        }.`,
+        stagedSnapshotsCount,
+        message: finalMsg,
       };
     } catch (err: any) {
+      const errMsg = `Lỗi khôi phục: ${err?.message || 'Tệp sao lưu không hợp lệ'}`;
+      report({
+        phase: 'error',
+        phaseLabel: 'Khôi phục thất bại',
+        processedCollections: 0,
+        totalCollections: 0,
+        processedRecords: 0,
+        totalRecords: 0,
+        restoredCount: 0,
+        skippedCount: 0,
+        stagedSnapshotsCount: 0,
+        percent: 0,
+        message: errMsg,
+      });
       return {
         success: false,
-        message: `Lỗi khôi phục: ${err?.message || 'Tệp sao lưu không hợp lệ'}`,
+        message: errMsg,
       };
     }
   }
@@ -1366,13 +1783,21 @@ export class BackupService {
     githubConfig: GitHubConfig,
     filePath: string,
     userEmail?: string,
-    selectedCollections?: string[]
+    selectedCollections?: string[],
+    options?: {
+      onProgress?: (progress: RestoreProgressInfo) => void;
+    }
   ): Promise<{ success: boolean; message: string; isBase64?: boolean; totalRecords?: number }> {
     const fetchRes = await GitHubService.fetchFileText(githubConfig, filePath);
     if (!fetchRes.success || !fetchRes.content) {
       return { success: false, message: fetchRes.error || 'Không tải được bản sao lưu từ GitHub' };
     }
-    const restoreRes = await this.restoreFromBackup(fetchRes.content, userEmail, selectedCollections);
+    const restoreRes = await this.restoreFromBackup(
+      fetchRes.content,
+      userEmail,
+      selectedCollections,
+      options
+    );
     return restoreRes;
   }
 }

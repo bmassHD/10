@@ -167,17 +167,18 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                     <Phone className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                     <div>
                       <div>
-                        <span className="text-slate-500">Cấp cứu 24/7: </span>
+                        <span className="text-slate-500">Cấp cứu 24/7 (Tuyến trên): </span>
                         <a
                           href={`tel:${ec.phone}`}
                           className="font-bold text-rose-600 hover:underline tabular-nums"
+                          title={ec.note ? `Bệnh viện: ${ec.note}` : 'Cấp cứu tuyến trên'}
                         >
                           {ec.phone}
                         </a>
                       </div>
                       {ec.note && (
-                        <p className="text-xs text-rose-600/90 dark:text-rose-400 mt-0.5">
-                          {ec.note}
+                        <p className="text-xs text-rose-600/90 dark:text-rose-400 mt-0.5 font-medium">
+                          Bệnh viện tiếp nhận: {ec.note}
                         </p>
                       )}
                     </div>
@@ -217,7 +218,7 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
 
                 <li className="flex items-start gap-2.5">
                   <Clock className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                  <span>{settings.workingHours || '7:30 - 17:00 (Trực cấp cứu 24/7)'}</span>
+                  <span>{settings.workingHours || 'Sáng: 07:00 - 11:00 · Chiều: 13:00 - 17:00 (Trực cấp cứu 24/7)'}</span>
                 </li>
               </ul>
             )}

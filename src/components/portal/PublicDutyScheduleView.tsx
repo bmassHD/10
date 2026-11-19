@@ -7,6 +7,7 @@ import {
   Clock,
   Phone,
   User,
+  Users,
   Download,
   Upload,
   Search,
@@ -24,11 +25,13 @@ import {
   Settings2,
   UserCheck,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { handleFirestoreError, OperationType } from '../../firebase/errorHandler';
-import { WorkSchedule, SystemSettings, HolidayScheduleItem } from '../../types';
+import { WorkSchedule, SystemSettings, HolidayScheduleItem, AttendanceStatus, AttendanceRecord } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import {
@@ -49,17 +52,23 @@ import {
   formatHolidayDateRange,
   isHolidayHappeningOnDate,
   emptySystemSettings,
+  ATTENDANCE_STATUS_META,
+  buildAttendanceRecordId,
+  upsertAttendanceRecord,
+  batchApplyAttendanceRecords,
+  deleteAttendanceRecord,
 } from '../../services/firebaseService';
 import { CardSkeleton } from '../common/SkeletonLoader';
 import { RevealOnScroll } from '../common/RevealOnScroll';
 import { WorkAndHolidaySetupManager } from '../admin/WorkAndHolidaySetupManager';
+import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 
 interface PublicDutyScheduleViewProps {
   settings?: SystemSettings;
   onPreviewHoliday?: (holiday: HolidayScheduleItem) => void;
 }
 
-type DutyViewTab = 'daily' | 'weekly' | 'monthly' | 'holidays' | 'setup';
+type DutyViewTab = 'daily' | 'weekly' | 'monthly' | 'holidays' | 'personnel_timesheet' | 'setup';
 type ScheduleCategoryFilter = 'all' | 'duty' | 'work';
 
 const SCHEDULE_TYPE_META: Record<
@@ -217,6 +226,11 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
 
   const [activeTab, setActiveTab] = useState<DutyViewTab>('monthly');
   const [schedules, setSchedules] = useState<WorkSchedule[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [selectedAttendanceDate, setSelectedAttendanceDate] = useState<string>(() => getVietnamNowInfo().dateKey);
+  const [quickAttendanceStatus, setQuickAttendanceStatus] = useState<AttendanceStatus>('co_quan');
+  const [quickAttendanceNote, setQuickAttendanceNote] = useState<string>('');
+  const [attendanceSaving, setAttendanceSaving] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<ScheduleCategoryFilter>('all');
@@ -227,6 +241,7 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
 
   const [monthlyYear, setMonthlyYear] = useState<number>(() => new Date().getFullYear());
   const [monthlyMonth, setMonthlyMonth] = useState<number>(() => new Date().getMonth());
+  const [selectedMonthlyDate, setSelectedMonthlyDate] = useState<string | null>(null);
 
   const monthlyCalendarDays = useMemo(() => {
     const firstDayOfMonth = new Date(monthlyYear, monthlyMonth, 1);
@@ -361,6 +376,163 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
     );
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'attendanceRecords'),
+      snap => {
+        setAttendanceRecords(snap.docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord)));
+      },
+      err => {
+        console.warn('attendanceRecords snapshot warning:', err);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  const attendanceWeekDays = useMemo(() => {
+    const baseStr = /^\d{4}-\d{2}-\d{2}$/.test(selectedAttendanceDate)
+      ? selectedAttendanceDate
+      : nowInfo.dateKey;
+    const [y, m, d] = baseStr.split('-').map(Number);
+    const anchor = new Date(y, (m || 1) - 1, d || 1);
+    const dayOfWeek = anchor.getDay(); // 0 = Sun
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(anchor);
+    monday.setDate(anchor.getDate() + mondayOffset);
+
+    const labels = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật'];
+    return labels.map((label, idx) => {
+      const cellDate = new Date(monday);
+      cellDate.setDate(monday.getDate() + idx);
+      const yyyy = cellDate.getFullYear();
+      const mm = String(cellDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(cellDate.getDate()).padStart(2, '0');
+      return {
+        label,
+        shortDate: `${dd}/${mm}`,
+        dateKey: `${yyyy}-${mm}-${dd}`,
+      };
+    });
+  }, [selectedAttendanceDate, nowInfo.dateKey]);
+
+  const attendanceMap = useMemo(() => {
+    const map = new Map<string, AttendanceRecord>();
+    attendanceRecords.forEach(rec => {
+      if (rec.id) map.set(rec.id, rec);
+      if (rec.date && rec.staffId) {
+        map.set(buildAttendanceRecordId(rec.date, rec.staffId), rec);
+      }
+    });
+    return map;
+  }, [attendanceRecords]);
+
+  const staffRows = useMemo(() => {
+    const org = settings?.orgChart;
+    const rows: Array<{
+      id: string;
+      name: string;
+      position: string;
+      title: string;
+      dept: string;
+      phone?: string;
+    }> = [];
+
+    if (org?.director && org.director.fullName) {
+      rows.push({
+        id: org.director.id || 'dir',
+        name: org.director.fullName,
+        position: org.director.position || 'Giám đốc',
+        title: org.director.professionalTitle || 'Bác sĩ CKII',
+        dept: 'Ban Giám đốc',
+        phone: org.director.phone,
+      });
+    }
+    (org?.deputyDirectors || []).forEach((dd, idx) => {
+      if (dd.fullName) {
+        rows.push({
+          id: dd.id || `dd_${idx}`,
+          name: dd.fullName,
+          position: dd.position || 'Phó Giám đốc',
+          title: dd.professionalTitle || 'Bác sĩ CKI',
+          dept: 'Ban Giám đốc',
+          phone: dd.phone,
+        });
+      }
+    });
+    (org?.departments || []).forEach(d => {
+      if (d.head?.fullName) {
+        rows.push({
+          id: d.head.id || `head_${d.id}`,
+          name: d.head.fullName,
+          position: d.head.position || 'Trưởng khoa',
+          title: d.head.professionalTitle || 'Bác sĩ / Y sĩ',
+          dept: d.name,
+          phone: d.head.phone,
+        });
+      }
+      (d.deputies || []).forEach((dep, idx) => {
+        if (dep.fullName) {
+          rows.push({
+            id: dep.id || `dep_${d.id}_${idx}`,
+            name: dep.fullName,
+            position: dep.position || 'Phó khoa',
+            title: dep.professionalTitle || 'Bác sĩ / Điều dưỡng',
+            dept: d.name,
+            phone: dep.phone,
+          });
+        }
+      });
+      (d.staff || []).forEach((st, idx) => {
+        if (st.fullName) {
+          rows.push({
+            id: st.id || `staff_${d.id}_${idx}`,
+            name: st.fullName,
+            position: st.position || 'Nhân viên',
+            title: st.professionalTitle || 'Cán bộ y tế',
+            dept: d.name,
+            phone: st.phone,
+          });
+        }
+      });
+    });
+
+    return rows;
+  }, [settings?.orgChart]);
+
+  const attendanceByDateMap = useMemo(() => {
+    const byDate = new Map<
+      string,
+      {
+        co_quan: AttendanceRecord[];
+        truc: AttendanceRecord[];
+        ra_truc: AttendanceRecord[];
+        nghi: AttendanceRecord[];
+        all: AttendanceRecord[];
+      }
+    >();
+
+    const seenKeys = new Set<string>();
+    attendanceRecords.forEach(rec => {
+      if (!rec.date) return;
+      const dedupeKey = `${rec.date}::${rec.staffId || rec.id}`;
+      if (seenKeys.has(dedupeKey)) return;
+      seenKeys.add(dedupeKey);
+
+      let bucket = byDate.get(rec.date);
+      if (!bucket) {
+        bucket = { co_quan: [], truc: [], ra_truc: [], nghi: [], all: [] };
+        byDate.set(rec.date, bucket);
+      }
+      bucket.all.push(rec);
+      if (rec.status === 'co_quan') bucket.co_quan.push(rec);
+      else if (rec.status === 'truc') bucket.truc.push(rec);
+      else if (rec.status === 'ra_truc') bucket.ra_truc.push(rec);
+      else if (rec.status === 'nghi') bucket.nghi.push(rec);
+    });
+
+    return byDate;
+  }, [attendanceRecords]);
 
   const holidaysOnSelectedDate = useMemo(() => {
     if (!filterDate) return [];
@@ -566,7 +738,7 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
         Nhan_Su_Khac: 'Tổ Khám bệnh',
         So_Dien_Thoai: stationLocations[0]?.phone || '028xxxxxxx',
         Dia_Diem: stationLocations[0]?.name || 'Trụ sở chính Trạm Y tế',
-        Ghi_Chu: '07:30 - 11:30',
+        Ghi_Chu: '07:00 - 11:00',
       },
     ];
 
@@ -784,9 +956,10 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                       key={ec.id}
                       href={`tel:${ec.phone}`}
                       className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-700 dark:text-rose-300 whitespace-nowrap tabular-nums hover:underline"
+                      title={ec.note ? `Cấp cứu 24/7 (Tuyến trên): ${ec.note}` : 'Cấp cứu 24/7 (Tuyến trên)'}
                     >
                       <Phone className="w-3.5 h-3.5 shrink-0" />
-                      <span>Cấp cứu 24/7: {ec.phone}</span>
+                      <span>Cấp cứu 24/7 ({ec.note || 'Tuyến trên'}): {ec.phone}</span>
                     </a>
                   ))}
                 </div>
@@ -1060,82 +1233,100 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
             </div>
           )}
 
-          {/* Unified Navigation Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pt-1 border-t border-slate-100 dark:border-slate-800">
-            <button
-              type="button"
-              onClick={() => setActiveTab('monthly')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 border ${
-                activeTab === 'monthly'
-                  ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                  : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
-              <span>Lịch làm việc Tháng</span>
-            </button>
+          {/* Unified Navigation Tabs — Symmetrical Mobile Grid (Even 2xN, Odd trailing = col-span-2) */}
+          {(() => {
+            const tabCount = isAdmin ? 6 : 5;
+            return (
+              <div className={`${getBalancedMobileGridClass(tabCount)} pt-2 border-t border-slate-100 dark:border-slate-800`}>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('monthly')}
+                  className={`${getBalancedMobileItemSpan(0, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                    activeTab === 'monthly'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Lịch Tháng</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab('daily')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 border ${
-                activeTab === 'daily'
-                  ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                  : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5 shrink-0" />
-              <span>Lịch trực 24/7 &amp; Công tác ngày</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('daily')}
+                  className={`${getBalancedMobileItemSpan(1, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                    activeTab === 'daily'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Trực 24/7 &amp; Ngày</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab('weekly')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 border ${
-                activeTab === 'weekly'
-                  ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                  : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5 shrink-0" />
-              <span>Lịch làm việc tuần</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('weekly')}
+                  className={`${getBalancedMobileItemSpan(2, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                    activeTab === 'weekly'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Lịch Tuần</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab('holidays')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 border ${
-                activeTab === 'holidays'
-                  ? activeHolidaysCountToday > 0
-                    ? 'bg-rose-700 text-white border-rose-700 shadow-xs'
-                    : 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                  : activeHolidaysCountToday > 0
-                  ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800 hover:bg-rose-100/70'
-                  : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <CalendarOff className="w-3.5 h-3.5 shrink-0" />
-              <span>
-                Lịch nghỉ lễ ({sortedHolidays.length})
-                {activeHolidaysCountToday > 0 ? ' · Đang nghỉ' : ''}
-              </span>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('holidays')}
+                  className={`${getBalancedMobileItemSpan(3, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                    activeTab === 'holidays'
+                      ? activeHolidaysCountToday > 0
+                        ? 'bg-rose-700 text-white border-rose-700 shadow-xs'
+                        : 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : activeHolidaysCountToday > 0
+                      ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800 hover:bg-rose-100/70'
+                      : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <CalendarOff className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    Nghỉ lễ ({sortedHolidays.length})
+                    {activeHolidaysCountToday > 0 ? ' · Nghỉ' : ''}
+                  </span>
+                </button>
 
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('setup')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 border ${
-                  activeTab === 'setup'
-                    ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-slate-100 shadow-xs'
-                    : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <Settings2 className="w-3.5 h-3.5 shrink-0" />
-                <span>Thiết lập (Admin)</span>
-              </button>
-            )}
-          </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('personnel_timesheet')}
+                  className={`${getBalancedMobileItemSpan(4, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                    activeTab === 'personnel_timesheet'
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Chấm công nhân sự</span>
+                </button>
+
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('setup')}
+                    className={`${getBalancedMobileItemSpan(5, tabCount)} min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold transition inline-flex items-center justify-center sm:justify-start gap-1.5 whitespace-nowrap cursor-pointer border ${
+                      activeTab === 'setup'
+                        ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-slate-100 shadow-xs'
+                        : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <Settings2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">Thiết lập (Admin)</span>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </RevealOnScroll>
 
@@ -1471,7 +1662,10 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1 align-middle" /> Ngày nghỉ / cuối tuần (chấm đỏ) • 
-                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 ml-2 mr-1 align-middle" /> Ngày lễ (chấm vàng)
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 ml-2 mr-1 align-middle" /> Ngày lễ (chấm vàng) •{' '}
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                    Bấm vào bất kỳ ngày nào để đối chiếu Bảng chấm công (đi làm, trực, ra trực, xin nghỉ)
+                  </span>
                 </p>
               </div>
 
@@ -1535,21 +1729,26 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
               <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-200 dark:divide-slate-800">
                 {monthlyCalendarDays.map((cell, idx) => {
                   const isToday = cell.dateKey === nowInfo.dateKey;
+                  const isSelected = cell.dateKey === selectedMonthlyDate;
                   const isWeekendCell = cell.isWeekend;
+                  const dayAttendance = attendanceByDateMap.get(cell.dateKey);
                   return (
                     <div
                       key={`m_cell_${idx}`}
-                      onClick={() => {
-                        setFilterDate(cell.dateKey);
-                        setActiveTab('daily');
-                      }}
-                      className={`min-h-[110px] p-2.5 flex flex-col justify-between transition cursor-pointer group hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 ${
+                      onClick={() => setSelectedMonthlyDate(cell.dateKey)}
+                      className={`min-h-[115px] p-2 sm:p-2.5 flex flex-col justify-between transition cursor-pointer group hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 ${
                         !cell.isCurrentMonth
                           ? 'bg-slate-50/50 dark:bg-slate-950/40 text-slate-400 dark:text-slate-600'
                           : isWeekendCell
                           ? 'bg-slate-100/70 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
                           : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200'
-                      } ${isToday ? 'ring-2 ring-emerald-500 inset-0 z-10 font-bold' : ''}`}
+                      } ${
+                        isSelected
+                          ? 'ring-2 ring-teal-600 inset-0 z-10 bg-teal-50/40 dark:bg-teal-950/30'
+                          : isToday
+                          ? 'ring-2 ring-emerald-500 inset-0 z-10 font-bold'
+                          : ''
+                      }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className={`text-xs font-extrabold ${isToday ? 'w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs' : ''}`}>
@@ -1557,6 +1756,14 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                         </span>
 
                         <div className="flex items-center gap-1">
+                          {dayAttendance && dayAttendance.all.length > 0 && (
+                            <span
+                              className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 text-[9px] font-bold tabular-nums"
+                              title={`Đã chấm công ${dayAttendance.all.length} nhân sự`}
+                            >
+                              CC: {dayAttendance.all.length}
+                            </span>
+                          )}
                           {cell.isHoliday && (
                             <span className="w-2 h-2 rounded-full bg-amber-400 ring-2 ring-amber-200 dark:ring-amber-900" title="Ngày lễ (Chấm vàng)" />
                           )}
@@ -1579,6 +1786,31 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                         {cell.daySchedules.length > 2 && (
                           <div className="text-[10px] text-slate-400 font-medium pl-0.5">
                             +{cell.daySchedules.length - 2} ca khác
+                          </div>
+                        )}
+
+                        {dayAttendance && dayAttendance.all.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {dayAttendance.co_quan.length > 0 && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/60 tabular-nums">
+                                Làm:{dayAttendance.co_quan.length}
+                              </span>
+                            )}
+                            {dayAttendance.truc.length > 0 && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200/70 dark:border-rose-800/60 tabular-nums">
+                                Trực:{dayAttendance.truc.length}
+                              </span>
+                            )}
+                            {dayAttendance.ra_truc.length > 0 && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200/70 dark:border-amber-800/60 tabular-nums">
+                                Ra:{dayAttendance.ra_truc.length}
+                              </span>
+                            )}
+                            {dayAttendance.nghi.length > 0 && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums">
+                                Nghỉ:{dayAttendance.nghi.length}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1617,15 +1849,15 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
             </div>
 
             <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-              <table className="w-full text-left text-xs sm:text-sm border-collapse min-w-[680px]">
+              <table className="w-full text-left text-xs sm:text-sm border-collapse min-w-max">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-800">
                     <th className="p-3.5 whitespace-nowrap">Ngày trong tuần</th>
                     <th className="p-3.5 whitespace-nowrap">Hoạt động hành chính</th>
                     <th className="p-3.5 whitespace-nowrap">Buổi sáng</th>
                     <th className="p-3.5 whitespace-nowrap">Buổi chiều</th>
-                    <th className="p-3.5">Bộ phận tiếp nhận</th>
-                    <th className="p-3.5">Trực 24/7 / Ghi chú</th>
+                    <th className="p-3.5 whitespace-nowrap">Bộ phận tiếp nhận</th>
+                    <th className="p-3.5 whitespace-nowrap">Trực 24/7 / Ghi chú</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1645,11 +1877,11 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                         }
                       >
                         <td className="p-3.5 font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 whitespace-nowrap">
                             <span>{day.label}</span>
                             {isToday && (
                               <span
-                                className={`text-[11px] font-bold ${
+                                className={`text-[11px] font-bold whitespace-nowrap ${
                                   isHolidayToday
                                     ? 'text-rose-700 dark:text-rose-400'
                                     : 'text-emerald-700 dark:text-emerald-400'
@@ -1662,11 +1894,11 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                         </td>
                         <td className="p-3.5 whitespace-nowrap">
                           {day.isWorking ? (
-                            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                            <span className="font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
                               Làm việc
                             </span>
                           ) : (
-                            <span className="font-semibold text-slate-500">Nghỉ hành chính</span>
+                            <span className="font-semibold text-slate-500 whitespace-nowrap">Nghỉ hành chính</span>
                           )}
                         </td>
                         <td className="p-3.5 font-mono text-slate-700 dark:text-slate-200 tabular-nums whitespace-nowrap">
@@ -1675,10 +1907,10 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
                         <td className="p-3.5 font-mono text-slate-700 dark:text-slate-200 tabular-nums whitespace-nowrap">
                           {day.isWorking ? day.afternoonHours || '—' : '—'}
                         </td>
-                        <td className="p-3.5 text-slate-700 dark:text-slate-200">
+                        <td className="p-3.5 text-slate-700 dark:text-slate-200 whitespace-nowrap">
                           {day.departmentsSummary || '—'}
                         </td>
-                        <td className="p-3.5 text-slate-500 dark:text-slate-400">
+                        <td className="p-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                           {day.notes || 'Thường trực cấp cứu 24/24'}
                         </td>
                       </tr>
@@ -2003,6 +2235,340 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
         </RevealOnScroll>
       )}
 
+      {activeTab === 'personnel_timesheet' && (() => {
+
+        const handleCellToggleAttendance = async (
+          staff: { id: string; name: string; position: string; dept: string },
+          dateKey: string,
+          existing?: AttendanceRecord
+        ) => {
+          if (!canEditSchedule || attendanceSaving) return;
+          setAttendanceSaving(true);
+          try {
+            if (existing && existing.status === quickAttendanceStatus && !quickAttendanceNote.trim()) {
+              await deleteAttendanceRecord(dateKey, staff.id);
+              showToast('info', 'Đã xóa chấm công', `${staff.name} · ${formatIsoDateVN(dateKey)}`);
+            } else {
+              await upsertAttendanceRecord({
+                date: dateKey,
+                staffId: staff.id,
+                staffName: staff.name,
+                department: staff.dept,
+                position: staff.position,
+                status: quickAttendanceStatus,
+                note: quickAttendanceNote.trim() || undefined,
+                updatedByUid: currentUser?.uid || '',
+                updatedByName: userProfile?.displayName || 'Cán bộ quản lý',
+              });
+              showToast(
+                'success',
+                `Đã chấm: ${ATTENDANCE_STATUS_META[quickAttendanceStatus].label}`,
+                `${staff.name} · ${formatIsoDateVN(dateKey)}`
+              );
+            }
+          } catch (err: any) {
+            showToast('error', 'Không thể cập nhật chấm công', err?.message);
+          } finally {
+            setAttendanceSaving(false);
+          }
+        };
+
+        const handleBatchApplyAttendance = async (overwriteAll: boolean) => {
+          if (!canEditSchedule || attendanceSaving || staffRows.length === 0) return;
+          const targetDate = /^\d{4}-\d{2}-\d{2}$/.test(selectedAttendanceDate)
+            ? selectedAttendanceDate
+            : nowInfo.dateKey;
+          const targets = overwriteAll
+            ? staffRows
+            : staffRows.filter(st => !attendanceMap.has(buildAttendanceRecordId(targetDate, st.id)));
+
+          if (targets.length === 0) {
+            showToast('info', 'Tất cả nhân sự đã được chấm công ngày này', 'Bạn có thể bấm vào từng ô để đổi trạng thái hoặc chọn Ghi đè.');
+            return;
+          }
+
+          const runBatchApply = async () => {
+            setAttendanceSaving(true);
+            try {
+              const count = await batchApplyAttendanceRecords(
+                targets.map(st => ({
+                  date: targetDate,
+                  staffId: st.id,
+                  staffName: st.name,
+                  department: st.dept,
+                  position: st.position,
+                  status: quickAttendanceStatus,
+                  note: quickAttendanceNote.trim() || undefined,
+                  updatedByUid: currentUser?.uid || '',
+                  updatedByName: userProfile?.displayName || 'Cán bộ quản lý',
+                }))
+              );
+              await logAuditEvent(
+                'Chấm công nhanh nhân sự',
+                'Bảng chấm công',
+                `${targetDate} · ${ATTENDANCE_STATUS_META[quickAttendanceStatus].label} (${count} nhân sự)`,
+                {
+                  uid: currentUser?.uid || 'staff',
+                  name: userProfile?.displayName || 'Cán bộ',
+                }
+              );
+              showToast(
+                'success',
+                `Đã chấm công ${count} nhân sự`,
+                `${formatIsoDateVN(targetDate)} · ${ATTENDANCE_STATUS_META[quickAttendanceStatus].label}`
+              );
+            } catch (err: any) {
+              showToast('error', 'Không thể chấm công hàng loạt', err?.message);
+            } finally {
+              setAttendanceSaving(false);
+            }
+          };
+
+          if (overwriteAll) {
+            showConfirm({
+              title: 'Ghi đè chấm công toàn bộ nhân sự?',
+              message: `Áp dụng trạng thái "${ATTENDANCE_STATUS_META[quickAttendanceStatus].label}" cho tất cả ${targets.length} nhân sự trong ngày ${formatIsoDateVN(targetDate)}?`,
+              confirmText: 'Xác nhận ghi đè',
+              isDangerous: true,
+              onConfirm: runBatchApply,
+            });
+            return;
+          }
+
+          await runBatchApply();
+        };
+
+        return (
+          <RevealOnScroll title="Lịch làm việc cơ quan (Bảng chấm công nhân sự)">
+            <div className="p-4 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4 sm:space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
+                    Lịch Làm Việc Cơ Quan &amp; Chấm Công
+                  </h3>
+                  <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Dữ liệu chấm công thực tế theo từng ngày (không dùng dữ liệu mặc định). Ô chưa chấm công hiển thị “— Chưa chấm”.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                    <span>Tuần chứa ngày:</span>
+                    <input
+                      type="date"
+                      value={selectedAttendanceDate}
+                      onChange={e => setSelectedAttendanceDate(e.target.value || nowInfo.dateKey)}
+                      className="bg-transparent font-bold text-emerald-700 dark:text-emerald-400 focus:outline-none cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 tabular-nums whitespace-nowrap">
+                    Tổng số: {staffRows.length} nhân sự
+                  </span>
+                </div>
+              </div>
+
+              {/* Semi-automatic Quick Attendance Setup Bar for Staff/Admin */}
+              {canEditSchedule && (
+                <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-3">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Cấu Hình Chấm Công Nhanh</span>
+                      </div>
+                      <p className="hidden sm:block text-[11px] text-slate-500 dark:text-slate-400">
+                        Chọn trạng thái và ngày mục tiêu bên dưới, sau đó bấm <strong>Áp dụng cho nhân sự chưa chấm</strong> hoặc bấm trực tiếp vào từng ô Thứ Hai – Chủ Nhật để chấm / bỏ chấm nhanh.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAttendanceDate(nowInfo.dateKey)}
+                        className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 cursor-pointer whitespace-nowrap"
+                      >
+                        Về hôm nay ({formatIsoDateVN(nowInfo.dateKey)})
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+                      {(['co_quan', 'truc', 'ra_truc', 'nghi'] as AttendanceStatus[]).map(statusKey => {
+                        const meta = ATTENDANCE_STATUS_META[statusKey];
+                        const active = quickAttendanceStatus === statusKey;
+                        return (
+                          <button
+                            key={statusKey}
+                            type="button"
+                            onClick={() => setQuickAttendanceStatus(statusKey)}
+                            className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer whitespace-nowrap text-center ${
+                              active
+                                ? meta.buttonActiveClass
+                                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            {meta.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <input
+                        type="text"
+                        value={quickAttendanceNote}
+                        onChange={e => setQuickAttendanceNote(e.target.value)}
+                        placeholder="Ghi chú kèm theo (tuỳ chọn)..."
+                        className="flex-1 min-h-[40px] px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+
+                      <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={attendanceSaving || staffRows.length === 0}
+                          onClick={() => handleBatchApplyAttendance(false)}
+                          className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-bold cursor-pointer whitespace-nowrap text-center"
+                        >
+                          {attendanceSaving ? 'Đang lưu...' : `Chấm (${formatIsoDateVN(selectedAttendanceDate)})`}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={attendanceSaving || staffRows.length === 0}
+                          onClick={() => handleBatchApplyAttendance(true)}
+                          className="min-h-[40px] px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-50 disabled:opacity-50 text-xs font-bold cursor-pointer whitespace-nowrap text-center"
+                        >
+                          Ghi đè cả ngày
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-xs sm:text-sm border-collapse min-w-max">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-800">
+                      <th className="p-3.5 whitespace-nowrap">Họ và tên</th>
+                      <th className="p-3.5 whitespace-nowrap">Chức vụ &amp; Khoa phòng</th>
+                      <th className="p-3.5 whitespace-nowrap">Chức danh chuyên môn</th>
+                      {attendanceWeekDays.map(dayCol => {
+                        const isTargetDay = dayCol.dateKey === selectedAttendanceDate;
+                        const isTodayCol = dayCol.dateKey === nowInfo.dateKey;
+                        return (
+                          <th
+                            key={dayCol.dateKey}
+                            className={`p-3.5 whitespace-nowrap ${
+                              isTargetDay
+                                ? 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
+                                : ''
+                            }`}
+                          >
+                            <div className="flex flex-col">
+                              <span>{dayCol.label}</span>
+                              <span className="text-[11px] font-mono font-normal opacity-80 tabular-nums">
+                                {dayCol.shortDate}{isTodayCol ? ' · Hôm nay' : ''}
+                              </span>
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {staffRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="p-8 text-center text-slate-500">
+                          Chưa có dữ liệu nhân sự trong Sơ đồ tổ chức. Quản trị viên vui lòng cập nhật Sơ đồ tổ chức hoặc Nhân lực.
+                        </td>
+                      </tr>
+                    ) : (
+                      staffRows.map(staff => (
+                        <tr key={staff.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                          <td className="p-3.5 font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                            <div className="space-y-0.5">
+                              <div>{staff.name}</div>
+                              {staff.phone && (
+                                <a
+                                  href={`tel:${staff.phone}`}
+                                  className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 hover:underline block"
+                                >
+                                  {staff.phone}
+                                </a>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3.5 whitespace-nowrap">
+                            <div className="space-y-0.5">
+                              <span className="font-semibold text-emerald-800 dark:text-emerald-300 block">
+                                {staff.position}
+                              </span>
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                                {staff.dept}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="p-3.5 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {staff.title || 'Cán bộ y tế'}
+                          </td>
+                          {attendanceWeekDays.map(dayCol => {
+                            const rec = attendanceMap.get(buildAttendanceRecordId(dayCol.dateKey, staff.id));
+                            const meta = rec ? ATTENDANCE_STATUS_META[rec.status] : null;
+                            const isTargetDay = dayCol.dateKey === selectedAttendanceDate;
+                            return (
+                              <td
+                                key={dayCol.dateKey}
+                                className={`p-2.5 whitespace-nowrap ${
+                                  isTargetDay ? 'bg-emerald-50/35 dark:bg-emerald-950/15' : ''
+                                }`}
+                              >
+                                {canEditSchedule ? (
+                                  <button
+                                    type="button"
+                                    disabled={attendanceSaving}
+                                    onClick={() => handleCellToggleAttendance(staff, dayCol.dateKey, rec)}
+                                    title={
+                                      rec
+                                        ? `${meta?.label}${rec.note ? ` · ${rec.note}` : ''} (Bấm để đổi sang "${ATTENDANCE_STATUS_META[quickAttendanceStatus].label}" hoặc bấm lần nữa để xóa)`
+                                        : `Bấm để chấm "${ATTENDANCE_STATUS_META[quickAttendanceStatus].label}"`
+                                    }
+                                    className={`w-full text-left px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
+                                      meta
+                                        ? meta.badgeClass
+                                        : 'border-dashed border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:border-emerald-400 hover:text-emerald-700'
+                                    }`}
+                                  >
+                                    <div>{meta ? meta.label : '— Chưa chấm'}</div>
+                                    {rec?.note && (
+                                      <div className="text-[10px] opacity-80 truncate max-w-[130px]">{rec.note}</div>
+                                    )}
+                                  </button>
+                                ) : meta ? (
+                                  <div className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold whitespace-nowrap ${meta.badgeClass}`}>
+                                    <div>{meta.label}</div>
+                                    {rec?.note && (
+                                      <div className="text-[10px] opacity-80 truncate max-w-[130px]">{rec.note}</div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400 dark:text-slate-500 italic whitespace-nowrap">
+                                    — Chưa chấm
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </RevealOnScroll>
+        );
+      })()}
+
       {/* TAB 4: ADMIN SETUP WORK SCHEDULE & HOLIDAYS */}
       {activeTab === 'setup' && isAdmin && (
         <WorkAndHolidaySetupManager
@@ -2272,6 +2838,416 @@ export const PublicDutyScheduleView: React.FC<PublicDutyScheduleViewProps> = ({
           </div>
         </div>
       )}
+      {/* Monthly Date Cross-Reference Modal (Lịch tháng <-> Bảng chấm công & Lịch trực) */}
+      {selectedMonthlyDate && (() => {
+        const [yy, mm, dd] = selectedMonthlyDate.split('-').map(Number);
+        const dateObj = new Date(yy || 2025, (mm || 1) - 1, dd || 1);
+        const weekdayNames = [
+          'Chủ Nhật',
+          'Thứ Hai',
+          'Thứ Ba',
+          'Thứ Tư',
+          'Thứ Năm',
+          'Thứ Sáu',
+          'Thứ Bảy',
+        ];
+        const dayOfWeek = dateObj.getDay() as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+        const weekdayLabel = weekdayNames[dayOfWeek] || '';
+        const dayWorkCfg = (weeklyWorkConfig.weeklyDays || []).find(w => w.dayOfWeek === dayOfWeek);
+        const dayHolidays = (settings?.holidaySchedules || []).filter(
+          h => h.isActive !== false && isHolidayHappeningOnDate(h, selectedMonthlyDate)
+        );
+        const daySchedules = schedules.filter(s => s.date === selectedMonthlyDate);
+
+        // Build canonical attendance list for this date merging attendanceRecords & staffRows
+        const staffById = new Map(staffRows.map(s => [s.id, s]));
+        const bucket = attendanceByDateMap.get(selectedMonthlyDate) || {
+          co_quan: [],
+          truc: [],
+          ra_truc: [],
+          nghi: [],
+          all: [],
+        };
+
+        // Also check any staffRow resolved via attendanceMap (in case staffId normalization matched)
+        const recordedStaffIds = new Set<string>(bucket.all.map(r => r.staffId));
+        const extraCoQuan: AttendanceRecord[] = [...bucket.co_quan];
+        const extraTruc: AttendanceRecord[] = [...bucket.truc];
+        const extraRaTruc: AttendanceRecord[] = [...bucket.ra_truc];
+        const extraNghi: AttendanceRecord[] = [...bucket.nghi];
+
+        const unmarkedStaff: typeof staffRows = [];
+        staffRows.forEach(st => {
+          if (recordedStaffIds.has(st.id)) return;
+          const mappedRec = attendanceMap.get(buildAttendanceRecordId(selectedMonthlyDate, st.id));
+          if (mappedRec) {
+            recordedStaffIds.add(st.id);
+            if (mappedRec.status === 'co_quan') extraCoQuan.push(mappedRec);
+            else if (mappedRec.status === 'truc') extraTruc.push(mappedRec);
+            else if (mappedRec.status === 'ra_truc') extraRaTruc.push(mappedRec);
+            else if (mappedRec.status === 'nghi') extraNghi.push(mappedRec);
+          } else {
+            unmarkedStaff.push(st);
+          }
+        });
+
+        const shiftDateKey = (delta: number) => {
+          const next = new Date(yy, (mm || 1) - 1, (dd || 1) + delta);
+          const ny = next.getFullYear();
+          const nm = String(next.getMonth() + 1).padStart(2, '0');
+          const nd = String(next.getDate()).padStart(2, '0');
+          setSelectedMonthlyDate(`${ny}-${nm}-${nd}`);
+        };
+
+        const statusGroups: Array<{
+          key: AttendanceStatus;
+          title: string;
+          records: AttendanceRecord[];
+          cardClass: string;
+          headerClass: string;
+          emptyText: string;
+        }> = [
+          {
+            key: 'co_quan',
+            title: 'Đi làm cơ quan',
+            records: extraCoQuan,
+            cardClass: 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/40 dark:bg-emerald-950/20',
+            headerClass: 'text-emerald-800 dark:text-emerald-300',
+            emptyText: 'Chưa có nhân sự chấm công đi làm cơ quan.',
+          },
+          {
+            key: 'truc',
+            title: 'Đang trực 24/7',
+            records: extraTruc,
+            cardClass: 'border-rose-200 dark:border-rose-800/70 bg-rose-50/40 dark:bg-rose-950/20',
+            headerClass: 'text-rose-800 dark:text-rose-300',
+            emptyText: 'Chưa có nhân sự chấm công đang trực.',
+          },
+          {
+            key: 'ra_truc',
+            title: 'Ra trực',
+            records: extraRaTruc,
+            cardClass: 'border-amber-200 dark:border-amber-800/70 bg-amber-50/40 dark:bg-amber-950/20',
+            headerClass: 'text-amber-800 dark:text-amber-300',
+            emptyText: 'Không có nhân sự ra trực trong ngày này.',
+          },
+          {
+            key: 'nghi',
+            title: 'Xin nghỉ',
+            records: extraNghi,
+            cardClass: 'border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40',
+            headerClass: 'text-slate-700 dark:text-slate-200',
+            emptyText: 'Không có nhân sự xin nghỉ trong ngày này.',
+          },
+        ];
+
+        const totalMarked =
+          extraCoQuan.length + extraTruc.length + extraRaTruc.length + extraNghi.length;
+
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-slate-950/65 backdrop-blur-sm animate-in fade-in"
+            onClick={e => {
+              if (e.target === e.currentTarget) setSelectedMonthlyDate(null);
+            }}
+          >
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+              {/* Header */}
+              <div className="px-5 py-4 bg-gradient-to-r from-emerald-800 to-teal-800 text-white flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 rounded-xl bg-white/15 shrink-0">
+                    <CalendarCheck className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm sm:text-base font-extrabold text-white truncate">
+                      Đối Chiếu Chấm Công &amp; Lịch Trực · {weekdayLabel}, {formatIsoDateVN(selectedMonthlyDate)}
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-emerald-100 truncate">
+                      {dayHolidays.length > 0
+                        ? `Ngày nghỉ lễ: ${dayHolidays.map(h => h.name).join(', ')}`
+                        : dayWorkCfg?.isWorking
+                        ? `Giờ hành chính: Sáng ${dayWorkCfg.morningHours || '07:00 - 11:00'} · Chiều ${dayWorkCfg.afternoonHours || '13:00 - 17:00'}`
+                        : 'Nghỉ hành chính cuối tuần · Trực cấp cứu 24/7'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => shiftDateKey(-1)}
+                    className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                    title="Ngày hôm trước"
+                    aria-label="Ngày hôm trước"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => shiftDateKey(1)}
+                    className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                    title="Ngày hôm sau"
+                    aria-label="Ngày hôm sau"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMonthlyDate(null)}
+                    className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition cursor-pointer ml-1"
+                    aria-label="Đóng"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-5 sm:p-6 overflow-y-auto space-y-5 text-xs">
+                {/* Summary KPI Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 tabular-nums">
+                  <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+                    <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+                      Đi làm cơ quan
+                    </div>
+                    <div className="text-xl font-extrabold text-emerald-800 dark:text-emerald-200 mt-0.5">
+                      {extraCoQuan.length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800">
+                    <div className="text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                      Đang trực 24/7
+                    </div>
+                    <div className="text-xl font-extrabold text-rose-800 dark:text-rose-200 mt-0.5">
+                      {extraTruc.length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800">
+                    <div className="text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                      Ra trực
+                    </div>
+                    <div className="text-xl font-extrabold text-amber-800 dark:text-amber-200 mt-0.5">
+                      {extraRaTruc.length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
+                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                      Xin nghỉ
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-800 dark:text-slate-100 mt-0.5">
+                      {extraNghi.length}
+                    </div>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1 p-3 rounded-2xl bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700">
+                    <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Chưa chấm công
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-600 dark:text-slate-300 mt-0.5">
+                      {unmarkedStaff.length}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Attendance Groups 2x2 Grid */}
+                {totalMarked === 0 ? (
+                  <div className="p-5 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 text-center space-y-1.5">
+                    <Users className="w-7 h-7 text-slate-400 mx-auto" />
+                    <div className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                      Chưa có dữ liệu chấm công cho ngày {formatIsoDateVN(selectedMonthlyDate)}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {canEditSchedule
+                        ? 'Bạn có thể bấm "Mở Bảng chấm công tuần này" bên dưới để chấm trạng thái đi làm, trực, ra trực hoặc xin nghỉ cho nhân sự.'
+                        : 'Cán bộ quản lý chưa cập nhật bảng chấm công cho ngày này.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {statusGroups.map(group => {
+                      const meta = ATTENDANCE_STATUS_META[group.key];
+                      return (
+                        <div
+                          key={group.key}
+                          className={`p-4 rounded-2xl border space-y-2.5 ${group.cardClass}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className={`text-xs sm:text-sm font-extrabold ${group.headerClass}`}>
+                              {group.title}
+                            </h4>
+                            <span
+                              className={`px-2 py-0.5 rounded-md border text-[11px] font-bold tabular-nums ${meta.badgeClass}`}
+                            >
+                              {group.records.length} người
+                            </span>
+                          </div>
+
+                          {group.records.length === 0 ? (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                              {group.emptyText}
+                            </p>
+                          ) : (
+                            <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                              {group.records.map(rec => {
+                                const staffInfo = staffById.get(rec.staffId);
+                                const phone = staffInfo?.phone;
+                                return (
+                                  <div
+                                    key={rec.id || `${rec.date}_${rec.staffId}`}
+                                    className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 flex items-start justify-between gap-2"
+                                  >
+                                    <div className="min-w-0 space-y-0.5">
+                                      <div className="font-bold text-slate-900 dark:text-white truncate">
+                                        {rec.staffName || staffInfo?.name || 'Nhân sự'}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                        {[rec.position || staffInfo?.position, rec.department || staffInfo?.dept]
+                                          .filter(Boolean)
+                                          .join(' · ') || 'Cán bộ y tế'}
+                                      </div>
+                                      {rec.note && (
+                                        <div className="text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/70 px-2 py-1 rounded-lg mt-1">
+                                          Ghi chú: {rec.note}
+                                        </div>
+                                      )}
+                                    </div>
+                                    {phone && (
+                                      <a
+                                        href={`tel:${phone}`}
+                                        className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-mono text-[11px] font-bold hover:underline shrink-0 tabular-nums"
+                                      >
+                                        {phone}
+                                      </a>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Unmarked staff collapsible/compact list when some records exist */}
+                {unmarkedStaff.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-700 dark:text-slate-300">
+                        Nhân sự chưa chấm công ngày này ({unmarkedStaff.length})
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {unmarkedStaff.map(st => (
+                        <span
+                          key={st.id}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-300"
+                          title={`${st.position} · ${st.dept}`}
+                        >
+                          {st.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Duty & Work Schedules on this date for side-by-side comparison */}
+                <div className="p-4 rounded-2xl bg-white dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <CalendarClock className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Lịch trực 24/7 &amp; Công tác phân công trong ngày ({daySchedules.length} ca)</span>
+                    </h4>
+                  </div>
+
+                  {daySchedules.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                      Chưa có ca trực hoặc lịch công tác nào được tạo riêng cho ngày {formatIsoDateVN(selectedMonthlyDate)}.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {daySchedules.map(sch => (
+                        <div
+                          key={sch.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`text-[11px] font-bold ${
+                                SCHEDULE_TYPE_META[sch.type || 'duty']?.accentClass || 'text-rose-700'
+                              }`}
+                            >
+                              {SCHEDULE_TYPE_META[sch.type || 'duty']?.shortLabel || 'Trực 24/7'} ·{' '}
+                              {HOLIDAY_SHIFT_LABELS[sch.shift] || sch.shift}
+                            </span>
+                            {sch.phone && (
+                              <a
+                                href={`tel:${sch.phone}`}
+                                className="text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400 hover:underline tabular-nums"
+                              >
+                                {sch.phone}
+                              </a>
+                            )}
+                          </div>
+                          <div className="font-bold text-slate-900 dark:text-white">{sch.title}</div>
+                          <div className="text-[11px] text-slate-600 dark:text-slate-300">
+                            {[sch.doctorName, sch.nurseName, sch.staffNames].filter(Boolean).join(' · ') ||
+                              'Kíp trực Trạm Y tế'}
+                          </div>
+                          {sch.location && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Địa điểm: {sch.location}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMonthlyDate(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Đóng
+                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedAttendanceDate(selectedMonthlyDate);
+                      setSelectedMonthlyDate(null);
+                      setActiveTab('personnel_timesheet');
+                    }}
+                    className="px-3.5 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>Mở Bảng chấm công tuần này</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterDate(selectedMonthlyDate);
+                      setSelectedMonthlyDate(null);
+                      setActiveTab('daily');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <CalendarClock className="w-3.5 h-3.5" />
+                    <span>Xem Lịch trực 24/7 ngày này</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

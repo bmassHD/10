@@ -1,4 +1,15 @@
-import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  getClientSafeAgentConfig,
+  loadStoredAiConfig,
+  saveStoredAiConfig,
+  testProviderConnection,
+  executeAgentRequest,
+  AI_PROVIDERS_INFO,
+  AiProviderType,
+} from '../../src/server/aiAgentService';
 
 function safeParseJsonObject(rawText?: string): Record<string, any> | null {
   if (!rawText || typeof rawText !== 'string') return null;
@@ -25,82 +36,90 @@ function safeParseJsonObject(rawText?: string): Record<string, any> | null {
   }
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs = 12000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+const BOOTSTRAP_ADMIN_SET = new Set([
+  'sonlyhongduc@gmail.com',
+  'sonlyhongduc2003@gmail.com',
+  'tytvtd@gmail.com',
+  'bmassk3@gmail.com',
+]);
+
+function getFirebaseAppletCfg() {
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('Yêu cầu Gemini AI vượt quá thời gian chờ (timeout).')),
-          timeoutMs
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function isTransientError(err: any): boolean {
-  const status = Number(err?.status || err?.statusCode || err?.code);
-  if (status === 429 || status === 500 || status === 503 || status === 504) return true;
-  return /UNAVAILABLE|503|high demand|overloaded|ETIMEDOUT|ECONNRESET|fetch failed/i.test(
-    String(err?.message || err || '')
-  );
-}
-
-function formatGeminiError(err: any): { status: number; message: string } {
-  let rawMsg = String(err?.message || err || 'Lỗi kết nối Gemini AI.');
-  let parsedCode = Number(err?.status || err?.statusCode || err?.code);
-  try {
-    const parsed = JSON.parse(rawMsg);
-    if (parsed?.error?.message) rawMsg = String(parsed.error.message);
-    if (!parsedCode && parsed?.error?.code) parsedCode = Number(parsed.error.code);
-  } catch {
-    // keep rawMsg
-  }
-  if (/timeout|vượt quá thời gian/i.test(rawMsg)) {
-    return { status: 504, message: 'Yêu cầu Gemini AI vượt quá thời gian chờ. Vui lòng thử lại.' };
-  }
-  if (/API_KEY_INVALID|PERMISSION_DENIED/i.test(rawMsg) || parsedCode === 403) {
-    return {
-      status: 403,
-      message: 'GEMINI_API_KEY không hợp lệ hoặc chưa đủ quyền (kiểm tra Settings > Secrets).',
-    };
-  }
-  if (/RESOURCE_EXHAUSTED/i.test(rawMsg) || parsedCode === 429) {
-    return { status: 429, message: 'Đã vượt giới hạn lưu lượng Gemini API (429). Vui lòng thử lại sau.' };
-  }
-  if (/UNAVAILABLE|high demand/i.test(rawMsg) || parsedCode === 503) {
-    return {
-      status: 503,
-      message: 'Máy chủ Gemini AI đang cao tải tạm thời (503). Vui lòng thử lại sau ít giây.',
-    };
-  }
-  return { status: parsedCode >= 400 && parsedCode < 600 ? parsedCode : 502, message: rawMsg };
-}
-
-async function generateWithRetry(
-  ai: GoogleGenAI,
-  params: Parameters<GoogleGenAI['models']['generateContent']>[0],
-  timeoutMs = 12000
-) {
-  const delays = [500, 1200];
-  let lastErr: any;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      return await withTimeout(ai.models.generateContent(params), timeoutMs);
-    } catch (err: any) {
-      lastErr = err;
-      if (attempt < delays.length && isTransientError(err)) {
-        await new Promise(resolve => setTimeout(resolve, delays[attempt]));
-        continue;
-      }
-      throw err;
+    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      path.resolve(process.cwd(), 'firebase-applet-config.json'),
+      path.resolve(moduleDir, '..', '..', 'firebase-applet-config.json'),
+    ];
+    const cfgPath = candidates.find(p => fs.existsSync(p));
+    if (cfgPath) {
+      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
     }
+  } catch {
+    // ignore
   }
-  throw lastErr;
+  return {};
+}
+
+async function verifyAdminBearer(authHeader?: string): Promise<{ isAdmin: boolean; error?: string }> {
+  const token = String(authHeader || '').replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return { isAdmin: false, error: 'Thiếu mã xác thực Quản trị viên (Bearer token).' };
+  }
+  const fbCfg = getFirebaseAppletCfg();
+  if (!fbCfg?.apiKey) {
+    return { isAdmin: false, error: 'Không tìm thấy cấu hình Firebase API Key máy chủ.' };
+  }
+  try {
+    const resp = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(fbCfg.apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: token }),
+      }
+    );
+    if (!resp.ok) {
+      return { isAdmin: false, error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' };
+    }
+    const data = (await resp.json()) as { users?: Array<{ localId?: string; email?: string }> };
+    const user = data?.users?.[0];
+    if (!user?.localId) {
+      return { isAdmin: false, error: 'Không xác minh được danh tính tài khoản Firebase.' };
+    }
+    const email = String(user.email || '').trim().toLowerCase();
+    if (BOOTSTRAP_ADMIN_SET.has(email)) {
+      return { isAdmin: true };
+    }
+    if (fbCfg.projectId && fbCfg.firestoreDatabaseId) {
+      const adminUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        fbCfg.projectId
+      )}/databases/${encodeURIComponent(fbCfg.firestoreDatabaseId)}/documents/admins/${encodeURIComponent(
+        user.localId
+      )}`;
+      const adminResp = await fetch(adminUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (adminResp.ok) return { isAdmin: true };
+
+      const userUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        fbCfg.projectId
+      )}/databases/${encodeURIComponent(fbCfg.firestoreDatabaseId)}/documents/users/${encodeURIComponent(
+        user.localId
+      )}`;
+      const userResp = await fetch(userUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (userResp.ok) {
+        const userDoc = (await userResp.json().catch(() => ({}))) as {
+          fields?: { role?: { stringValue?: string }; accountType?: { stringValue?: string } };
+        };
+        const role = userDoc?.fields?.role?.stringValue || '';
+        const accountType = userDoc?.fields?.accountType?.stringValue || '';
+        if (role === 'admin' || role === 'super_admin' || accountType === 'admin') {
+          return { isAdmin: true };
+        }
+      }
+    }
+    return { isAdmin: false, error: 'Chỉ Quản trị viên hệ thống mới có quyền thao tác cấu hình Agent AI.' };
+  } catch (err: any) {
+    return { isAdmin: false, error: err?.message || 'Lỗi xác minh quyền Quản trị viên.' };
+  }
 }
 
 function resolveAction(req: any): string {
@@ -135,33 +154,119 @@ export default async function handler(req: any, res: any) {
     if (req.method !== 'GET') {
       return res.status(405).json({ error: 'Chỉ chấp nhận phương thức GET' });
     }
-    const rawKey = (process.env.GEMINI_API_KEY || '').trim();
-    const configured = Boolean(rawKey && rawKey !== 'MY_GEMINI_API_KEY');
+    const config = getClientSafeAgentConfig();
+    const activeInfo = config.providers[config.activeProvider];
+    const configured = Boolean(activeInfo?.isConfigured);
     return res.json({
       ok: true,
       configured,
-      model: 'gemini-4-hydrogen',
-      provider: 'Google Gemini AI',
-      configuredVia: 'Biến môi trường bảo mật phía máy chủ (Settings > Secrets)',
+      activeProvider: config.activeProvider,
+      providerName: activeInfo?.name || 'Agent AI',
+      model: activeInfo?.model || 'Default',
+      provider: activeInfo?.name || 'Google Gemini AI',
+      configuredVia: `Hệ thống Agent AI (${activeInfo?.name || 'Gemini'})`,
       statusMessage: configured
-        ? 'Sẵn sàng tự động đọc, quét và trích xuất thông tin văn bản khi tải lên'
-        : 'Chưa cấu hình GEMINI_API_KEY trên máy chủ (Settings > Secrets)',
+        ? `Agent sẵn sàng qua ${activeInfo?.name} (${activeInfo?.model})`
+        : 'Chưa cấu hình API Key cho Agent (vào Bảng quản trị > Agent để thiết lập)',
       capabilities: [
         'Tự động đọc & quét tài liệu đa phương thức (PDF, Word, Ảnh văn bản)',
         'Trích xuất tự động: Số hiệu, Tiêu đề, Ngày ban hành, Cơ quan ban hành, Thể loại, Tóm tắt',
         'Giao diện hiển thị văn bản 1 dòng chuẩn hóa kèm chức năng xem chi tiết',
-        'Trợ lý thông minh phân loại và gợi ý dịch vụ y tế cho công dân',
+        'Trợ lý Agent thông minh phân loại và gợi ý dịch vụ y tế cho công dân',
+        'Hỗ trợ đa nhà cung cấp: Google Gemini, ChatGPT, Claude, Blackbox, Grok với dự phòng tự động',
       ],
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  if (action === 'agent-config') {
+    const roleCheck = await verifyAdminBearer(req.headers?.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({ error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền truy cập cấu hình Agent AI.' });
+    }
+    if (req.method === 'GET') {
+      try {
+        return res.json(getClientSafeAgentConfig());
+      } catch (err: any) {
+        return res.status(500).json({ error: err?.message || 'Lỗi đọc cấu hình Agent' });
+      }
+    }
+    if (req.method === 'POST') {
+      try {
+        const { activeProvider, providers, fallbackOrder } = req.body || {};
+        const current = loadStoredAiConfig();
+
+        if (activeProvider && AI_PROVIDERS_INFO[activeProvider as AiProviderType]) {
+          current.activeProvider = activeProvider as AiProviderType;
+        }
+        if (Array.isArray(fallbackOrder) && fallbackOrder.length > 0) {
+          current.fallbackOrder = fallbackOrder.filter(id => AI_PROVIDERS_INFO[id as AiProviderType]);
+        }
+        if (providers && typeof providers === 'object') {
+          (Object.keys(providers) as AiProviderType[]).forEach(id => {
+            if (!AI_PROVIDERS_INFO[id]) return;
+            const incoming = providers[id];
+            if (!incoming) return;
+            current.providers[id] = current.providers[id] || {};
+            if (incoming.model && typeof incoming.model === 'string') {
+              current.providers[id]!.model = incoming.model.trim();
+            }
+            const rawKey = incoming.apiKey;
+            if (typeof rawKey === 'string' && rawKey.trim() && !rawKey.includes('••••')) {
+              current.providers[id]!.apiKey = rawKey.trim();
+              current.providers[id]!.isConfigured = true;
+              current.providers[id]!.updatedAt = new Date().toISOString();
+            }
+          });
+        }
+        current.updatedAt = new Date().toISOString();
+        saveStoredAiConfig(current);
+        return res.json({
+          ok: true,
+          message: 'Đã lưu thành công cấu hình Agent AI đa nhà cung cấp.',
+          config: getClientSafeAgentConfig(),
+        });
+      } catch (err: any) {
+        return res.status(500).json({ error: err?.message || 'Không thể lưu cấu hình Agent' });
+      }
+    }
+    return res.status(405).json({ error: 'Phương thức không hợp lệ' });
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Chỉ chấp nhận phương thức POST' });
   }
 
-  const rawKey = (process.env.GEMINI_API_KEY || '').trim();
-  const apiKey = rawKey && rawKey !== 'MY_GEMINI_API_KEY' ? rawKey : '';
+  if (action === 'test-provider') {
+    const roleCheck = await verifyAdminBearer(req.headers?.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({ error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền kiểm tra kết nối Agent AI.' });
+    }
+    try {
+      const { provider, apiKey, model } = req.body || {};
+      if (!provider || !AI_PROVIDERS_INFO[provider as AiProviderType]) {
+        return res.status(400).json({ error: 'Nhà cung cấp AI không hợp lệ.' });
+      }
+      let effectiveKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+      if (!effectiveKey || effectiveKey.includes('••••')) {
+        const stored = loadStoredAiConfig();
+        effectiveKey = stored.providers[provider as AiProviderType]?.apiKey || '';
+        if (!effectiveKey && provider === 'gemini') {
+          const envKey = (process.env.GEMINI_API_KEY || '').trim();
+          effectiveKey = envKey && envKey !== 'MY_GEMINI_API_KEY' ? envKey : '';
+        }
+      }
+      if (!effectiveKey) {
+        return res.status(400).json({
+          error: `Vui lòng nhập API Key cho ${AI_PROVIDERS_INFO[provider as AiProviderType].name}.`,
+        });
+      }
+      const result = await testProviderConnection(provider as AiProviderType, effectiveKey, model);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, message: err?.message || 'Lỗi khi kiểm tra kết nối API' });
+    }
+  }
 
   if (action === 'suggest-needs') {
     try {
@@ -169,18 +274,8 @@ export default async function handler(req: any, res: any) {
       if (!userQuery || typeof userQuery !== 'string') {
         return res.status(400).json({ error: 'Nhu cầu không được để trống' });
       }
-      if (!apiKey) {
-        return res.status(503).json({
-          error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ (Settings > Secrets).',
-        });
-      }
 
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-      });
-
-      const prompt = `Bạn là Trợ lý AI Thông minh của Cổng Thông Tin Điện Tử Trạm Y Tế Xã/Phường.
+      const prompt = `Bạn là Trợ lý Agent Phân Loại Nhu Cầu của Cổng Thông Tin Điện Tử Trạm Y Tế Xã/Phường.
 Người dùng (vai trò: ${role || 'công dân'}) nhập yêu cầu: "${userQuery}".
 
 Hãy phân tích nhu cầu và trả về JSON gợi ý tính năng phù hợp nhất trong hệ thống.
@@ -193,47 +288,35 @@ Các target có thể chọn:
 - documents: Văn bản biểu mẫu khai báo
 - feedback: Gửi ý kiến phản ánh BHYT, dịch vụ
 - tracking: Tra cứu tiến độ giải quyết phản ánh
-- workspace: Bàn làm việc y tế (dành cho cán bộ)`;
+- apps: Kho ứng dụng tiện ích
+- workspace: Bàn làm việc y tế (dành cho cán bộ)
 
-      const response = await generateWithRetry(
-        ai,
-        {
-          model: 'gemini-4-hydrogen',
-          contents: prompt,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                suggestedTarget: { type: Type.STRING },
-                reasoning: { type: Type.STRING },
-                recommendedActions: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      label: { type: Type.STRING },
-                      target: { type: Type.STRING },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        10000
-      );
+Định dạng JSON bắt buộc:
+{
+  "suggestedTarget": "tên_target",
+  "reasoning": "Lý do gợi ý",
+  "recommendedActions": [
+    { "label": "Nhãn hành động", "target": "tên_target" }
+  ]
+}`;
 
-      const parsedData = safeParseJsonObject(response.text);
+      const aiResponse = await executeAgentRequest({
+        prompt,
+        systemPrompt: 'Bạn là Agent phân tích dữ liệu y tế, luôn trả về JSON hợp lệ.',
+        jsonMode: true,
+      });
+
+      const parsedData = safeParseJsonObject(aiResponse.text);
       if (!parsedData || !parsedData.suggestedTarget) {
-        return res.status(502).json({ error: 'Gemini AI trả về định dạng JSON không hợp lệ.' });
+        return res.status(502).json({ error: 'Agent AI trả về định dạng JSON không hợp lệ.' });
       }
-      return res.json(parsedData);
+      return res.json({
+        ...parsedData,
+        _meta: { provider: aiResponse.providerUsed, model: aiResponse.modelUsed },
+      });
     } catch (error: any) {
       console.error('AI Suggestion error:', error?.message || error);
-      const { status, message } = formatGeminiError(error);
-      return res.status(status).json({ error: message });
+      return res.status(502).json({ error: error?.message || 'Lỗi xử lý yêu cầu Agent AI.' });
     }
   }
 
@@ -256,69 +339,35 @@ Các target có thể chọn:
       if (!normalizedText && !hasInlineMedia && !docNameRaw) {
         return res.status(400).json({ error: 'Nội dung tệp không được để trống' });
       }
-      if (!apiKey) {
-        return res.status(503).json({
-          error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ (Settings > Secrets).',
-        });
-      }
-
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-      });
 
       const todayIso = new Date().toISOString().split('T')[0];
-      const prompt = `Bạn là Trợ lý AI Phân Tích Văn Bản Y Tế.
+      const prompt = `Bạn là Trợ lý Agent Phân Tích Văn Bản Y Tế.
 Hãy đọc thông tin tập tin (tên tệp: ${effectiveFilename}) và nội dung kèm theo dưới đây:
 ---
 ${(normalizedText || effectiveFilename).slice(0, 6000)}
 ---
 
-Hãy trích xuất các thông tin văn bản y tế hành chính dựa trên dữ liệu hiện có.
-Các trường JSON bắt buộc:
-- "title": Tên hoặc tiêu đề văn bản (tiếng Việt có dấu, rõ ràng)
-- "docNumber": Số hiệu văn bản (ví dụ 12/TB-TYT hoặc 366/BHXH-CNTT)
-- "issueDate": Ngày ban hành theo định dạng YYYY-MM-DD (nếu không rõ lấy ngày hôm nay: ${todayIso})
-- "issuingAuthority": Cơ quan hoặc đơn vị phát hành văn bản (ví dụ: Bộ Y tế, Sở Y tế, Bảo hiểm xã hội Việt Nam, Trạm Y tế)
-- "summary": Tóm tắt ngắn gọn 1-2 câu về nội dung chính
-- "category": Chọn 1 trong 4 giá trị: Chỉ đạo điều hành | Tiêm chủng BHYT | Phòng chống dịch | Biểu mẫu kê khai`;
+Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng JSON:
+{
+  "title": "Tên hoặc tiêu đề văn bản rõ ràng, có dấu",
+  "docNumber": "Số hiệu văn bản (vd: 12/TB-TYT hoặc 456/QĐ-BYT)",
+  "issueDate": "Ngày ban hành định dạng YYYY-MM-DD (mặc định: ${todayIso})",
+  "issuingAuthority": "Cơ quan phát hành (vd: Bộ Y tế, Sở Y tế, Trạm Y tế, UBND)",
+  "summary": "Tóm tắt ngắn gọn 1-2 câu về nội dung chính",
+  "category": "Chỉ đạo điều hành | Tiêm chủng BHYT | Phòng chống dịch | Biểu mẫu kê khai"
+}`;
 
-      const contentsPayload: any = hasInlineMedia
-        ? {
-            parts: [
-              { inlineData: { mimeType: String(mimeType), data: String(fileBase64) } },
-              { text: prompt },
-            ],
-          }
-        : prompt;
+      const aiResponse = await executeAgentRequest({
+        prompt,
+        systemPrompt: 'Bạn là chuyên viên số hóa văn bản y tế, trả về JSON chính xác không kèm markdown rác.',
+        jsonMode: true,
+        fileBase64: hasInlineMedia ? String(fileBase64) : undefined,
+        mimeType: hasInlineMedia ? String(mimeType) : undefined,
+      });
 
-      const response = await generateWithRetry(
-        ai,
-        {
-          model: 'gemini-4-hydrogen',
-          contents: contentsPayload,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                docNumber: { type: Type.STRING },
-                issueDate: { type: Type.STRING },
-                issuingAuthority: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                category: { type: Type.STRING },
-              },
-            },
-          },
-        },
-        12000
-      );
-
-      const parsedData = safeParseJsonObject(response.text);
+      const parsedData = safeParseJsonObject(aiResponse.text);
       if (!parsedData) {
-        return res.status(502).json({ error: 'Gemini AI trả về định dạng JSON không hợp lệ.' });
+        return res.status(502).json({ error: 'Agent AI trả về định dạng JSON không hợp lệ.' });
       }
 
       return res.json({
@@ -347,11 +396,11 @@ Các trường JSON bắt buộc:
           typeof parsedData.category === 'string' && parsedData.category.trim()
             ? parsedData.category.trim()
             : 'Chỉ đạo điều hành',
+        _meta: { provider: aiResponse.providerUsed, model: aiResponse.modelUsed },
       });
     } catch (error: any) {
       console.error('AI Document Scan error:', error?.message || error);
-      const { status, message } = formatGeminiError(error);
-      return res.status(status).json({ error: message });
+      return res.status(502).json({ error: error?.message || 'Lỗi khi quét văn bản với Agent.' });
     }
   }
 
