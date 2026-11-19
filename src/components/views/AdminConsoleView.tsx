@@ -189,12 +189,7 @@ import {
   describeBhxhTuyen,
   getNormalizedBhxhHistoryKcb,
 } from '../../services/bhxhService';
-import { createDefaultOrgChart } from '../../data/defaultOrgChart';
-import {
-  findMemberInOrgChartForUser,
-  normalizeCccd,
-  syncSingleUserToOrgChart,
-} from '../../services/orgPersonnelSyncService';
+import { normalizeCccd } from '../../services/orgPersonnelSyncService';
 import {
   normalizeAndValidatePhone,
   buildPhoneLockId,
@@ -1006,7 +1001,6 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         : effectiveStatus === 'suspended'
         ? 'Tạm khóa'
         : 'Chờ duyệt';
-      const linkedOrg = Boolean(settings.orgChart && findMemberInOrgChartForUser(settings.orgChart, u));
       return {
         STT: idx + 1,
         'Họ và tên': u.displayName || 'Chưa đặt tên',
@@ -1020,7 +1014,6 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         'Khoa / Phòng': u.department || '',
         'Chức vụ': u.position || '',
         'Trình độ': u.qualification || '',
-        'Liên kết nhân lực': linkedOrg ? 'Đã liên kết' : 'Chưa liên kết',
         'Hoạt động': activityLabel,
         'Thời hạn Ban': activelyBanned
           ? u.banType === 'permanent'
@@ -3018,35 +3011,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         });
       }
 
-      // Đồng bộ sang Nhân lực & Khoa phòng nếu tài khoản là cán bộ / nhân viên y tế hoặc có dữ liệu phù hợp
-      const updatedProfile: UserProfile = {
-        ...editingUser,
-        ...payload,
-      };
-      const hasPersistedOrg = Boolean(
-        settings.orgChart &&
-          (settings.orgChart.director ||
-            (settings.orgChart.deputyDirectors?.length || 0) > 0 ||
-            (settings.orgChart.departments?.length || 0) > 0)
-      );
-      const baseChart =
-        hasPersistedOrg && settings.orgChart ? settings.orgChart : createDefaultOrgChart();
-      const orgSyncRes = syncSingleUserToOrgChart(baseChart, updatedProfile);
-      if (orgSyncRes.changed) {
-        await updateSystemSettings({
-          orgChart: cleanDataForFirestore({
-            ...orgSyncRes.nextChart,
-            updatedAt: new Date().toISOString(),
-          }),
-          updatedAt: new Date().toISOString(),
-        });
-        showToast(
-          'success',
-          'Đã lưu thông tin người dùng & đồng bộ sang Nhân lực & Khoa phòng'
-        );
-      } else {
-        showToast('success', 'Đã lưu thông tin người dùng & phân quyền');
-      }
+      showToast('success', 'Đã lưu thông tin người dùng & phân quyền');
 
       setEditingUser(null);
       onRefreshData();
@@ -3236,15 +3201,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       {/* Subtab: System Diagnostics (Vercel, RSS, Firebase, Tenten) */}
       {subTab === 'diagnostics' && <SystemDiagnosticsManager />}
 
-      {/* Subtab: Nhân lực & Khoa phòng (đồng bộ Sơ đồ tổ chức) */}
+      {/* Subtab: Nhân lực & Khoa phòng (liên kết trực tiếp Sơ đồ tổ chức, tách khỏi tài khoản) */}
       {subTab === 'org_personnel' && (
         <PersonnelDirectoryView
           settings={settings}
           settingsLoaded={true}
-          users={users}
           embeddedInAdmin
           onOpenOrgChart={onOpenOrgChart}
-          onRefreshUsers={onRefreshData}
         />
       )}
 

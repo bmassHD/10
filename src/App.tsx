@@ -38,6 +38,7 @@ import { FeedbackModal } from './components/portal/FeedbackModal';
 import { AuthModal } from './components/auth/AuthModal';
 import { TwoFactorGateModal } from './components/auth/TwoFactorGateModal';
 import { SmsMfaChallengeModal } from './components/auth/SmsMfaChallengeModal';
+import { ConcurrentLoginAlertModal } from './components/auth/ConcurrentLoginAlertModal';
 import { StartupPopupModal } from './components/modals/StartupPopupModal';
 import { VaccinationStartupPopupModal } from './components/modals/VaccinationStartupPopupModal';
 import { EventCelebrationModal } from './components/modals/EventCelebrationModal';
@@ -79,13 +80,7 @@ import {
   shouldRunAutoGithubBackupNow,
   isGitHubConfigValid,
 } from './services/backupService';
-import { cleanDataForFirestore } from './services/firebaseService';
-import { createDefaultOrgChart } from './data/defaultOrgChart';
-import { syncUsersIntoOrgChart } from './services/orgPersonnelSyncService';
-import {
-  isFirestoreWriteQuotaExceeded,
-  markFirestoreWriteQuotaExceededIfMatch,
-} from './utils/firestoreQuotaGuard';
+import { isFirestoreWriteQuotaExceeded } from './utils/firestoreQuotaGuard';
 
 // Hash Route Mapping
 const VIEW_TO_HASH: Record<string, string> = {
@@ -137,7 +132,7 @@ function parseHashRoute(): { view: string; query: string } {
 }
 
 function MainApp() {
-  const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver } = useAuth();
+  const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver, concurrentActiveDevices, remoteRevokedNotice } = useAuth();
   const { showToast } = useToast();
 
   const initialReferralRef = useRef<string>(captureReferralCodeFromUrl());
@@ -592,92 +587,6 @@ function MainApp() {
       console.warn('Fetch admin records:', e);
     }
   }, []);
-
-  // Tự động đồng bộ tài khoản cán bộ / người dùng có liên kết sang Quản Lý Nhân Lực & Khoa Phòng
-  const lastOrgAutoSyncSigRef = useRef<string>('');
-  const orgAutoSyncInFlightRef = useRef<boolean>(false);
-  const orgAutoSyncDisabledRef = useRef<boolean>(false);
-  const orgAutoSyncCooldownUntilRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (
-      !isAdmin ||
-      !settingsLoaded ||
-      users.length === 0 ||
-      orgAutoSyncInFlightRef.current ||
-      orgAutoSyncDisabledRef.current ||
-      isFirestoreWriteQuotaExceeded()
-    ) {
-      return;
-    }
-
-    if (Date.now() < orgAutoSyncCooldownUntilRef.current) return;
-
-    const sig = [
-      settings.orgChart?.updatedAt || 'none',
-      (settings.orgChart?.excludedSyncedUids || []).join(','),
-      ...users
-        .map(u =>
-          [
-            u.uid,
-            u.displayName || '',
-            u.citizenId || '',
-            u.phoneNumber || '',
-            u.department || '',
-            u.position || '',
-            u.qualification || '',
-            u.accountType || '',
-            u.role || '',
-            u.status || '',
-          ].join('|')
-        )
-        .sort(),
-    ].join('::');
-
-    if (lastOrgAutoSyncSigRef.current === sig) return;
-    lastOrgAutoSyncSigRef.current = sig;
-
-    const hasPersistedOrg = Boolean(
-      settings.orgChart &&
-        (settings.orgChart.director ||
-          (settings.orgChart.deputyDirectors?.length || 0) > 0 ||
-          (settings.orgChart.departments?.length || 0) > 0)
-    );
-    const baseChart =
-      hasPersistedOrg && settings.orgChart ? settings.orgChart : createDefaultOrgChart();
-
-    const syncRes = syncUsersIntoOrgChart(baseChart, users);
-    if (!syncRes.changed) return;
-
-    // Kiểm tra tính lũy đẳng (idempotency): chạy lần 2 trên kết quả phải không còn thay đổi
-    const verifyPass = syncUsersIntoOrgChart(syncRes.nextChart, users);
-    if (verifyPass.changed) {
-      console.warn('Auto-sync aborted to prevent non-idempotent write loop.');
-      orgAutoSyncDisabledRef.current = true;
-      return;
-    }
-
-    orgAutoSyncInFlightRef.current = true;
-    orgAutoSyncCooldownUntilRef.current = Date.now() + 15_000;
-
-    const nextOrgChart = cleanDataForFirestore({
-      ...syncRes.nextChart,
-      updatedAt: new Date().toISOString(),
-    });
-    updateSystemSettings({
-      orgChart: nextOrgChart,
-      updatedAt: new Date().toISOString(),
-    })
-      .catch(err => {
-        if (markFirestoreWriteQuotaExceededIfMatch(err)) {
-          orgAutoSyncDisabledRef.current = true;
-        }
-        console.warn('Auto sync users to orgChart error:', err);
-      })
-      .finally(() => {
-        orgAutoSyncInFlightRef.current = false;
-      });
-  }, [isAdmin, settingsLoaded, settings.orgChart, users]);
 
   const accessEval = useMemo(
     () => evaluateAccessRestriction(settings.accessControl),
@@ -1723,9 +1632,7 @@ function MainApp() {
             <PersonnelDirectoryView
               settings={settings}
               settingsLoaded={settingsLoaded}
-              users={users}
               onOpenOrgChart={() => setCurrentView('org_chart')}
-              onRefreshUsers={fetchAdminData}
             />
           )}
 
@@ -1883,6 +1790,7 @@ function MainApp() {
 
       <TwoFactorGateModal />
       <SmsMfaChallengeModal />
+      <ConcurrentLoginAlertModal onOpenAccountSecurity={() => setCurrentView('account')} />
 
       <StartupPopupModal
         settings={settings}
@@ -1894,6 +1802,8 @@ function MainApp() {
           isBanned ||
           requiresTwoFactorVerification ||
           Boolean(pendingSmsMfaResolver) ||
+          concurrentActiveDevices.length > 0 ||
+          remoteRevokedNotice ||
           isEventModalOpen ||
           isHolidayModalOpen ||
           isVaccinationPopupOpen
@@ -1912,6 +1822,8 @@ function MainApp() {
           isBanned ||
           requiresTwoFactorVerification ||
           Boolean(pendingSmsMfaResolver) ||
+          concurrentActiveDevices.length > 0 ||
+          remoteRevokedNotice ||
           isEventModalOpen ||
           isHolidayModalOpen ||
           isGeneralPopupOpen

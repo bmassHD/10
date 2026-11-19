@@ -108,7 +108,12 @@ service cloud.firestore {
 
     function isValidUserDevice(data, deviceId) {
       return data.keys().hasAll(['deviceId', 'deviceName', 'platform', 'isTrusted', 'verifiedAt', 'lastActiveAt']) &&
-        data.keys().hasOnly(['deviceId', 'deviceName', 'platform', 'os', 'browser', 'isTrusted', 'verificationMethod', 'verifiedAt', 'firstSeenAt', 'lastActiveAt']) &&
+        data.keys().hasOnly([
+          'deviceId', 'deviceName', 'platform', 'os', 'browser', 'isTrusted',
+          'verificationMethod', 'verifiedAt', 'firstSeenAt', 'lastActiveAt',
+          'activeSessionId', 'isSessionActive', 'sessionStartedAt',
+          'lastHeartbeatAt', 'lastHeartbeatMs', 'forceLogoutSessionId', 'forceLogoutRequestedAt'
+        ]) &&
         data.deviceId is string && data.deviceId == deviceId && data.deviceId.size() <= 128 &&
         data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 128 &&
         data.platform in ['mobile', 'tablet', 'desktop'] &&
@@ -118,7 +123,14 @@ service cloud.firestore {
         (!('os' in data) || (data.os is string && data.os.size() <= 64)) &&
         (!('browser' in data) || (data.browser is string && data.browser.size() <= 64)) &&
         (!('verificationMethod' in data) || data.verificationMethod in ['password', 'google', 'sms_mfa', 'sms_otp', 'totp_2fa', 'manual']) &&
-        (!('firstSeenAt' in data) || (data.firstSeenAt is string && data.firstSeenAt.size() <= 64));
+        (!('firstSeenAt' in data) || (data.firstSeenAt is string && data.firstSeenAt.size() <= 64)) &&
+        (!('activeSessionId' in data) || (data.activeSessionId is string && data.activeSessionId.size() <= 128)) &&
+        (!('isSessionActive' in data) || data.isSessionActive is bool) &&
+        (!('sessionStartedAt' in data) || (data.sessionStartedAt is string && data.sessionStartedAt.size() <= 64)) &&
+        (!('lastHeartbeatAt' in data) || (data.lastHeartbeatAt is string && data.lastHeartbeatAt.size() <= 64)) &&
+        (!('lastHeartbeatMs' in data) || (data.lastHeartbeatMs is number && data.lastHeartbeatMs >= 0)) &&
+        (!('forceLogoutSessionId' in data) || (data.forceLogoutSessionId is string && data.forceLogoutSessionId.size() <= 128)) &&
+        (!('forceLogoutRequestedAt' in data) || (data.forceLogoutRequestedAt is string && data.forceLogoutRequestedAt.size() <= 64));
     }
 
     function isValidVerifiedIdentifier(data, identifierId) {

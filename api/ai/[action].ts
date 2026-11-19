@@ -173,7 +173,7 @@ export default async function handler(req: any, res: any) {
         'Trích xuất tự động: Số hiệu, Tiêu đề, Ngày ban hành, Cơ quan ban hành, Thể loại, Tóm tắt',
         'Giao diện hiển thị văn bản 1 dòng chuẩn hóa kèm chức năng xem chi tiết',
         'Trợ lý Agent thông minh phân loại và gợi ý dịch vụ y tế cho công dân',
-        'Hỗ trợ đa nhà cung cấp: Google Gemini, ChatGPT, Claude, Blackbox, Grok với dự phòng tự động',
+        'Hỗ trợ 2 nền tảng AI chính: Google Gemini và ChatGPT (OpenAI) với dự phòng tự động',
       ],
       updatedAt: new Date().toISOString(),
     });
@@ -223,7 +223,7 @@ export default async function handler(req: any, res: any) {
         saveStoredAiConfig(current);
         return res.json({
           ok: true,
-          message: 'Đã lưu thành công cấu hình Agent AI đa nhà cung cấp.',
+          message: 'Đã lưu thành công cấu hình Agent AI (Gemini & ChatGPT).',
           config: getClientSafeAgentConfig(),
         });
       } catch (err: any) {

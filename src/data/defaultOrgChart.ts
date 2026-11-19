@@ -142,7 +142,7 @@ export function exportOrgChartWorkbook(chart: OrgChartConfig, fileName: string):
       'Chức vụ': chart.director.position || 'Giám đốc',
       'Chức danh chuyên môn': chart.director.professionalTitle || '',
       'Số điện thoại': chart.director.phone || '',
-      'Ghi chú': chart.director.notes || (chart.director.isSyncedFromUser ? 'Đã đồng bộ' : ''),
+      'Ghi chú': chart.director.notes || '',
     });
   }
   (chart.deputyDirectors || []).forEach(dd => {
@@ -154,7 +154,7 @@ export function exportOrgChartWorkbook(chart: OrgChartConfig, fileName: string):
       'Chức vụ': dd.position || 'Phó Giám đốc',
       'Chức danh chuyên môn': dd.professionalTitle || '',
       'Số điện thoại': dd.phone || '',
-      'Ghi chú': dd.notes || (dd.isSyncedFromUser ? 'Đã đồng bộ' : ''),
+      'Ghi chú': dd.notes || '',
     });
   });
 
@@ -209,7 +209,7 @@ export function exportOrgChartWorkbook(chart: OrgChartConfig, fileName: string):
         'Chức vụ': dept.head.position || matchedSpec?.defaultHeadPosition || 'Trưởng khoa',
         'Chức danh chuyên môn': dept.head.professionalTitle || '',
         'Số điện thoại': dept.head.phone || '',
-        'Ghi chú': dept.head.notes || (dept.head.isSyncedFromUser ? 'Đã đồng bộ' : ''),
+        'Ghi chú': dept.head.notes || '',
       });
     }
 
@@ -222,7 +222,7 @@ export function exportOrgChartWorkbook(chart: OrgChartConfig, fileName: string):
         'Chức vụ': dep.position || matchedSpec?.defaultDeputyPosition || 'Phó khoa',
         'Chức danh chuyên môn': dep.professionalTitle || '',
         'Số điện thoại': dep.phone || '',
-        'Ghi chú': dep.notes || (dep.isSyncedFromUser ? 'Đã đồng bộ' : ''),
+        'Ghi chú': dep.notes || '',
       });
     });
 
@@ -235,7 +235,7 @@ export function exportOrgChartWorkbook(chart: OrgChartConfig, fileName: string):
         'Chức vụ': st.position || 'Nhân viên',
         'Chức danh chuyên môn': st.professionalTitle || '',
         'Số điện thoại': st.phone || '',
-        'Ghi chú': st.notes || (st.isSyncedFromUser ? 'Đã đồng bộ' : ''),
+        'Ghi chú': st.notes || '',
       });
     });
 

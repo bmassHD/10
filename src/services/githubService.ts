@@ -760,7 +760,8 @@ export class GitHubService {
     let branch = (config?.branch || '').trim();
     let filePath = (att.path || '').trim().replace(/^\/+/, '');
 
-    const htmlMatch = (att.htmlUrl || '').match(
+    const rawOrHtml = (att.htmlUrl || att.downloadUrl || '').trim();
+    const htmlMatch = rawOrHtml.match(
       /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+?)(?:\?.*)?$/i
     );
     if (htmlMatch) {
@@ -803,14 +804,28 @@ export class GitHubService {
     }
 
     const token = (config?.token || '').trim();
-    const wrapBlobUrl = (blob: Blob) => {
-      const typed = blob.slice(0, blob.size, resolvedMime);
+    const wrapBlobUrl = async (blob: Blob) => {
+      const buf = await blob.arrayBuffer();
+      const typed = new Blob([buf], { type: resolvedMime });
       return {
         url: URL.createObjectURL(typed),
         isObjectUrl: true,
         mimeType: resolvedMime,
       };
     };
+
+    const normalizeRawDownloadUrl = (inputUrl: string): string => {
+      const m = inputUrl.match(
+        /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+)$/i
+      );
+      if (m) {
+        return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}/${m[4]}`;
+      }
+      return inputUrl;
+    };
+
+    const buildProxyFallbackUrl = (targetUrl: string): string =>
+      `/api/file-proxy?url=${encodeURIComponent(normalizeRawDownloadUrl(targetUrl))}&name=${encodeURIComponent(att.name || 'van-ban')}`;
 
     if (token && owner && repo && (filePath || att.sha)) {
       const encodedPath = filePath
@@ -833,8 +848,7 @@ export class GitHubService {
             },
           });
           if (rawRes.ok) {
-            const rawBlob = await rawRes.blob();
-            return wrapBlobUrl(rawBlob);
+            return await wrapBlobUrl(await rawRes.blob());
           }
         } catch {
           // Try JSON metadata next
@@ -852,14 +866,14 @@ export class GitHubService {
           const meta = await metaRes.json();
 
           if (typeof meta?.content === 'string' && meta?.encoding === 'base64') {
-            return wrapBlobUrl(base64ToBlob(meta.content, resolvedMime));
+            return await wrapBlobUrl(base64ToBlob(meta.content, resolvedMime));
           }
 
           if (typeof meta?.download_url === 'string' && meta.download_url) {
             try {
               const dlRes = await fetch(meta.download_url);
               if (dlRes.ok) {
-                return wrapBlobUrl(await dlRes.blob());
+                return await wrapBlobUrl(await dlRes.blob());
               }
             } catch {
               // Fallback to git blob sha below
@@ -877,7 +891,7 @@ export class GitHubService {
               }
             );
             if (blobRes.ok) {
-              return wrapBlobUrl(await blobRes.blob());
+              return await wrapBlobUrl(await blobRes.blob());
             }
           }
         } catch {
@@ -906,7 +920,7 @@ export class GitHubService {
             }
           );
           if (blobRes.ok) {
-            return wrapBlobUrl(await blobRes.blob());
+            return await wrapBlobUrl(await blobRes.blob());
           }
           const blobJsonRes = await fetch(
             `https://api.github.com/repos/${owner}/${repo}/git/blobs/${att.sha}`,
@@ -920,7 +934,7 @@ export class GitHubService {
           if (blobJsonRes.ok) {
             const blobData = await blobJsonRes.json();
             if (typeof blobData?.content === 'string' && blobData?.encoding === 'base64') {
-              return wrapBlobUrl(base64ToBlob(blobData.content, resolvedMime));
+              return await wrapBlobUrl(base64ToBlob(blobData.content, resolvedMime));
             }
           }
         } catch {
@@ -929,13 +943,16 @@ export class GitHubService {
       }
     }
 
-    // Public URL fallback
-    const cleanPublicUrl = (att.downloadUrl || '').trim();
+    // Public URL fallback: fetch as typed Blob or route via /api/file-proxy (fixes raw.githubusercontent.com text/plain + frame refusal)
+    const rawCandidate = (att.downloadUrl || att.htmlUrl || '').trim();
+    const cleanPublicUrl = rawCandidate ? normalizeRawDownloadUrl(rawCandidate) : '';
     if (cleanPublicUrl) {
+      const isRawOrGh = /raw\.githubusercontent\.com|github\.com/i.test(cleanPublicUrl);
       try {
-        const pubRes = await fetch(cleanPublicUrl);
+        const targetFetchUrl = isRawOrGh ? buildProxyFallbackUrl(cleanPublicUrl) : cleanPublicUrl;
+        const pubRes = await fetch(targetFetchUrl);
         if (pubRes.ok) {
-          return wrapBlobUrl(await pubRes.blob());
+          return await wrapBlobUrl(await pubRes.blob());
         }
         return {
           mimeType: resolvedMime,
@@ -945,9 +962,8 @@ export class GitHubService {
               : `Không thể tải tệp (HTTP ${pubRes.status}).`,
         };
       } catch {
-        // If CORS blocked fetch on a public image/media, allow direct URL as fallback
         return {
-          url: cleanPublicUrl,
+          url: isRawOrGh ? buildProxyFallbackUrl(cleanPublicUrl) : cleanPublicUrl,
           isObjectUrl: false,
           mimeType: resolvedMime,
         };

@@ -178,6 +178,13 @@ export interface UserVerifiedDevice {
   verifiedAt: string;
   firstSeenAt?: string;
   lastActiveAt: string;
+  activeSessionId?: string;
+  isSessionActive?: boolean;
+  sessionStartedAt?: string;
+  lastHeartbeatAt?: string;
+  lastHeartbeatMs?: number;
+  forceLogoutSessionId?: string;
+  forceLogoutRequestedAt?: string;
 }
 
 export interface PostMediaItem {
@@ -449,6 +456,20 @@ export interface PortalAppItem {
   updatedAt?: string;
 }
 
+export interface DocumentAttachment {
+  id: string;
+  title?: string;
+  fileName: string;
+  fileUrl: string;
+  fileType?: 'pdf' | 'docx' | 'xlsx' | 'image' | 'link';
+  fileSize?: string;
+  mimeType?: string;
+  githubPath?: string;
+  githubHtmlUrl?: string;
+  githubSha?: string;
+  uploadedAt?: string;
+}
+
 export interface DocumentItem {
   id: string;
   docNumber: string;
@@ -464,6 +485,7 @@ export interface DocumentItem {
   githubPath?: string;
   githubHtmlUrl?: string;
   githubSha?: string;
+  attachments?: DocumentAttachment[];
   visibility?: 'public' | 'private';
   isImportant?: boolean;
   createdAt: string;
@@ -1164,7 +1186,7 @@ export interface ToastMessage {
   message?: string;
 }
 
-export type AiProviderType = 'gemini' | 'openai' | 'anthropic' | 'blackbox' | 'grok';
+export type AiProviderType = 'gemini' | 'openai';
 
 export interface AiProviderConfig {
   id: AiProviderType;

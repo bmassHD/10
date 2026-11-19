@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   User,
   onAuthStateChanged,
@@ -76,7 +76,56 @@ export const BOOTSTRAP_ADMIN_EMAILS = [
 ];
 
 const TWO_FA_SESSION_PREFIX = 'tyt_2fa_session_v1_';
+const ACTIVE_SESSION_STORAGE_KEY = 'tyt_active_session_id_v1';
+const ACK_CONCURRENT_STORAGE_KEY = 'tyt_ack_concurrent_v1';
+const CONCURRENT_SESSION_TTL_MS = 3 * 60 * 1000;
 export const REFERRAL_SESSION_KEY = 'tyt_pending_referral_code';
+
+function generateSessionId(): string {
+  return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getOrCreateActiveSessionId(): string {
+  try {
+    const existing = sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    if (existing && existing.length <= 128) return existing;
+    const created = generateSessionId();
+    sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return generateSessionId();
+  }
+}
+
+function rotateActiveSessionId(): string {
+  const next = generateSessionId();
+  try {
+    sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, next);
+    sessionStorage.removeItem(ACK_CONCURRENT_STORAGE_KEY);
+  } catch {
+    // ignore storage restriction
+  }
+  return next;
+}
+
+function readAckConcurrentKeys(): string[] {
+  try {
+    const raw = sessionStorage.getItem(ACK_CONCURRENT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeAckConcurrentKeys(keys: string[]): void {
+  try {
+    sessionStorage.setItem(ACK_CONCURRENT_STORAGE_KEY, JSON.stringify(keys.slice(-30)));
+  } catch {
+    // ignore storage restriction
+  }
+}
 
 export function getPendingReferralCode(): string {
   try {
@@ -229,6 +278,12 @@ interface AuthContextType {
   verifiedDevices: UserVerifiedDevice[];
   currentDeviceId: string;
   currentDeviceTrusted: boolean;
+  currentSessionId: string;
+  concurrentActiveDevices: UserVerifiedDevice[];
+  remoteRevokedNotice: boolean;
+  dismissConcurrentLoginAlert: (devices?: UserVerifiedDevice[]) => void;
+  revokeConcurrentDeviceSession: (targetDevice: UserVerifiedDevice) => Promise<void>;
+  clearRemoteRevokedNotice: () => void;
   clearPendingSmsMfaResolver: () => void;
   sendVerificationEmailToCurrentUser: () => Promise<void>;
   refreshCurrentUserState: () => Promise<void>;
@@ -318,9 +373,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [twoFactorVerifiedThisSession, setTwoFactorVerifiedThisSession] = useState<boolean>(false);
   const [pendingSmsMfaResolver, setPendingSmsMfaResolver] = useState<MultiFactorResolver | null>(null);
   const [verifiedDevices, setVerifiedDevices] = useState<UserVerifiedDevice[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => getOrCreateActiveSessionId());
+  const [sessionStartedAtIso, setSessionStartedAtIso] = useState<string>(() => new Date().toISOString());
+  const [sessionNowTick, setSessionNowTick] = useState<number>(() => Date.now());
+  const [acknowledgedSessionKeys, setAcknowledgedSessionKeys] = useState<string[]>(() => readAckConcurrentKeys());
+  const [remoteRevokedNotice, setRemoteRevokedNotice] = useState<boolean>(false);
   const currentDeviceMeta = useRef(detectCurrentDeviceMeta());
+  const verifiedDevicesRef = useRef<UserVerifiedDevice[]>([]);
+  const currentSessionIdRef = useRef<string>(currentSessionId);
+  const sessionStartedAtRef = useRef<string>(sessionStartedAtIso);
+  const lastHeartbeatWriteMsRef = useRef<number>(0);
+  const remoteRevokeInProgressRef = useRef<boolean>(false);
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const recaptchaSlotRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    verifiedDevicesRef.current = verifiedDevices;
+  }, [verifiedDevices]);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    sessionStartedAtRef.current = sessionStartedAtIso;
+  }, [sessionStartedAtIso]);
 
   const getOrCreatePersistentRecaptchaHost = useCallback((): HTMLElement => {
     const HOST_ID = 'tyt-firebase-recaptcha-host';
@@ -458,7 +535,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const meta = currentDeviceMeta.current;
       const now = new Date().toISOString();
       const devicePath = `users/${uid}/devices/${meta.deviceId}`;
-      const existing = verifiedDevices.find((d) => d.deviceId === meta.deviceId);
+      const existing = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
       const payload: UserVerifiedDevice = {
         deviceId: meta.deviceId,
         deviceName: (customName || existing?.deviceName || meta.deviceName).slice(0, 128),
@@ -470,14 +547,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifiedAt: existing?.verifiedAt || now,
         firstSeenAt: existing?.firstSeenAt || now,
         lastActiveAt: now,
+        activeSessionId: currentSessionIdRef.current,
+        isSessionActive: true,
+        sessionStartedAt: sessionStartedAtRef.current || now,
+        lastHeartbeatAt: now,
+        lastHeartbeatMs: Date.now(),
+        forceLogoutSessionId: '',
+        forceLogoutRequestedAt: '',
       };
       try {
         await setDoc(doc(db, 'users', uid, 'devices', meta.deviceId), payload, { merge: true });
+        lastHeartbeatWriteMsRef.current = Date.now();
       } catch (err) {
         handleAuthFirestoreError(err, FirestoreOperationType.WRITE, devicePath);
       }
     },
-    [verifiedDevices]
+    []
   );
 
   const syncedLockCacheRef = useRef<string>('');
@@ -662,7 +747,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       );
 
-      // Record/refresh current device presence at most once every 6 hours (unless auth method changed)
+      // Record current device & active session presence immediately for concurrent login detection
       const sessionKey = `${user.uid}_${user.metadata?.lastSignInTime || 'active'}`;
       if (recordedSessionDeviceKey !== sessionKey && !isFirestoreWriteQuotaExceeded()) {
         recordedSessionDeviceKey = sessionKey;
@@ -670,53 +755,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const hasGoogle = Boolean(user.providerData?.some((p) => p.providerId === 'google.com'));
         const method: UserVerifiedDevice['verificationMethod'] = hasGoogle ? 'google' : 'password';
         const deviceSyncKey = `tyt_device_sync_${user.uid}_${meta.deviceId}`;
-        let shouldWriteDevice = true;
         let hasRecordedDeviceBefore = false;
         try {
-          const raw = localStorage.getItem(deviceSyncKey);
-          if (raw) {
-            const parsed = JSON.parse(raw) as { ts?: number; method?: string };
+          if (localStorage.getItem(deviceSyncKey)) {
             hasRecordedDeviceBefore = true;
-            if (
-              parsed?.method === method &&
-              typeof parsed?.ts === 'number' &&
-              Date.now() - parsed.ts < 6 * 60 * 60 * 1000
-            ) {
-              shouldWriteDevice = false;
-            }
           }
         } catch {
           // ignore storage errors
         }
 
-        if (shouldWriteDevice) {
-          const now = new Date().toISOString();
-          const devicePayload: Partial<UserVerifiedDevice> = {
-            deviceId: meta.deviceId,
-            deviceName: meta.deviceName,
-            platform: meta.platform,
-            os: meta.os,
-            browser: meta.browser,
-            isTrusted: true,
-            verificationMethod: method,
-            verifiedAt: now,
-            lastActiveAt: now,
-            ...(hasRecordedDeviceBefore ? {} : { firstSeenAt: now }),
-          };
-          setDoc(doc(db, 'users', user.uid, 'devices', meta.deviceId), devicePayload, {
-            merge: true,
+        const now = new Date().toISOString();
+        const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
+        const devicePayload: UserVerifiedDevice = {
+          deviceId: meta.deviceId,
+          deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
+          platform: meta.platform,
+          os: meta.os,
+          browser: meta.browser,
+          isTrusted: existingDev?.isTrusted ?? true,
+          verificationMethod: existingDev?.verificationMethod || method,
+          verifiedAt: existingDev?.verifiedAt || now,
+          firstSeenAt: existingDev?.firstSeenAt || (hasRecordedDeviceBefore ? now : now),
+          lastActiveAt: now,
+          activeSessionId: currentSessionIdRef.current,
+          isSessionActive: true,
+          sessionStartedAt: sessionStartedAtRef.current || now,
+          lastHeartbeatAt: now,
+          lastHeartbeatMs: Date.now(),
+          forceLogoutSessionId: '',
+          forceLogoutRequestedAt: '',
+        };
+        setDoc(doc(db, 'users', user.uid, 'devices', meta.deviceId), devicePayload, {
+          merge: true,
+        })
+          .then(() => {
+            lastHeartbeatWriteMsRef.current = Date.now();
+            try {
+              localStorage.setItem(deviceSyncKey, JSON.stringify({ ts: Date.now(), method }));
+            } catch {
+              // ignore
+            }
           })
-            .then(() => {
-              try {
-                localStorage.setItem(deviceSyncKey, JSON.stringify({ ts: Date.now(), method }));
-              } catch {
-                // ignore
-              }
-            })
-            .catch((err) => {
-              markFirestoreWriteQuotaExceededIfMatch(err);
-            });
-        }
+          .catch((err) => {
+            markFirestoreWriteQuotaExceededIfMatch(err);
+          });
       }
 
       // Subscribe to strictly isolated owner-only TOTP security document
@@ -955,6 +1037,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearAllTwoFactorSessionMarkers();
     setTwoFactorVerifiedThisSession(false);
     setPendingSmsMfaResolver(null);
+    const nextSession = rotateActiveSessionId();
+    setCurrentSessionId(nextSession);
+    setSessionStartedAtIso(new Date().toISOString());
+    setAcknowledgedSessionKeys([]);
+    setRemoteRevokedNotice(false);
+    remoteRevokeInProgressRef.current = false;
     await setPersistence(auth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
@@ -979,6 +1067,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearAllTwoFactorSessionMarkers();
     setTwoFactorVerifiedThisSession(false);
     setPendingSmsMfaResolver(null);
+    const nextSession = rotateActiveSessionId();
+    setCurrentSessionId(nextSession);
+    setSessionStartedAtIso(new Date().toISOString());
+    setAcknowledgedSessionKeys([]);
+    setRemoteRevokedNotice(false);
+    remoteRevokeInProgressRef.current = false;
     await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
     try {
       await signInWithEmailAndPassword(auth, email, pass);
@@ -1130,14 +1224,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserProfile(profile);
   };
 
-  const logout = async () => {
+  const logoutInternal = useCallback(async (options?: { keepRevokedNotice?: boolean; skipInactiveWrite?: boolean }) => {
+    const activeUser = auth.currentUser;
+    if (activeUser && !options?.skipInactiveWrite && !isFirestoreWriteQuotaExceeded()) {
+      const meta = currentDeviceMeta.current;
+      const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
+      const now = new Date().toISOString();
+      const hasGoogle = Boolean(activeUser.providerData?.some((p) => p.providerId === 'google.com'));
+      const payload: UserVerifiedDevice = {
+        deviceId: meta.deviceId,
+        deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
+        platform: meta.platform,
+        os: meta.os,
+        browser: meta.browser,
+        isTrusted: existingDev?.isTrusted ?? true,
+        verificationMethod: existingDev?.verificationMethod || (hasGoogle ? 'google' : 'password'),
+        verifiedAt: existingDev?.verifiedAt || now,
+        firstSeenAt: existingDev?.firstSeenAt || now,
+        lastActiveAt: now,
+        activeSessionId: currentSessionIdRef.current,
+        isSessionActive: false,
+        sessionStartedAt: existingDev?.sessionStartedAt || sessionStartedAtRef.current || now,
+        lastHeartbeatAt: now,
+        lastHeartbeatMs: Date.now(),
+      };
+      try {
+        await setDoc(doc(db, 'users', activeUser.uid, 'devices', meta.deviceId), payload, { merge: true });
+      } catch (err) {
+        markFirestoreWriteQuotaExceededIfMatch(err);
+      }
+    }
+
     clearAllTwoFactorSessionMarkers();
     clearPendingSmsMfaResolver();
     setTwoFactorVerifiedThisSession(false);
     setTotpConfig(null);
     setVerifiedDevices([]);
+    const nextSession = rotateActiveSessionId();
+    setCurrentSessionId(nextSession);
+    setSessionStartedAtIso(new Date().toISOString());
+    setAcknowledgedSessionKeys([]);
+    if (!options?.keepRevokedNotice) {
+      setRemoteRevokedNotice(false);
+    }
     await signOut(auth);
     setSimulatedRole(null);
+  }, [clearPendingSmsMfaResolver]);
+
+  const logout = async () => {
+    remoteRevokeInProgressRef.current = false;
+    await logoutInternal({ keepRevokedNotice: false });
   };
 
   const switchPreviewRole = (role: RoleType, accountType: AccountType) => {
@@ -2203,6 +2339,169 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     verifiedDevices.find((d) => d.deviceId === currentDeviceId)?.isTrusted
   );
 
+  // Active session heartbeat (every 60s + tab focus) while authenticated & not banned
+  useEffect(() => {
+    if (!currentUser || isBanned) return;
+    let disposed = false;
+
+    const sendHeartbeat = async (force = false) => {
+      if (disposed || isFirestoreWriteQuotaExceeded() || remoteRevokeInProgressRef.current) return;
+      const nowMs = Date.now();
+      if (!force && nowMs - lastHeartbeatWriteMsRef.current < 45_000) return;
+      const meta = currentDeviceMeta.current;
+      const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
+      // Do not overwrite if this session has already been remotely revoked
+      if (
+        existingDev?.forceLogoutSessionId &&
+        existingDev.forceLogoutSessionId === currentSessionIdRef.current
+      ) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const hasGoogle = Boolean(currentUser.providerData?.some((p) => p.providerId === 'google.com'));
+      const payload: UserVerifiedDevice = {
+        deviceId: meta.deviceId,
+        deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
+        platform: meta.platform,
+        os: meta.os,
+        browser: meta.browser,
+        isTrusted: existingDev?.isTrusted ?? true,
+        verificationMethod: existingDev?.verificationMethod || (hasGoogle ? 'google' : 'password'),
+        verifiedAt: existingDev?.verifiedAt || now,
+        firstSeenAt: existingDev?.firstSeenAt || now,
+        lastActiveAt: now,
+        activeSessionId: currentSessionIdRef.current,
+        isSessionActive: true,
+        sessionStartedAt: sessionStartedAtRef.current || now,
+        lastHeartbeatAt: now,
+        lastHeartbeatMs: nowMs,
+        forceLogoutSessionId: '',
+        forceLogoutRequestedAt: '',
+      };
+      try {
+        await setDoc(doc(db, 'users', currentUser.uid, 'devices', meta.deviceId), payload, { merge: true });
+        lastHeartbeatWriteMsRef.current = nowMs;
+      } catch (err) {
+        markFirestoreWriteQuotaExceededIfMatch(err);
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      setSessionNowTick(Date.now());
+      void sendHeartbeat(false);
+    }, 60_000);
+
+    const tickId = window.setInterval(() => {
+      setSessionNowTick(Date.now());
+    }, 30_000);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        setSessionNowTick(Date.now());
+        void sendHeartbeat(false);
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      window.clearInterval(tickId);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [currentUser, isBanned]);
+
+  // Remote revocation check: if another device clicked "Không phải tôi", sign out immediately
+  useEffect(() => {
+    if (!currentUser) return;
+    const myDoc = verifiedDevices.find((d) => d.deviceId === currentDeviceId);
+    if (
+      myDoc &&
+      myDoc.forceLogoutSessionId &&
+      myDoc.forceLogoutSessionId === currentSessionId &&
+      !remoteRevokeInProgressRef.current
+    ) {
+      remoteRevokeInProgressRef.current = true;
+      setRemoteRevokedNotice(true);
+      void logoutInternal({ keepRevokedNotice: true, skipInactiveWrite: true });
+    }
+  }, [currentUser, verifiedDevices, currentDeviceId, currentSessionId, logoutInternal]);
+
+  const concurrentActiveDevices = useMemo(() => {
+    if (!currentUser || isBanned) return [];
+    return verifiedDevices.filter((d) => {
+      if (!d || d.deviceId === currentDeviceId) return false;
+      if (d.isSessionActive !== true) return false;
+      if (typeof d.lastHeartbeatMs !== 'number') return false;
+      if (sessionNowTick - d.lastHeartbeatMs > CONCURRENT_SESSION_TTL_MS) return false;
+      if (d.forceLogoutSessionId && d.activeSessionId && d.forceLogoutSessionId === d.activeSessionId) {
+        return false;
+      }
+      const ackKey = `${d.deviceId}:${d.activeSessionId || d.sessionStartedAt || ''}`;
+      if (acknowledgedSessionKeys.includes(ackKey)) return false;
+      return true;
+    });
+  }, [currentUser, isBanned, verifiedDevices, currentDeviceId, sessionNowTick, acknowledgedSessionKeys]);
+
+  const dismissConcurrentLoginAlert = useCallback(
+    (devices?: UserVerifiedDevice[]) => {
+      const targetList = devices && devices.length > 0 ? devices : concurrentActiveDevices;
+      if (targetList.length === 0) return;
+      const newKeys = targetList.map(
+        (d) => `${d.deviceId}:${d.activeSessionId || d.sessionStartedAt || ''}`
+      );
+      setAcknowledgedSessionKeys((prev) => {
+        const merged = Array.from(new Set([...prev, ...newKeys]));
+        writeAckConcurrentKeys(merged);
+        return merged;
+      });
+    },
+    [concurrentActiveDevices]
+  );
+
+  const revokeConcurrentDeviceSession = useCallback(
+    async (targetDevice: UserVerifiedDevice) => {
+      if (!currentUser || !targetDevice?.deviceId) return;
+      const now = new Date().toISOString();
+      const devicePath = `users/${currentUser.uid}/devices/${targetDevice.deviceId}`;
+      const payload: UserVerifiedDevice = {
+        deviceId: targetDevice.deviceId,
+        deviceName: (targetDevice.deviceName || 'Thiết bị khác').slice(0, 128),
+        platform: targetDevice.platform || 'desktop',
+        ...(targetDevice.os ? { os: targetDevice.os } : {}),
+        ...(targetDevice.browser ? { browser: targetDevice.browser } : {}),
+        isTrusted: false,
+        verificationMethod: targetDevice.verificationMethod || 'password',
+        verifiedAt: targetDevice.verifiedAt || now,
+        firstSeenAt: targetDevice.firstSeenAt || now,
+        lastActiveAt: now,
+        activeSessionId: targetDevice.activeSessionId || '',
+        isSessionActive: false,
+        sessionStartedAt: targetDevice.sessionStartedAt || now,
+        lastHeartbeatAt: targetDevice.lastHeartbeatAt || now,
+        lastHeartbeatMs: typeof targetDevice.lastHeartbeatMs === 'number' ? targetDevice.lastHeartbeatMs : 0,
+        forceLogoutSessionId: targetDevice.activeSessionId || 'revoked',
+        forceLogoutRequestedAt: now,
+      };
+      try {
+        await setDoc(doc(db, 'users', currentUser.uid, 'devices', targetDevice.deviceId), payload, {
+          merge: true,
+        });
+        dismissConcurrentLoginAlert([targetDevice]);
+      } catch (err) {
+        handleAuthFirestoreError(err, FirestoreOperationType.UPDATE, devicePath);
+      }
+    },
+    [currentUser, dismissConcurrentLoginAlert]
+  );
+
+  const clearRemoteRevokedNotice = useCallback(() => {
+    setRemoteRevokedNotice(false);
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -2230,6 +2529,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifiedDevices,
         currentDeviceId,
         currentDeviceTrusted,
+        currentSessionId,
+        concurrentActiveDevices,
+        remoteRevokedNotice,
+        dismissConcurrentLoginAlert,
+        revokeConcurrentDeviceSession,
+        clearRemoteRevokedNotice,
         clearPendingSmsMfaResolver,
         sendVerificationEmailToCurrentUser,
         refreshCurrentUserState,

@@ -103,7 +103,14 @@
         "verificationMethod": { "type": "string", "enum": ["password", "google", "sms_mfa", "sms_otp", "totp_2fa", "manual"] },
         "verifiedAt": { "type": "string", "maxLength": 64 },
         "firstSeenAt": { "type": "string", "maxLength": 64 },
-        "lastActiveAt": { "type": "string", "maxLength": 64 }
+        "lastActiveAt": { "type": "string", "maxLength": 64 },
+        "activeSessionId": { "type": "string", "maxLength": 128 },
+        "isSessionActive": { "type": "boolean" },
+        "sessionStartedAt": { "type": "string", "maxLength": 64 },
+        "lastHeartbeatAt": { "type": "string", "maxLength": 64 },
+        "lastHeartbeatMs": { "type": "number" },
+        "forceLogoutSessionId": { "type": "string", "maxLength": 128 },
+        "forceLogoutRequestedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["deviceId", "deviceName", "platform", "isTrusted", "verifiedAt", "lastActiveAt"]
     },
@@ -391,6 +398,7 @@
         "githubPath": { "type": "string", "maxLength": 512 },
         "githubHtmlUrl": { "type": "string", "maxLength": 1024 },
         "githubSha": { "type": "string", "maxLength": 128 },
+        "attachments": { "type": "array", "description": "Additional appendix and supporting attachments for the document" },
         "visibility": { "type": "string", "enum": ["public", "private"] },
         "isImportant": { "type": "boolean" },
         "summary": { "type": "string", "maxLength": 2000 },

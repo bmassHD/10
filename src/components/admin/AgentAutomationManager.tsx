@@ -307,13 +307,13 @@ export const AgentAutomationManager: React.FC<{ settings?: SystemSettings }> = (
           <div className="space-y-2 max-w-2xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-bold border border-indigo-500/30">
               <Bot className="w-3.5 h-3.5" />
-              <span>Trung tâm Điều phối Agent AI Đa Nhà Cung Cấp</span>
+              <span>Trung tâm Điều phối Agent AI (Gemini &amp; ChatGPT)</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Agent AI &amp; Tự Động Hóa Trạm Y Tế
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Tích hợp đa API Key linh hoạt: <strong>Google Gemini</strong>, <strong>ChatGPT (OpenAI)</strong>, <strong>Claude (Anthropic)</strong>, <strong>Blackbox AI</strong>, <strong>Grok (xAI)</strong>. Tự động dự phòng thông minh khi có sự cố mạng hoặc hết hạn mức.
+              Chọn nhà cung cấp AI giữa 2 nền tảng: <strong>Google Gemini</strong> và <strong>ChatGPT (OpenAI)</strong>. Tự động dự phòng thông minh khi có sự cố mạng hoặc hết hạn mức.
             </p>
           </div>
 
@@ -357,7 +357,7 @@ export const AgentAutomationManager: React.FC<{ settings?: SystemSettings }> = (
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
           {Object.keys(providersData).map(id => {
             const p = providersData[id];
             const isSelected = activeProvider === id;

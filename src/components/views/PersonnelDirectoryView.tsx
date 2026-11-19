@@ -28,7 +28,6 @@ import {
   OrgChartDepartment,
   OrgChartMember,
   SystemSettings,
-  UserProfile,
 } from '../../types';
 import { updateSystemSettings, logAuditEvent } from '../../services/firebaseService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -43,20 +42,15 @@ import {
 import {
   OrgRoleKey,
   cloneOrgChartConfig,
-  findMatchingUserForMember,
   maskCccdForPublic,
   normalizeCccd,
-  syncMemberToUserAccount,
-  syncUsersIntoOrgChart,
 } from '../../services/orgPersonnelSyncService';
 
 interface PersonnelDirectoryViewProps {
   settings: SystemSettings;
   settingsLoaded?: boolean;
-  users?: UserProfile[];
   embeddedInAdmin?: boolean;
   onOpenOrgChart?: () => void;
-  onRefreshUsers?: () => void;
 }
 
 type DirectoryTab = 'personnel' | 'departments';
@@ -88,8 +82,6 @@ interface MemberFormState {
   professionalTitle: string;
   phone: string;
   notes: string;
-  linkedUid?: string;
-  isSyncedFromUser?: boolean;
 }
 
 interface DepartmentFormState {
@@ -142,23 +134,14 @@ function escapeCsvCell(value: string): string {
 }
 
 function buildDisplayNoteText(member: OrgChartMember): string {
-  const parts: string[] = [];
-  if (member.isSyncedFromUser) {
-    parts.push('Đã đồng bộ');
-  }
-  if (member.notes?.trim()) {
-    parts.push(member.notes.trim());
-  }
-  return parts.join(' · ');
+  return (member.notes || '').trim();
 }
 
 export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
   settings,
   settingsLoaded = true,
-  users = [],
   embeddedInAdmin = false,
   onOpenOrgChart,
-  onRefreshUsers,
 }) => {
   const { currentUser, userProfile, isAdmin, isStaff } = useAuth();
   const { showToast, showConfirm } = useToast();
@@ -170,7 +153,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
   const [roleTierFilter, setRoleTierFilter] = useState<RoleTierFilter>('all');
   const [expandedDeptIds, setExpandedDeptIds] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
-  const [syncingFromUsers, setSyncingFromUsers] = useState(false);
 
   const [memberForm, setMemberForm] = useState<MemberFormState | null>(null);
   const [deptForm, setDeptForm] = useState<DepartmentFormState | null>(null);
@@ -196,7 +178,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       director: raw?.director,
       deputyDirectors: Array.isArray(raw?.deputyDirectors) ? raw.deputyDirectors : [],
       departments: Array.isArray(raw?.departments) ? raw.departments : [],
-      excludedSyncedUids: Array.isArray(raw?.excludedSyncedUids) ? raw.excludedSyncedUids : undefined,
       updatedAt: raw?.updatedAt,
     };
   }, [settings.orgChart, hasPersistedOrgData]);
@@ -299,28 +280,19 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
 
     let managerCount = 0;
     let staffCount = 0;
-    let syncedCount = 0;
-
-    if (orgChart.director?.fullName?.trim() && orgChart.director.isSyncedFromUser) syncedCount++;
-    orgChart.deputyDirectors.forEach(d => {
-      if (d.fullName?.trim() && d.isSyncedFromUser) syncedCount++;
-    });
 
     orgChart.departments.forEach(dept => {
       if (dept.head?.fullName?.trim()) {
         managerCount += 1;
-        if (dept.head.isSyncedFromUser) syncedCount++;
       }
       (dept.deputies || []).forEach(p => {
         if (p.fullName?.trim()) {
           managerCount += 1;
-          if (p.isSyncedFromUser) syncedCount++;
         }
       });
       (dept.staff || []).forEach(s => {
         if (s.fullName?.trim()) {
           staffCount += 1;
-          if (s.isSyncedFromUser) syncedCount++;
         }
       });
     });
@@ -330,7 +302,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       leadershipCount,
       managerCount,
       departmentCount: orgChart.departments.length,
-      syncedCount,
     };
   }, [orgChart]);
 
@@ -348,7 +319,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
         row.member.professionalTitle,
         row.member.phone || '',
         row.member.notes || '',
-        row.member.isSyncedFromUser ? 'đã đồng bộ da dong bo' : '',
         row.unitName,
         row.roleLabel,
       ]
@@ -466,41 +436,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
     );
   };
 
-  const handleSyncFromUserAccounts = async () => {
-    if (!isAdmin) return;
-    if (!users || users.length === 0) {
-      showToast('info', 'Chưa có tài khoản người dùng nào để đồng bộ');
-      return;
-    }
-
-    setSyncingFromUsers(true);
-    try {
-      const baseChart = getEditableBaseChart();
-      const result = syncUsersIntoOrgChart(baseChart, users, { ignoreExclusions: true });
-
-      if (!result.changed) {
-        showToast(
-          'info',
-          'Dữ liệu đã đồng bộ',
-          'Toàn bộ tài khoản cán bộ/nhân viên đã khớp với danh sách Nhân lực & Khoa phòng.'
-        );
-        return;
-      }
-
-      const ok = await persistOrgChart(
-        result.nextChart,
-        'Đồng bộ Nhân lực từ Tài khoản người dùng',
-        `Thêm mới ${result.addedCount} · Cập nhật ${result.updatedCount} nhân sự từ danh sách Tài khoản`,
-        `Đồng bộ thành công: +${result.addedCount} mới, ${result.updatedCount} cập nhật`
-      );
-      if (ok) {
-        onRefreshUsers?.();
-      }
-    } finally {
-      setSyncingFromUsers(false);
-    }
-  };
-
   const handleExportExcel = () => {
     exportOrgChartWorkbook(orgChart, 'quan_ly_nhan_luc_khoa_phong.xlsx');
     showToast('success', 'Đã xuất bảng Nhân lực & Khoa phòng ra Excel (6 sheet)');
@@ -576,7 +511,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       professionalTitle: '',
       phone: '',
       notes: '',
-      isSyncedFromUser: false, // Nhập thủ công -> không hiện chữ "Đã đồng bộ"
     });
   };
 
@@ -594,8 +528,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       professionalTitle: row.member.professionalTitle || '',
       phone: row.member.phone || '',
       notes: row.member.notes || '',
-      linkedUid: row.member.linkedUid,
-      isSyncedFromUser: row.member.isSyncedFromUser,
     });
   };
 
@@ -631,20 +563,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
     });
   };
 
-  // Live matched user account in modal when typing CCCD / Name / Phone
-  const matchedModalUser = useMemo(() => {
-    if (!memberForm || users.length === 0) return undefined;
-    return findMatchingUserForMember(
-      {
-        linkedUid: memberForm.linkedUid,
-        cccd: memberForm.cccd,
-        fullName: memberForm.fullName,
-        phone: memberForm.phone,
-      },
-      users
-    );
-  }, [memberForm, users]);
-
   const handleSaveMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!memberForm) return;
@@ -662,7 +580,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
     }
 
     const nextChart = getEditableBaseChart();
-    const resolvedLinkedUid = matchedModalUser?.uid || memberForm.linkedUid;
 
     const memberPayload: OrgChartMember = {
       id: memberForm.memberId || createNewId('m'),
@@ -672,9 +589,7 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       professionalTitle: memberForm.professionalTitle.trim(),
       phone: memberForm.phone.trim() || undefined,
       notes: memberForm.notes.trim() || undefined,
-      linkedUid: resolvedLinkedUid || undefined,
-      // Giữ nguyên cờ isSyncedFromUser nếu đang sửa nhân sự tự đồng bộ; thêm mới thủ công luôn là false
-      isSyncedFromUser: memberForm.mode === 'edit' ? Boolean(memberForm.isSyncedFromUser) : false,
+      isSyncedFromUser: false,
     };
 
     // Remove existing entry if editing (handles same-slot update & cross-unit transfer safely)
@@ -754,13 +669,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
       }
     }
 
-    // If linkedUid was previously in excludedSyncedUids, un-exclude it
-    if (resolvedLinkedUid && nextChart.excludedSyncedUids?.includes(resolvedLinkedUid)) {
-      nextChart.excludedSyncedUids = nextChart.excludedSyncedUids.filter(
-        uid => uid !== resolvedLinkedUid
-      );
-    }
-
     const ok = await persistOrgChart(
       nextChart,
       memberForm.mode === 'add' ? 'Thêm nhân sự vào sơ đồ tổ chức' : 'Cập nhật thông tin nhân sự',
@@ -768,41 +676,12 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
     );
 
     if (ok) {
-      // Đồng bộ ngược sang collection `users` bên mục "Tài khoản" nếu nhân lực này cũng là người dùng
-      let syncedToAccount = false;
-      if (users.length > 0) {
-        try {
-          const syncRes = await syncMemberToUserAccount(
-            memberPayload,
-            memberForm.unitId,
-            targetUnitLabel,
-            memberForm.roleKey,
-            users
-          );
-          syncedToAccount = syncRes.synced;
-          if (syncRes.synced) {
-            onRefreshUsers?.();
-          }
-        } catch (syncErr) {
-          console.warn('Sync member to user account error:', syncErr);
-        }
-      }
-
-      if (syncedToAccount) {
-        showToast(
-          'success',
-          memberForm.mode === 'add'
-            ? `Đã thêm ${memberPayload.fullName} & đồng bộ sang mục Tài khoản`
-            : `Đã cập nhật ${memberPayload.fullName} & đồng bộ sang mục Tài khoản`
-        );
-      } else {
-        showToast(
-          'success',
-          memberForm.mode === 'add'
-            ? `Đã thêm ${memberPayload.fullName} vào ${targetUnitLabel}`
-            : `Đã cập nhật thông tin ${memberPayload.fullName}`
-        );
-      }
+      showToast(
+        'success',
+        memberForm.mode === 'add'
+          ? `Đã thêm ${memberPayload.fullName} vào ${targetUnitLabel} (đã cập nhật Sơ đồ tổ chức)`
+          : `Đã cập nhật thông tin ${memberPayload.fullName} (đã cập nhật Sơ đồ tổ chức)`
+      );
       setMemberForm(null);
     }
   };
@@ -832,14 +711,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
               staff: (dept.staff || []).filter(s => s.id !== row.member.id),
             };
           });
-        }
-
-        // Prevent immediate auto-resurrection when deleting a user-synced member
-        if (row.member.linkedUid) {
-          const prevExcluded = nextChart.excludedSyncedUids || [];
-          if (!prevExcluded.includes(row.member.linkedUid)) {
-            nextChart.excludedSyncedUids = [...prevExcluded, row.member.linkedUid];
-          }
         }
 
         await persistOrgChart(
@@ -1032,31 +903,25 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
         <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs p-6 sm:p-8 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
           <div className="space-y-2 min-w-0">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
-              <span>DANH BẠ TỔ CHỨC</span>
+              <span>NHÂN LỰC NIÊM YẾT</span>
               <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
               <span className="tabular-nums">{stats.departmentCount} khoa / phòng</span>
               <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
               <span className="tabular-nums">{stats.totalMembers} nhân sự</span>
-              {stats.syncedCount > 0 && (
-                <>
-                  <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
-                  <span className="tabular-nums">{stats.syncedCount} đã đồng bộ tài khoản</span>
-                </>
-              )}
             </div>
 
             {embeddedInAdmin ? (
               <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-                Quản Lý Nhân Lực &amp; Khoa Phòng (Đồng Bộ Tài Khoản &amp; Sơ Đồ Tổ Chức)
+                Quản Lý Nhân Lực &amp; Khoa Phòng (Liên Kết Sơ Đồ Tổ Chức)
               </h3>
             ) : (
               <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-snug">
-                Quản Lý Nhân Lực &amp; Khoa Phòng
+                Nhân Lực &amp; Khoa Phòng Trạm Y Tế
               </h1>
             )}
 
             <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
-              Danh sách tập trung toàn bộ nhân sự và cơ cấu Khoa/Phòng theo Sơ đồ tổ chức Trạm Y tế, tự động đồng bộ 2 chiều với mục Tài khoản người dùng theo CCCD.
+              Dữ liệu nhân sự niêm yết độc lập của Trạm Y tế — liên kết trực tiếp 2 chiều với Sơ đồ tổ chức, tách biệt hoàn toàn với tài khoản đăng nhập / Admin.
             </p>
           </div>
 
@@ -1089,18 +954,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
               <Download className="w-4 h-4 text-sky-600 shrink-0" />
               <span>Xuất CSV</span>
             </button>
-
-            {isAdmin && (
-              <button
-                type="button"
-                disabled={syncingFromUsers || saving}
-                onClick={handleSyncFromUserAccounts}
-                className="px-3.5 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-xs sm:text-sm font-semibold text-emerald-800 dark:text-emerald-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
-              >
-                <RefreshCw className={`w-4 h-4 text-emerald-600 shrink-0 ${syncingFromUsers ? 'animate-spin' : ''}`} />
-                <span>Đồng bộ từ Tài khoản</span>
-              </button>
-            )}
 
             {isAdmin && !hasPersistedOrgData && (
               <button
@@ -1406,7 +1259,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredPersonnel.map((row, idx) => {
                       const visibleCccd = formatVisibleCccd(row.member.cccd);
-                      const hasSyncNote = Boolean(row.member.isSyncedFromUser);
                       const manualNote = row.member.notes?.trim() || '';
 
                       return (
@@ -1455,18 +1307,7 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                             )}
                           </td>
                           <td className="py-3 px-4 text-xs">
-                            {hasSyncNote ? (
-                              <div className="space-y-0.5">
-                                <div className="font-semibold text-emerald-700 dark:text-emerald-400">
-                                  Đã đồng bộ
-                                </div>
-                                {manualNote && (
-                                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                                    {manualNote}
-                                  </div>
-                                )}
-                              </div>
-                            ) : manualNote ? (
+                            {manualNote ? (
                               <span className="text-slate-600 dark:text-slate-300">{manualNote}</span>
                             ) : (
                               <span className="text-slate-400">—</span>
@@ -1549,7 +1390,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
                       {group.rows.map((row, idx) => {
                         const visibleCccd = formatVisibleCccd(row.member.cccd);
-                        const hasSyncNote = Boolean(row.member.isSyncedFromUser);
                         const manualNote = row.member.notes?.trim() || '';
 
                         return (
@@ -1569,14 +1409,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                                 <span className={`text-xs font-bold ${ROLE_TEXT_COLORS[row.roleKey]}`}>
                                   {row.member.position || row.roleLabel}
                                 </span>
-                                {hasSyncNote && (
-                                  <>
-                                    <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
-                                    <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                                      Đã đồng bộ
-                                    </span>
-                                  </>
-                                )}
                               </div>
                               <div className="pl-7 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400">
                                 {visibleCccd && (
@@ -1946,7 +1778,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                                     <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800">
                                       {deptMembers.map((mRow, mIdx) => {
                                         const visibleCccd = formatVisibleCccd(mRow.member.cccd);
-                                        const hasSyncNote = Boolean(mRow.member.isSyncedFromUser);
                                         return (
                                           <div
                                             key={`${mRow.roleKey}_${mRow.id}_${mIdx}`}
@@ -1984,14 +1815,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                                                   <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
                                                   <span className="font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
                                                     {mRow.member.phone}
-                                                  </span>
-                                                </>
-                                              )}
-                                              {hasSyncNote && (
-                                                <>
-                                                  <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
-                                                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                                                    Đã đồng bộ
                                                   </span>
                                                 </>
                                               )}
@@ -2136,13 +1959,6 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                   />
                 </div>
               </div>
-
-              {matchedModalUser && (
-                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
-                  Phát hiện tài khoản người dùng khớp thông tin:{' '}
-                  <strong>{matchedModalUser.displayName}</strong> ({matchedModalUser.email}). Khi lưu, thông tin đơn vị, chức vụ, CCCD sẽ được đồng bộ sang mục <strong>Tài khoản</strong>.
-                </div>
-              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

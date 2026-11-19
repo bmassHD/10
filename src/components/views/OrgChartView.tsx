@@ -306,7 +306,6 @@ export const OrgChartView: React.FC<OrgChartViewProps> = ({
         director: cleanedDirector,
         deputyDirectors: cleanedDeputies,
         departments: cleanedDepartments,
-        excludedSyncedUids: orgChart.excludedSyncedUids,
         updatedAt: new Date().toISOString(),
       };
 
@@ -393,31 +392,79 @@ export const OrgChartView: React.FC<OrgChartViewProps> = ({
               Sơ Đồ Tổ Chức Bộ Máy Trạm Y Tế
             </h1>
 
-            <div className="w-full md:w-80">
-              <select
-                value={selectedDeptId}
-                onChange={e => setSelectedDeptId(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-              >
-                <option value="all">Tất cả Khoa / Phòng ({orgChart.departments.length})</option>
-                {orgChart.departments.map((dept, deptIdx) => (
-                  <option key={dept.id} value={dept.id}>
-                    {formatNumberedDepartmentName(dept.name, deptIdx)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+              <div className="w-full md:w-72">
+                <select
+                  value={selectedDeptId}
+                  onChange={e => setSelectedDeptId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                >
+                  <option value="all">Tất cả Khoa / Phòng ({orgChart.departments.length})</option>
+                  {orgChart.departments.map((dept, deptIdx) => (
+                    <option key={dept.id} value={dept.id}>
+                      {formatNumberedDepartmentName(dept.name, deptIdx)}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="relative md:w-72 shrink-0">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                placeholder="Tìm tên cán bộ, chức danh..."
-                className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <div className="relative md:w-72 shrink-0">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                  placeholder="Tìm tên cán bộ, chức danh..."
+                  className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onOpenPersonnelDirectory && (
+              <button
+                type="button"
+                onClick={onOpenPersonnelDirectory}
+                className="px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Bảng Nhân lực &amp; Khoa phòng</span>
+              </button>
+            )}
+
+            {isAdmin && (
+              <div className="hidden lg:flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleExcel}
+                  className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Mẫu Excel</span>
+                </button>
+
+                <label className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap">
+                  <Upload className="w-4 h-4 shrink-0" />
+                  <span>Import Excel</span>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleImportExcelFile}
+                    className="hidden"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={openEditorModal}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Settings className="w-4 h-4 shrink-0" />
+                  <span>Chỉnh sửa sơ đồ</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </RevealOnScroll>

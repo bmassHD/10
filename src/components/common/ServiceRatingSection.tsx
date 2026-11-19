@@ -91,7 +91,6 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submittedThisSession, setSubmittedThisSession] = useState(false);
-  const [showAllReviews, setShowAllReviews] = useState(false);
 
   useEffect(() => {
     if (userProfile?.displayName && !reviewerName) {
@@ -138,7 +137,7 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
     [ratings]
   );
 
-  const visibleReviews = showAllReviews ? publicReviews.slice(0, 12) : publicReviews.slice(0, 3);
+  const visibleReviews = useMemo(() => publicReviews.slice(0, 10), [publicReviews]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -338,7 +337,10 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-800 dark:text-slate-100">
                 <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                <span>Nhận Xét Gần Đây ({publicReviews.length})</span>
+                <span>
+                  Nhận Xét Gần Đây ({visibleReviews.length}
+                  {publicReviews.length > 10 ? `/${publicReviews.length}` : ''})
+                </span>
               </div>
               {stats.total > 0 && (
                 <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
@@ -348,7 +350,7 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
             </div>
 
             {publicReviews.length === 0 ? (
-              <div className="py-6 text-center text-xs text-slate-400 dark:text-slate-500 space-y-1">
+              <div className="h-[320px] flex flex-col items-center justify-center text-center text-xs text-slate-400 dark:text-slate-500 space-y-1 px-4">
                 <p className="font-semibold text-slate-500 dark:text-slate-400">
                   {stats.total > 0
                     ? `Đã có ${stats.total} lượt chấm điểm sao.`
@@ -356,7 +358,7 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
+              <div className="h-[320px] overflow-y-auto pr-1.5 space-y-2.5 overscroll-contain">
                 {visibleReviews.map(rev => {
                   const isOwnReview = Boolean(currentUser?.uid && rev.uid && rev.uid === currentUser.uid);
                   const canDelete = Boolean(isAdmin || isOwnReview);
@@ -441,17 +443,6 @@ export const ServiceRatingSection: React.FC<ServiceRatingSectionProps> = ({
                   );
                 })}
 
-                {publicReviews.length > 3 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllReviews(v => !v)}
-                    className="w-full py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
-                  >
-                    {showAllReviews
-                      ? 'Thu gọn nhận xét'
-                      : `Xem thêm ${Math.min(publicReviews.length - 3, 9)} nhận xét khác`}
-                  </button>
-                )}
               </div>
             )}
           </div>

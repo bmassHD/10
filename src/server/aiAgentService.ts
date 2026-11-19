@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
-export type AiProviderType = 'gemini' | 'openai' | 'anthropic' | 'blackbox' | 'grok';
+export type AiProviderType = 'gemini' | 'openai';
 
 export interface StoredAiProvider {
   apiKey?: string;
@@ -34,13 +34,15 @@ const CONFIG_FILE = path.resolve(
   '.ai-agent-config.json'
 );
 
+const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
+
 export const AI_PROVIDERS_INFO: Record<AiProviderType, AiProviderInfo> = {
   gemini: {
     id: 'gemini',
     name: 'Google Gemini',
     label: 'Google Gemini (Khuyên dùng)',
-    defaultModel: 'gemini-2.5-flash',
-    availableModels: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+    defaultModel: DEFAULT_GEMINI_MODEL,
+    availableModels: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-4-neon'],
     docsUrl: 'https://aistudio.google.com/app/apikey',
     freeGuideSteps: [
       '1. Truy cập trang Google AI Studio: https://aistudio.google.com/app/apikey',
@@ -49,14 +51,15 @@ export const AI_PROVIDERS_INFO: Record<AiProviderType, AiProviderInfo> = {
       '4. Chọn một dự án Google Cloud miễn phí hoặc nhấn "Create API key in new project"',
       '5. Sao chép chuỗi mã khóa bắt đầu bằng "AIzaSy..." và dán vào ô Khóa API bên dưới',
     ],
-    freeGuideNotes: 'Miễn phí Free Tier 15 RPM, xử lý cực nhanh đa phương thức văn bản, PDF và hình ảnh y tế.',
+    freeGuideNotes:
+      'Xử lý cực nhanh đa phương thức văn bản, PDF và hình ảnh y tế; hỗ trợ dự phòng tự động với biến môi trường GEMINI_API_KEY.',
   },
   openai: {
     id: 'openai',
     name: 'ChatGPT (OpenAI)',
-    label: 'OpenAI ChatGPT (GPT-4o / GPT-4o-mini)',
+    label: 'ChatGPT (OpenAI)',
     defaultModel: 'gpt-4o-mini',
-    availableModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'],
+    availableModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
     docsUrl: 'https://platform.openai.com/api-keys',
     freeGuideSteps: [
       '1. Truy cập cổng quản lý OpenAI Platform: https://platform.openai.com/api-keys',
@@ -65,57 +68,19 @@ export const AI_PROVIDERS_INFO: Record<AiProviderType, AiProviderInfo> = {
       '4. Nhấn nút "+ Create new secret key", đặt tên gợi nhớ (ví dụ: "TYT-Agent-Portal")',
       '5. Sao chép chuỗi mã bí mật bắt đầu bằng "sk-proj-..." và lưu vào ô cấu hình',
     ],
-    freeGuideNotes: 'Tài khoản OpenAI đăng ký lần đầu thường có credits dùng thử miễn phí hoặc có thể nạp tối thiểu $5 để dùng gpt-4o-mini với chi phí cực thấp.',
-  },
-  anthropic: {
-    id: 'anthropic',
-    name: 'Claude (Anthropic)',
-    label: 'Anthropic Claude 3.5',
-    defaultModel: 'claude-3-haiku-20240307',
-    availableModels: ['claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022'],
-    docsUrl: 'https://console.anthropic.com/settings/keys',
-    freeGuideSteps: [
-      '1. Truy cập Anthropic Console: https://console.anthropic.com/settings/keys',
-      '2. Đăng nhập bằng tài khoản Google hoặc Email của bạn',
-      '3. Chọn menu Settings > API Keys',
-      '4. Nhấn "Create Key", đặt tên khóa và sao chép chuỗi bắt đầu bằng "sk-ant-..."',
-      '5. Dán vào ô Khóa API của Claude trên cổng thông tin',
-    ],
-    freeGuideNotes: 'Anthropic cấp $5 tín dụng miễn phí ban đầu cho tài khoản xác thực số điện thoại để trải nghiệm các mô hình Claude 3.5.',
-  },
-  blackbox: {
-    id: 'blackbox',
-    name: 'Blackbox AI',
-    label: 'Blackbox AI Engine',
-    defaultModel: 'blackboxai',
-    availableModels: ['blackboxai', 'gpt-4o', 'gemini-flash'],
-    docsUrl: 'https://www.blackbox.ai/',
-    freeGuideSteps: [
-      '1. Truy cập trang chủ Blackbox AI: https://www.blackbox.ai/',
-      '2. Đăng nhập qua tài khoản GitHub hoặc Google',
-      '3. Vào mục Profile / Developer Settings để kích hoạt quyền truy cập API',
-      '4. Khởi tạo mã API Key miễn phí cho ứng dụng',
-      '5. Sao chép và dán khóa API vào mục cấu hình Agent',
-    ],
-    freeGuideNotes: 'Blackbox AI hỗ trợ các gói miễn phí cho lập trình viên và cộng đồng mã nguồn mở.',
-  },
-  grok: {
-    id: 'grok',
-    name: 'Grok (xAI)',
-    label: 'xAI Grok (Grok-2)',
-    defaultModel: 'grok-2-latest',
-    availableModels: ['grok-2-latest', 'grok-beta'],
-    docsUrl: 'https://console.x.ai/',
-    freeGuideSteps: [
-      '1. Truy cập trang xAI Console: https://console.x.ai/',
-      '2. Đăng nhập bằng tài khoản X (Twitter)',
-      '3. Điều hướng đến mục "API Keys" trong bảng điều khiển',
-      '4. Nhấn "Create API Key", đặt tên và sao chép chuỗi mã bắt đầu bằng "xai-..."',
-      '5. Dán mã khóa vào hệ thống và nhấn "Kiểm tra kết nối"',
-    ],
-    freeGuideNotes: 'xAI cung cấp $25 credits miễn phí mỗi tháng cho các tài khoản nhà phát triển đăng ký ban đầu.',
+    freeGuideNotes:
+      'Phù hợp khi muốn dùng mô hình GPT-4o / GPT-4o-mini để trích xuất và tóm tắt văn bản hành chính.',
   },
 };
+
+const VALID_PROVIDER_IDS: AiProviderType[] = ['gemini', 'openai'];
+
+function normalizeGeminiModel(rawModel?: string): string {
+  const m = (rawModel || '').trim();
+  if (!m) return DEFAULT_GEMINI_MODEL;
+  if (AI_PROVIDERS_INFO.gemini.availableModels.includes(m)) return m;
+  return DEFAULT_GEMINI_MODEL;
+}
 
 export function maskApiKey(key?: string): string {
   if (!key || typeof key !== 'string') return '';
@@ -132,10 +97,34 @@ export function loadStoredAiConfig(): StoredAiAgentConfig {
       const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
+        const activeProvider: AiProviderType =
+          parsed.activeProvider === 'openai' ? 'openai' : 'gemini';
+        const parsedFallback = Array.isArray(parsed.fallbackOrder)
+          ? (parsed.fallbackOrder.filter((id: unknown): id is AiProviderType =>
+              VALID_PROVIDER_IDS.includes(id as AiProviderType)
+            ) as AiProviderType[])
+          : [];
+        const fallbackOrder: AiProviderType[] =
+          parsedFallback.length > 0 ? parsedFallback : ['gemini', 'openai'];
+        const rawProviders = parsed.providers || {};
+        const providers: Partial<Record<AiProviderType, StoredAiProvider>> = {};
+        if (rawProviders.gemini) {
+          providers.gemini = {
+            ...rawProviders.gemini,
+            model: normalizeGeminiModel(rawProviders.gemini.model),
+          };
+        }
+        if (rawProviders.openai) {
+          providers.openai = {
+            ...rawProviders.openai,
+            model: rawProviders.openai.model || AI_PROVIDERS_INFO.openai.defaultModel,
+          };
+        }
+
         return {
-          activeProvider: parsed.activeProvider || 'gemini',
-          fallbackOrder: parsed.fallbackOrder || ['gemini', 'openai', 'anthropic', 'blackbox', 'grok'],
-          providers: parsed.providers || {},
+          activeProvider,
+          fallbackOrder,
+          providers,
           updatedAt: parsed.updatedAt,
         };
       }
@@ -148,11 +137,11 @@ export function loadStoredAiConfig(): StoredAiAgentConfig {
   const geminiEnv = (process.env.GEMINI_API_KEY || '').trim();
   return {
     activeProvider: 'gemini',
-    fallbackOrder: ['gemini', 'openai', 'anthropic', 'blackbox', 'grok'],
+    fallbackOrder: ['gemini', 'openai'],
     providers: {
       gemini: {
         apiKey: geminiEnv && geminiEnv !== 'MY_GEMINI_API_KEY' ? geminiEnv : undefined,
-        model: 'gemini-2.5-flash',
+        model: DEFAULT_GEMINI_MODEL,
         isConfigured: Boolean(geminiEnv && geminiEnv !== 'MY_GEMINI_API_KEY'),
       },
     },
@@ -161,7 +150,16 @@ export function loadStoredAiConfig(): StoredAiAgentConfig {
 
 export function saveStoredAiConfig(config: StoredAiAgentConfig): void {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    const normalized: StoredAiAgentConfig = {
+      activeProvider: config.activeProvider === 'openai' ? 'openai' : 'gemini',
+      fallbackOrder: ['gemini', 'openai'],
+      providers: {
+        ...(config.providers.gemini ? { gemini: config.providers.gemini } : {}),
+        ...(config.providers.openai ? { openai: config.providers.openai } : {}),
+      },
+      updatedAt: config.updatedAt,
+    };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(normalized, null, 2), 'utf-8');
   } catch (err) {
     console.error('Failed to write .ai-agent-config.json:', err);
     throw new Error('Không thể lưu tệp cấu hình Agent trên máy chủ.');
@@ -172,37 +170,48 @@ export function getClientSafeAgentConfig() {
   const stored = loadStoredAiConfig();
   const clientProviders: Record<string, any> = {};
 
-  (Object.keys(AI_PROVIDERS_INFO) as AiProviderType[]).forEach(id => {
+  VALID_PROVIDER_IDS.forEach(id => {
     const info = AI_PROVIDERS_INFO[id];
     const prov = stored.providers[id];
     const hasKey = Boolean(prov?.apiKey && prov.apiKey.trim().length > 0);
-    const envKeyAvailable = id === 'gemini' && Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+    const envKeyAvailable =
+      id === 'gemini' &&
+      Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
 
     clientProviders[id] = {
       ...info,
-      model: prov?.model || info.defaultModel,
+      model: id === 'gemini' ? normalizeGeminiModel(prov?.model) : prov?.model || info.defaultModel,
       isConfigured: hasKey || envKeyAvailable,
-      apiKeyMasked: hasKey ? maskApiKey(prov?.apiKey) : envKeyAvailable ? 'AIzaSy••••••••(Biến môi trường)' : '',
+      apiKeyMasked: hasKey
+        ? maskApiKey(prov?.apiKey)
+        : envKeyAvailable
+          ? 'AIzaSy••••••••(Biến môi trường)'
+          : '',
       updatedAt: prov?.updatedAt,
     };
   });
 
   return {
     activeProvider: stored.activeProvider || 'gemini',
-    fallbackOrder: stored.fallbackOrder || ['gemini', 'openai', 'anthropic', 'blackbox', 'grok'],
+    fallbackOrder: stored.fallbackOrder || ['gemini', 'openai'],
     providers: clientProviders,
     updatedAt: stored.updatedAt,
   };
 }
 
-export async function testProviderConnection(provider: AiProviderType, apiKey: string, model?: string): Promise<{
+export async function testProviderConnection(
+  provider: AiProviderType,
+  apiKey: string,
+  model?: string
+): Promise<{
   ok: boolean;
   latencyMs: number;
   message: string;
   responsePreview?: string;
 }> {
   const startTime = Date.now();
-  const testPrompt = 'Hãy trả về đúng chuỗi JSON: {"status": "ok", "agent": "connected"}. Không kèm giải thích.';
+  const testPrompt =
+    'Hãy trả về đúng chuỗi JSON: {"status": "ok", "agent": "connected"}. Không kèm giải thích.';
 
   try {
     const res = await callSpecificAiProvider({
@@ -285,7 +294,7 @@ export async function callSpecificAiProvider(options: {
           }
         : fullPrompt;
       const resp = await ai.models.generateContent({
-        model: model || 'gemini-2.5-flash',
+        model: normalizeGeminiModel(model),
         contents: contentsPayload,
         config: jsonMode
           ? {
@@ -336,89 +345,6 @@ export async function callSpecificAiProvider(options: {
       return { text: content };
     }
 
-    if (provider === 'anthropic') {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': cleanKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: model || 'claude-3-haiku-20240307',
-          max_tokens: 2048,
-          system: systemPrompt || undefined,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`Anthropic HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-      }
-      const data: any = await resp.json();
-      const text = data?.content?.[0]?.text || '';
-      return { text };
-    }
-
-    if (provider === 'blackbox') {
-      // Blackbox AI API
-      const resp = await fetch('https://api.blackbox.ai/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cleanKey}`,
-        },
-        body: JSON.stringify({
-          messages: [
-            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-            { role: 'user', content: prompt },
-          ],
-          model: model || 'blackboxai',
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`Blackbox AI HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-      }
-      const data: any = await resp.json();
-      const text = data?.text || data?.choices?.[0]?.message?.content || (typeof data === 'string' ? data : JSON.stringify(data));
-      return { text };
-    }
-
-    if (provider === 'grok') {
-      // xAI Grok (OpenAI compatible API)
-      const messages: any[] = [];
-      if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-      messages.push({ role: 'user', content: prompt });
-
-      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cleanKey}`,
-        },
-        body: JSON.stringify({
-          model: model || 'grok-2-latest',
-          messages,
-          response_format: jsonMode ? { type: 'json_object' } : undefined,
-          temperature: 0.2,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`xAI Grok HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-      }
-      const data: any = await resp.json();
-      const content = data?.choices?.[0]?.message?.content || '';
-      return { text: content };
-    }
-
     throw new Error(`Nhà cung cấp AI không được hỗ trợ: ${provider}`);
   } finally {
     clearTimeout(timeoutTimer);
@@ -433,8 +359,12 @@ export async function executeAgentRequest(options: {
   mimeType?: string;
 }): Promise<{ text: string; providerUsed: string; modelUsed: string }> {
   const config = loadStoredAiConfig();
-  const primaryProvider = config.activeProvider || 'gemini';
-  const order = [primaryProvider, ...(config.fallbackOrder || []).filter(p => p !== primaryProvider)];
+  const primaryProvider: AiProviderType =
+    config.activeProvider === 'openai' ? 'openai' : 'gemini';
+  const order: AiProviderType[] = [
+    primaryProvider,
+    ...VALID_PROVIDER_IDS.filter(p => p !== primaryProvider),
+  ];
 
   let lastError: any = null;
 
@@ -448,7 +378,10 @@ export async function executeAgentRequest(options: {
 
     if (!key) continue;
 
-    const model = prov?.model || AI_PROVIDERS_INFO[provId]?.defaultModel || 'gemini-2.5-flash';
+    const model =
+      provId === 'gemini'
+        ? normalizeGeminiModel(prov?.model)
+        : prov?.model || AI_PROVIDERS_INFO[provId].defaultModel;
 
     try {
       const res = await callSpecificAiProvider({
@@ -483,7 +416,7 @@ export async function executeAgentRequest(options: {
       const res = await callSpecificAiProvider({
         provider: 'gemini',
         apiKey: envGemini,
-        model: 'gemini-2.5-flash',
+        model: DEFAULT_GEMINI_MODEL,
         prompt: options.prompt,
         systemPrompt: options.systemPrompt,
         jsonMode: options.jsonMode,
@@ -494,12 +427,14 @@ export async function executeAgentRequest(options: {
       return {
         text: res.text,
         providerUsed: 'Google Gemini (Môi trường máy chủ)',
-        modelUsed: 'gemini-2.5-flash',
+        modelUsed: DEFAULT_GEMINI_MODEL,
       };
     } catch (err) {
       lastError = err;
     }
   }
 
-  throw new Error(lastError?.message || 'Không có nhà cung cấp Agent AI nào khả dụng hoặc tất cả đều hết hạn mức.');
+  throw new Error(
+    lastError?.message || 'Không có nhà cung cấp Agent AI nào khả dụng hoặc tất cả đều hết hạn mức.'
+  );
 }
