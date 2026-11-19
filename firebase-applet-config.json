@@ -1,12 +1,12 @@
 {
-  "projectId": "cosmic-booster-0mn89",
-  "appId": "1:609380495944:web:c46e5563ae340777145e7d",
-  "apiKey": "AIzaSyDM8dfMTrZs7_p3u1N0QAe69HwEeH07cLg",
-  "authDomain": "cosmic-booster-0mn89.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-19-cebfb0b0-e322-4e3c-a9f9-be7bbc47c442",
-  "storageBucket": "cosmic-booster-0mn89.firebasestorage.app",
-  "messagingSenderId": "609380495944",
+  "projectId": "gen-lang-client-0481480995",
+  "appId": "1:718350977124:web:bc0e210389a40acd877771",
+  "apiKey": "AIzaSyCfTpNgK2p7LmJzzKhgzEotRiDt_WGC11U",
+  "authDomain": "gen-lang-client-0481480995.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-remix19-38db70e5-9d27-446e-a374-988d45130e56",
+  "storageBucket": "gen-lang-client-0481480995.firebasestorage.app",
+  "messagingSenderId": "718350977124",
   "measurementId": "",
-  "oAuthClientId": "609380495944-f5725s8d32b4mej4mjog657ja7k4n516.apps.googleusercontent.com",
+  "oAuthClientId": "718350977124-ru8en9lbbh3cfjhaioe9sei42t6v46r8.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

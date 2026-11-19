@@ -9,7 +9,7 @@ import {
   Clock,
   RefreshCw,
   Hand,
-  Settings2,
+  LogIn,
 } from 'lucide-react';
 import { LocationPermissionState } from '../../hooks/useUserPermissions';
 
@@ -26,6 +26,7 @@ interface MandatoryPermissionGateProps {
   }>;
   onRequestLocation: () => Promise<{ lat: number; lng: number } | null>;
   onRequestNotification: () => Promise<boolean>;
+  onOpenAuthModal: () => void;
 }
 
 const PULL_THRESHOLD = 64;
@@ -40,6 +41,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
   onRequestAll,
   onRequestLocation,
   onRequestNotification,
+  onOpenAuthModal,
 }) => {
   const [pullDistance, setPullDistance] = useState(0);
   const [isPulling, setIsPulling] = useState(false);
@@ -55,7 +57,6 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
   const locationGranted = locationStatus === 'granted';
   const notificationGranted = notificationStatus === 'granted';
 
-  // Attempt one automatic prompt on initial arrival when permissions are still at default/prompt
   useEffect(() => {
     if (autoRequestedRef.current) return;
     if (!locationGranted || !notificationGranted) {
@@ -71,7 +72,6 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
     setIsRequesting(true);
     setRetryFeedback(null);
 
-    // Trigger synchronously inside the caller's gesture stack so browsers honor user activation
     const promise = onRequestAll();
     void promise
       .then((res) => {
@@ -81,7 +81,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
           if (!res.notificationGranted) missing.push('Thông báo');
           const prefix = fromSwipeDown ? 'Đã kiểm tra lại sau khi vuốt xuống: ' : '';
           setRetryFeedback(
-            `${prefix}Chưa được cấp quyền ${missing.join(' và ')}. Nếu trình duyệt đã chặn trước đó, hãy mở Cài đặt trang web (biểu tượng ổ khóa 🔒 cạnh thanh địa chỉ) để chuyển sang "Cho phép", sau đó vuốt xuống lại.`
+            `${prefix}Chưa được cấp quyền ${missing.join(' và ')}. Nếu đã chặn trước đó, hãy mở cài đặt trình duyệt (biểu tượng 🔒) để Cho phép, sau đó vuốt xuống lại.`
           );
         }
       })
@@ -96,7 +96,6 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
     setPullDistance(clamped);
   };
 
-  // Touch handlers for mobile/tablet swipe-down
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     if (isRequesting) return;
     const scrollTop = containerRef.current?.scrollTop ?? window.scrollY ?? 0;
@@ -113,9 +112,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
     const currentY = e.touches[0]?.clientY ?? touchStartYRef.current;
     const delta = currentY - touchStartYRef.current;
     if (delta > 0) {
-      // Smooth rubber-band damping
-      const damped = delta * 0.65;
-      updatePull(damped);
+      updatePull(delta * 0.65);
     } else {
       updatePull(0);
     }
@@ -132,7 +129,6 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
     }
   };
 
-  // Mouse drag handlers for desktop pull-down parity
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isRequesting || e.button !== 0) return;
     const target = e.target as HTMLElement | null;
@@ -166,40 +162,35 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
 
   const isReadyToRelease = pullDistance >= PULL_THRESHOLD;
 
-  const renderPermissionStateText = (
+  const renderStateBadge = (
     supported: boolean,
-    status: 'granted' | 'denied' | 'prompt' | 'default'
+    status: 'granted' | 'denied' | 'prompt' | 'default',
+    labelName: string
   ) => {
-    if (!supported) {
-      return {
-        label: 'Trình duyệt không hỗ trợ',
-        tone: 'text-rose-700 dark:text-rose-300',
-        Icon: XCircle,
-      };
-    }
+    if (!supported) return <span className="text-rose-600 font-semibold">{labelName}: Không hỗ trợ</span>;
     if (status === 'granted') {
-      return {
-        label: 'Đã cho phép',
-        tone: 'text-emerald-700 dark:text-emerald-300',
-        Icon: CheckCircle2,
-      };
+      return (
+        <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-bold">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          <span>{labelName}: Đã bật</span>
+        </span>
+      );
     }
     if (status === 'denied') {
-      return {
-        label: 'Đang bị chặn',
-        tone: 'text-rose-700 dark:text-rose-300',
-        Icon: XCircle,
-      };
+      return (
+        <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-300 font-bold">
+          <XCircle className="w-3.5 h-3.5" />
+          <span>{labelName}: Bị chặn</span>
+        </span>
+      );
     }
-    return {
-      label: 'Chưa cấp quyền',
-      tone: 'text-amber-700 dark:text-amber-300',
-      Icon: Clock,
-    };
+    return (
+      <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 font-bold">
+        <Clock className="w-3.5 h-3.5" />
+        <span>{labelName}: Chưa bật</span>
+      </span>
+    );
   };
-
-  const locMeta = renderPermissionStateText(locationSupported, locationStatus);
-  const notifMeta = renderPermissionStateText(notificationSupported, notificationStatus);
 
   return (
     <div
@@ -212,220 +203,101 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-      className="fixed inset-0 z-[9999] overflow-y-auto overscroll-y-contain bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 select-none"
+      className="fixed inset-0 z-[9999] overflow-y-auto overscroll-y-contain bg-slate-900/90 backdrop-blur-md text-slate-100 flex items-center justify-center p-4 select-none"
     >
-      {/* Pull-down live feedback banner */}
-      <div
-        style={{
-          height: isRequesting ? 54 : pullDistance > 0 ? Math.max(36, pullDistance) : 44,
-        }}
-        className={`w-full flex items-center justify-center gap-2 px-4 text-xs font-semibold transition-colors ${
-          isPulling ? '' : 'transition-all duration-200'
-        } ${
-          isRequesting
-            ? 'bg-emerald-700 text-white'
-            : isReadyToRelease
-            ? 'bg-emerald-600 text-white'
-            : 'bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200/80 dark:border-amber-900/60 text-amber-900 dark:text-amber-200'
-        }`}
-      >
-        {isRequesting ? (
-          <>
-            <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-            <span>Đang gửi yêu cầu cấp quyền Vị trí &amp; Thông báo...</span>
-          </>
-        ) : isReadyToRelease ? (
-          <>
-            <ArrowDown className="w-4 h-4 rotate-180 transition-transform shrink-0" />
-            <span>Thả tay ngay để hệ thống yêu cầu truy cập lại!</span>
-          </>
-        ) : (
-          <>
-            <ArrowDown className="w-4 h-4 animate-bounce shrink-0" />
-            <span>Vuốt xuống từ trên màn hình để yêu cầu cấp quyền truy cập lại</span>
-          </>
-        )}
-      </div>
-
-      {/* Main blocked access card */}
-      <div
-        style={{
-          transform: pullDistance > 0 ? `translateY(${Math.round(pullDistance * 0.25)}px)` : undefined,
-        }}
-        className={`min-h-[calc(100vh-44px)] flex items-center justify-center p-4 sm:p-6 ${
-          isPulling ? '' : 'transition-transform duration-200'
-        }`}
-      >
-        <div className="w-full max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/70 shadow-xl overflow-hidden">
-          {/* Header */}
-          <div className="p-5 sm:p-6 bg-gradient-to-br from-rose-700 via-rose-800 to-slate-900 text-white">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0">
-                <ShieldAlert className="w-6 h-6 text-white" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-rose-100/90">
-                  {stationName || 'Cổng Thông Tin Điện Tử Trạm Y Tế'}
-                </p>
-                <h1 className="text-lg sm:text-xl font-extrabold leading-snug mt-0.5">
-                  Cấm truy cập hệ thống khi chưa bật Vị trí &amp; Thông báo
-                </h1>
-              </div>
-            </div>
-            <p className="text-xs sm:text-sm text-rose-50/95 mt-3 leading-relaxed">
-              Truy cập <strong>Vị trí</strong> và <strong>Thông báo</strong> là yêu cầu bảo mật &amp; phục vụ y tế khẩn cấp quan trọng. Khi bạn cho phép đủ cả 2 quyền này, toàn bộ hệ thống sẽ mở và hoạt động bình thường.
+      <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col">
+        {/* Banner */}
+        <div className="p-4 bg-gradient-to-r from-rose-700 to-rose-900 text-white flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+            <ShieldAlert className="w-5 h-5 text-white" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold text-rose-100/90 uppercase tracking-wide">
+              {stationName || 'Trạm Y Tế'}
             </p>
+            <h1 className="text-sm font-extrabold leading-snug">
+              Yêu cầu bật Vị trí &amp; Thông báo
+            </h1>
+          </div>
+        </div>
+
+        {/* Pull feedback bar */}
+        <div
+          style={{
+            height: isRequesting ? 40 : pullDistance > 0 ? Math.max(30, pullDistance) : 36,
+          }}
+          className={`w-full flex items-center justify-center gap-1.5 px-3 text-[11px] font-semibold transition-colors ${
+            isPulling ? '' : 'transition-all duration-200'
+          } ${
+            isRequesting
+              ? 'bg-emerald-700 text-white'
+              : isReadyToRelease
+              ? 'bg-emerald-600 text-white'
+              : 'bg-amber-100 dark:bg-amber-950/60 text-amber-950 dark:text-amber-200 border-b border-amber-200 dark:border-amber-900'
+          }`}
+        >
+          {isRequesting ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span>Đang yêu cầu cấp quyền...</span>
+            </>
+          ) : isReadyToRelease ? (
+            <>
+              <ArrowDown className="w-3.5 h-3.5 rotate-180 shrink-0" />
+              <span>Thả tay để yêu cầu ngay!</span>
+            </>
+          ) : (
+            <>
+              <ArrowDown className="w-3.5 h-3.5 animate-bounce shrink-0" />
+              <span>↓ Vuốt xuống từ đầu màn hình để yêu cầu lại</span>
+            </>
+          )}
+        </div>
+
+        {/* Content body */}
+        <div className="p-4 sm:p-5 space-y-3.5 text-xs text-slate-700 dark:text-slate-300">
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-center justify-around gap-2 text-center">
+            <div className="flex flex-col items-center gap-1">
+              <MapPin className="w-4 h-4 text-rose-600" />
+              {renderStateBadge(locationSupported, locationStatus, 'Vị trí')}
+            </div>
+            <div className="w-px h-8 bg-slate-200 dark:bg-slate-700" />
+            <div className="flex flex-col items-center gap-1">
+              <Bell className="w-4 h-4 text-sky-600" />
+              {renderStateBadge(notificationSupported, notificationStatus, 'Thông báo')}
+            </div>
           </div>
 
-          {/* Body */}
-          <div className="p-5 sm:p-6 space-y-4 text-xs sm:text-sm">
-            {/* Swipe-down visual guide */}
-            <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/70 flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0 mt-0.5">
-                <Hand className="w-4 h-4" />
-              </div>
-              <div className="space-y-1 text-xs">
-                <p className="font-bold text-amber-950 dark:text-amber-100 text-sm">
-                  Hướng dẫn vuốt xuống để yêu cầu lại quyền truy cập
-                </p>
-                <p className="text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
-                  Đặt tay ở phần trên màn hình và <strong>vuốt thẳng xuống dưới</strong> (hoặc kéo xuống trên máy tính), hệ thống sẽ tự động gọi lại hộp thoại xin quyền <strong>Vị trí</strong> &amp; <strong>Thông báo</strong>.
-                </p>
-              </div>
-            </div>
+          {retryFeedback && (
+            <p className="text-[11px] text-rose-700 dark:text-rose-300 font-medium leading-relaxed bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900">
+              {retryFeedback}
+            </p>
+          )}
 
-            {/* 2 Required Permissions Status */}
-            <div className="space-y-2.5">
-              {/* 1. Location */}
-              <div
-                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                  locationGranted
-                    ? 'bg-emerald-50/60 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/60'
-                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
-                }`}
-              >
-                <div className="flex items-start gap-3 min-w-0">
-                  <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-                      locationGranted
-                        ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300'
-                        : 'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300'
-                    }`}
-                  >
-                    <MapPin className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-bold text-sm text-slate-900 dark:text-white">
-                      1. Quyền truy cập Vị trí (GPS)
-                    </div>
-                    <div className={`text-xs font-semibold inline-flex items-center gap-1 mt-0.5 ${locMeta.tone}`}>
-                      <locMeta.Icon className="w-3.5 h-3.5 shrink-0" />
-                      <span>{locMeta.label}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
-                      Định vị điểm trạm gần nhất, tiêm chủng &amp; bản đồ cấp cứu.
-                    </p>
-                  </div>
-                </div>
-                {!locationGranted && (
-                  <button
-                    type="button"
-                    disabled={isRequesting}
-                    onClick={() => {
-                      setIsRequesting(true);
-                      void onRequestLocation().finally(() => setIsRequesting(false));
-                    }}
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white font-bold text-xs shrink-0 transition cursor-pointer disabled:opacity-60"
-                  >
-                    Bật Vị trí
-                  </button>
-                )}
-              </div>
-
-              {/* 2. Notification */}
-              <div
-                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                  notificationGranted
-                    ? 'bg-emerald-50/60 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/60'
-                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
-                }`}
-              >
-                <div className="flex items-start gap-3 min-w-0">
-                  <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-                      notificationGranted
-                        ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300'
-                        : 'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300'
-                    }`}
-                  >
-                    <Bell className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-bold text-sm text-slate-900 dark:text-white">
-                      2. Quyền nhận Thông báo
-                    </div>
-                    <div className={`text-xs font-semibold inline-flex items-center gap-1 mt-0.5 ${notifMeta.tone}`}>
-                      <notifMeta.Icon className="w-3.5 h-3.5 shrink-0" />
-                      <span>{notifMeta.label}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
-                      Nhận cảnh báo y tế, lịch trực, tiêm chủng &amp; cảnh báo bảo mật.
-                    </p>
-                  </div>
-                </div>
-                {!notificationGranted && (
-                  <button
-                    type="button"
-                    disabled={isRequesting}
-                    onClick={() => {
-                      setIsRequesting(true);
-                      void onRequestNotification().finally(() => setIsRequesting(false));
-                    }}
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white font-bold text-xs shrink-0 transition cursor-pointer disabled:opacity-60"
-                  >
-                    Bật Thông báo
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Diagnostic / Site Settings instructions when denied */}
-            {(retryFeedback || locationStatus === 'denied' || notificationStatus === 'denied') && (
-              <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/35 border border-rose-200 dark:border-rose-800/70 text-rose-900 dark:text-rose-200 text-xs space-y-2">
-                <div className="font-bold flex items-center gap-1.5">
-                  <Settings2 className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
-                  <span>Cách mở lại nếu bạn đã từng chọn &ldquo;Chặn / Từ chối&rdquo;</span>
-                </div>
-                {retryFeedback && (
-                  <p className="leading-relaxed font-medium">{retryFeedback}</p>
-                )}
-                <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
-                  <li>Chạm vào biểu tượng <strong>Ổ khóa (🔒)</strong> hoặc <strong>Cài đặt trang web</strong> cạnh thanh địa chỉ trình duyệt.</li>
-                  <li>Chuyển cả <strong>Vị trí (Location)</strong> và <strong>Thông báo (Notifications)</strong> sang <strong>Cho phép (Allow)</strong>.</li>
-                  <li>Quay lại màn hình này và <strong>vuốt xuống</strong> để hệ thống kiểm tra &amp; mở khóa ngay.</li>
-                </ol>
-                {!notificationSupported && (
-                  <p className="text-[11px] font-semibold pt-1 border-t border-rose-200/70 dark:border-rose-800/60">
-                    Lưu ý trên iPhone/iPad (Safari): Hãy bấm nút Chia sẻ → &ldquo;Thêm vào Màn hình chính (Add to Home Screen)&rdquo; và mở ứng dụng từ màn hình chính để bật Thông báo.
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Primary action button */}
+          <div className="space-y-2 pt-1">
             <button
               type="button"
               disabled={isRequesting}
               onClick={() => executeRequestAll(false)}
-              className="w-full min-h-[46px] py-3 px-4 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              className="w-full min-h-[42px] py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
             >
-              <RefreshCw className={`w-4 h-4 ${isRequesting ? 'animate-spin' : ''}`} />
-              <span>
-                {isRequesting
-                  ? 'Đang yêu cầu cấp quyền...'
-                  : 'Yêu cầu cấp cả 2 quyền Vị trí & Thông báo'}
-              </span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isRequesting ? 'animate-spin' : ''}`} />
+              <span>{isRequesting ? 'Đang yêu cầu...' : 'Cấp quyền Vị trí & Thông báo'}</span>
             </button>
+
+            <button
+              type="button"
+              onClick={onOpenAuthModal}
+              className="w-full min-h-[40px] py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span>Đăng nhập hệ thống (Quản trị / Tài khoản)</span>
+            </button>
+          </div>
+
+          <div className="text-[11px] text-center text-slate-400 dark:text-slate-500 pt-1 flex items-center justify-center gap-1">
+            <Hand className="w-3 h-3" />
+            <span>Mẹo: Bạn có thể vuốt xuống bất cứ lúc nào để gọi lại hộp thoại</span>
           </div>
         </div>
       </div>

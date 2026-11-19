@@ -958,16 +958,27 @@ function MainApp() {
 
   if (!hasAllRequiredPermissions && !isSuperAdminActual) {
     return (
-      <MandatoryPermissionGate
-        locationStatus={locationStatus}
-        notificationStatus={notificationStatus}
-        locationSupported={locationSupported}
-        notificationSupported={notificationSupported}
-        stationName={settings.stationName}
-        onRequestAll={requestRequiredPermissions}
-        onRequestLocation={requestLocation}
-        onRequestNotification={requestNotification}
-      />
+      <>
+        <MandatoryPermissionGate
+          locationStatus={locationStatus}
+          notificationStatus={notificationStatus}
+          locationSupported={locationSupported}
+          notificationSupported={notificationSupported}
+          stationName={settings.stationName}
+          onRequestAll={requestRequiredPermissions}
+          onRequestLocation={requestLocation}
+          onRequestNotification={requestNotification}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        />
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onRegisteredNavigate={() => setCurrentView('account')}
+        />
+        <TwoFactorGateModal />
+        <SmsMfaChallengeModal />
+        <ConcurrentLoginAlertModal onOpenAccountSecurity={() => setCurrentView('account')} />
+      </>
     );
   }
 
