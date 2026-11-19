@@ -194,25 +194,16 @@ export function useUserPermissions() {
     }
   }, [notificationSupported]);
 
-  // Synchronously invoke both native prompts inside the caller's user-gesture stack
+  // Synchronously invoke location permission prompt inside the caller's user-gesture stack
   const requestRequiredPermissions = useCallback(async (): Promise<{
     locationGranted: boolean;
     notificationGranted: boolean;
     bothGranted: boolean;
   }> => {
-    const notifPromise: Promise<NotificationPermission> = notificationSupported
-      ? Notification.permission === 'granted'
-        ? Promise.resolve<NotificationPermission>('granted')
-        : Promise.resolve(Notification.requestPermission()).catch(() => Notification.permission)
-      : Promise.resolve<NotificationPermission>('denied');
-
-    const locPromise = requestLocation();
-
-    const [notifPerm, coords] = await Promise.all([notifPromise, locPromise]);
-    setNotificationStatus(notifPerm);
+    const coords = await requestLocation();
     const refreshed = await refreshPermissions();
 
-    const finalNotifGranted = notifPerm === 'granted' || refreshed.notificationStatus === 'granted';
+    const finalNotifGranted = refreshed.notificationStatus === 'granted';
     const finalLocGranted = Boolean(coords) || refreshed.locationStatus === 'granted';
 
     if (finalLocGranted) {
@@ -222,14 +213,13 @@ export function useUserPermissions() {
     return {
       locationGranted: finalLocGranted,
       notificationGranted: finalNotifGranted,
-      bothGranted: finalLocGranted && finalNotifGranted,
+      bothGranted: finalLocGranted,
     };
-  }, [notificationSupported, requestLocation, refreshPermissions]);
+  }, [requestLocation, refreshPermissions]);
 
   const hasAllRequiredPermissions =
     permissionsChecked &&
-    locationStatus === 'granted' &&
-    notificationStatus === 'granted';
+    locationStatus === 'granted';
 
   return {
     locationStatus,

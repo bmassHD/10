@@ -950,7 +950,7 @@ function MainApp() {
         visible
         settings={settings}
         settingsLoaded={settingsLoaded}
-        subtitle="Đang kiểm tra quyền Vị trí & Thông báo..."
+        subtitle="Đang kiểm tra quyền Vị trí..."
         mode="splash"
       />
     );

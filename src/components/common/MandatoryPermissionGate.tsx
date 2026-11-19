@@ -55,17 +55,16 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
   const autoRequestedRef = useRef<boolean>(false);
 
   const locationGranted = locationStatus === 'granted';
-  const notificationGranted = notificationStatus === 'granted';
 
   useEffect(() => {
     if (autoRequestedRef.current) return;
-    if (!locationGranted || !notificationGranted) {
+    if (!locationGranted) {
       autoRequestedRef.current = true;
-      if (locationStatus === 'prompt' || notificationStatus === 'default') {
+      if (locationStatus === 'prompt') {
         void onRequestAll();
       }
     }
-  }, [locationGranted, notificationGranted, locationStatus, notificationStatus, onRequestAll]);
+  }, [locationGranted, locationStatus, onRequestAll]);
 
   const executeRequestAll = (fromSwipeDown: boolean) => {
     if (isRequesting) return;
@@ -75,13 +74,10 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
     const promise = onRequestAll();
     void promise
       .then((res) => {
-        if (!res.bothGranted) {
-          const missing: string[] = [];
-          if (!res.locationGranted) missing.push('Vị trí');
-          if (!res.notificationGranted) missing.push('Thông báo');
+        if (!res.locationGranted) {
           const prefix = fromSwipeDown ? 'Đã kiểm tra lại sau khi vuốt xuống: ' : '';
           setRetryFeedback(
-            `${prefix}Chưa được cấp quyền ${missing.join(' và ')}. Nếu đã chặn trước đó, hãy mở cài đặt trình duyệt (biểu tượng 🔒) để Cho phép, sau đó vuốt xuống lại.`
+            `${prefix}Chưa được cấp quyền Vị trí. Nếu đã chặn trước đó, hãy mở cài đặt trình duyệt (biểu tượng 🔒) để Cho phép, sau đó vuốt xuống lại.`
           );
         }
       })
@@ -216,7 +212,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
               {stationName || 'Trạm Y Tế'}
             </p>
             <h1 className="text-sm font-extrabold leading-snug">
-              Yêu cầu bật Vị trí &amp; Thông báo
+              Yêu cầu bật quyền Vị trí
             </h1>
           </div>
         </div>
@@ -249,22 +245,17 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
           ) : (
             <>
               <ArrowDown className="w-3.5 h-3.5 animate-bounce shrink-0" />
-              <span>↓ Vuốt xuống từ đầu màn hình để yêu cầu lại</span>
+              <span>Vuốt xuống từ đầu màn hình để yêu cầu lại</span>
             </>
           )}
         </div>
 
         {/* Content body */}
         <div className="p-4 sm:p-5 space-y-3.5 text-xs text-slate-700 dark:text-slate-300">
-          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-center justify-around gap-2 text-center">
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-center">
             <div className="flex flex-col items-center gap-1">
               <MapPin className="w-4 h-4 text-rose-600" />
               {renderStateBadge(locationSupported, locationStatus, 'Vị trí')}
-            </div>
-            <div className="w-px h-8 bg-slate-200 dark:bg-slate-700" />
-            <div className="flex flex-col items-center gap-1">
-              <Bell className="w-4 h-4 text-sky-600" />
-              {renderStateBadge(notificationSupported, notificationStatus, 'Thông báo')}
             </div>
           </div>
 
@@ -282,7 +273,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
               className="w-full min-h-[42px] py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRequesting ? 'animate-spin' : ''}`} />
-              <span>{isRequesting ? 'Đang yêu cầu...' : 'Cấp quyền Vị trí & Thông báo'}</span>
+              <span>{isRequesting ? 'Đang yêu cầu...' : 'Cấp quyền Vị trí'}</span>
             </button>
 
             <button
@@ -291,7 +282,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
               className="w-full min-h-[40px] py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <LogIn className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span>Đăng nhập hệ thống (Quản trị / Tài khoản)</span>
+              <span>Đăng nhập hệ thống</span>
             </button>
           </div>
 
