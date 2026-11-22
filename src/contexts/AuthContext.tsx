@@ -3,7 +3,12 @@ import {
   User,
   onAuthStateChanged,
   signInWithPopup,
+  signInAnonymously,
   GoogleAuthProvider,
+  FacebookAuthProvider,
+  GithubAuthProvider,
+  OAuthProvider,
+  TwitterAuthProvider,
   EmailAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -30,7 +35,7 @@ import {
   PhoneMultiFactorInfo,
   ConfirmationResult,
 } from 'firebase/auth';
-import { doc, collection, query, orderBy, onSnapshot, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { doc, collection, query, orderBy, onSnapshot, getDoc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db, firebaseConfig } from '../firebase/config';
 import {
   UserProfile,
@@ -38,6 +43,7 @@ import {
   AccountType,
   UserTotpSecurityDoc,
   UserVerifiedDevice,
+  AuthProviderId,
 } from '../types';
 import { verifyTotpToken, normalizeRecoveryCode } from '../utils/totp';
 import { normalizeVietnamPhoneToE164, isValidE164Phone } from '../utils/smsMfaUtils';
@@ -265,11 +271,185 @@ export function isSyntheticZaloEmail(email?: string | null): boolean {
   );
 }
 
+function resolveVerificationMethodFromUser(user: User): UserVerifiedDevice['verificationMethod'] {
+  if (isSyntheticZaloEmail(user.email)) return 'zalo';
+  const ids = new Set((user.providerData || []).map((p) => p.providerId));
+  if (ids.has('facebook.com')) return 'facebook';
+  if (ids.has('google.com')) return 'google';
+  if (ids.has('github.com')) return 'github';
+  if (ids.has('microsoft.com')) return 'microsoft';
+  if (ids.has('apple.com')) return 'apple';
+  if (ids.has('twitter.com')) return 'twitter';
+  if (ids.has('yahoo.com')) return 'yahoo';
+  if (ids.has('phone')) return 'phone';
+  if (user.isAnonymous) return 'anonymous';
+  return 'password';
+}
+
+function formatFirebaseOAuthProviderError(err: any, providerLabel: string): Error {
+  const code = String(err?.code || '');
+  if (code === 'auth/popup-closed-by-user') {
+    return new Error(`Bạn đã đóng cửa sổ đăng nhập ${providerLabel} trước khi hoàn tất.`);
+  }
+  if (code === 'auth/popup-blocked') {
+    return new Error(
+      `Trình duyệt đã chặn cửa sổ bật lên (Popup) cho ${providerLabel}. Vui lòng cho phép mở popup và thử lại.`
+    );
+  }
+  if (code === 'auth/cancelled-popup-request') {
+    return new Error(`Yêu cầu đăng nhập ${providerLabel} đã bị hủy.`);
+  }
+  if (code === 'auth/account-exists-with-different-credential') {
+    return new Error(
+      `Email tài khoản ${providerLabel} đã được liên kết với một phương thức đăng nhập khác (ví dụ Google hoặc Email/Mật khẩu). Vui lòng đăng nhập bằng phương thức ban đầu đó.`
+    );
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return new Error(
+      `Phương thức đăng nhập ${providerLabel} chưa được bật hoặc cấu hình App ID / App Secret trên Firebase Authentication Console.`
+    );
+  }
+  if (code === 'auth/unauthorized-domain') {
+    return new Error(
+      'Tên miền hiện tại chưa được cấp phép trong Firebase Authentication (Authorized domains).'
+    );
+  }
+  if (code === 'auth/network-request-failed') {
+    return new Error('Lỗi kết nối mạng. Vui lòng kiểm tra Internet và thử lại.');
+  }
+  return err instanceof Error ? err : new Error(String(err || `Đăng nhập ${providerLabel} thất bại.`));
+}
+
 export interface ZaloAuthProfile {
   zaloId: string;
   name: string;
   avatarUrl?: string;
   phoneNumber?: string;
+}
+
+const ZALO_ONLY_SESSION_STORAGE_KEY = 'tyt_zalo_verified_session_v1';
+
+interface StoredZaloOnlySession {
+  profile: ZaloAuthProfile;
+  token: string;
+  rememberMe: boolean;
+  savedAt: number;
+}
+
+function buildSafeZaloUid(zaloId: string): string {
+  const safeId = String(zaloId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  return `zalo_${safeId || 'user'}`;
+}
+
+function buildSyntheticZaloUser(profile: ZaloAuthProfile): User {
+  const safeId = String(profile.zaloId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const uid = buildSafeZaloUid(profile.zaloId);
+  const email = `zalo_${safeId}@zalo.tyt.local`;
+  const nowIso = new Date().toISOString();
+  const fakeUser = {
+    uid,
+    email,
+    emailVerified: false,
+    displayName: profile.name || `Người dùng Zalo ${safeId.slice(-4)}`,
+    photoURL: profile.avatarUrl || null,
+    phoneNumber: profile.phoneNumber || null,
+    isAnonymous: false,
+    tenantId: null,
+    providerId: 'zalo',
+    providerData: [
+      {
+        providerId: 'zalo',
+        uid: profile.zaloId,
+        displayName: profile.name || null,
+        email: null,
+        phoneNumber: profile.phoneNumber || null,
+        photoURL: profile.avatarUrl || null,
+      },
+    ],
+    metadata: {
+      creationTime: nowIso,
+      lastSignInTime: nowIso,
+    },
+    refreshToken: '',
+    delete: async () => {},
+    getIdToken: async () => '',
+    getIdTokenResult: async () => ({} as any),
+    reload: async () => {},
+    toJSON: () => ({ uid, email, displayName: profile.name }),
+  };
+  return fakeUser as unknown as User;
+}
+
+function buildInitialZaloOnlyUserProfile(
+  profile: ZaloAuthProfile,
+  existing?: Partial<UserProfile> | null
+): UserProfile {
+  const safeId = String(profile.zaloId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const uid = buildSafeZaloUid(profile.zaloId);
+  const now = new Date().toISOString();
+  const normalizedPhone = normalizeAndValidatePhone(profile.phoneNumber || '');
+  return {
+    ...(existing || {}),
+    uid,
+    email: existing?.email || `zalo_${safeId}@zalo.tyt.local`,
+    displayName: profile.name || existing?.displayName || `Người dùng Zalo ${safeId.slice(-4)}`,
+    phoneNumber: existing?.phoneNumber || normalizedPhone || '',
+    ...(profile.avatarUrl || existing?.avatarUrl
+      ? { avatarUrl: profile.avatarUrl || existing?.avatarUrl }
+      : {}),
+    role: existing?.role || 'citizen',
+    accountType: existing?.accountType || 'citizen',
+    status: existing?.status || 'active',
+    hasPasswordLinked: false,
+    googleLinked: false,
+    zaloLinked: true,
+    zaloId: profile.zaloId,
+    zaloName: profile.name,
+    ...(profile.avatarUrl ? { zaloAvatarUrl: profile.avatarUrl } : {}),
+    emailVerified: false,
+    phoneVerified: Boolean(existing?.phoneVerified || normalizedPhone),
+    ...(normalizedPhone && !existing?.verifiedPhone
+      ? { verifiedPhone: normalizedPhone, phoneVerifiedAt: now }
+      : {}),
+    twoFactorEnabled: false,
+    smsMfaEnabled: false,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function readStoredZaloOnlySession(): StoredZaloOnlySession | null {
+  try {
+    const raw =
+      localStorage.getItem(ZALO_ONLY_SESSION_STORAGE_KEY) ||
+      sessionStorage.getItem(ZALO_ONLY_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredZaloOnlySession;
+    if (!parsed?.profile?.zaloId || !parsed?.token) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredZaloOnlySession(session: StoredZaloOnlySession): void {
+  try {
+    localStorage.removeItem(ZALO_ONLY_SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(ZALO_ONLY_SESSION_STORAGE_KEY);
+    const target = session.rememberMe ? localStorage : sessionStorage;
+    target.setItem(ZALO_ONLY_SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function clearStoredZaloOnlySession(): void {
+  try {
+    localStorage.removeItem(ZALO_ONLY_SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(ZALO_ONLY_SESSION_STORAGE_KEY);
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export interface QrAuthHandoffBundle {
@@ -318,6 +498,7 @@ interface AuthContextType {
   isBanned: boolean;
   hasPasswordProvider: boolean;
   hasGoogleProvider: boolean;
+  hasFacebookProvider: boolean;
   hasZaloProvider: boolean;
   totpConfig: UserTotpSecurityDoc | null;
   twoFactorEnabled: boolean;
@@ -333,7 +514,8 @@ interface AuthContextType {
   currentSessionId: string;
   concurrentActiveDevices: UserVerifiedDevice[];
   remoteRevokedNotice: boolean;
-  dismissConcurrentLoginAlert: (devices?: UserVerifiedDevice[]) => void;
+  dismissConcurrentLoginAlert: (devices?: UserVerifiedDevice[]) => Promise<void>;
+  approveTrustedDevice: (deviceId: string) => Promise<void>;
   revokeConcurrentDeviceSession: (targetDevice: UserVerifiedDevice) => Promise<void>;
   clearRemoteRevokedNotice: () => void;
   clearPendingSmsMfaResolver: () => void;
@@ -378,7 +560,12 @@ interface AuthContextType {
   sendSmsMfaSignInCode: (hintIndex: number, recaptchaContainer?: HTMLElement | null) => Promise<string>;
   resolveSmsMfaSignIn: (verificationId: string, smsCode: string) => Promise<void>;
   signInWithGoogle: () => Promise<SignInResultStatus>;
+  signInWithFacebook: () => Promise<SignInResultStatus>;
   signInWithZalo: (rememberMe?: boolean) => Promise<SignInResultStatus>;
+  signInWithProviderMethod: (
+    providerId: AuthProviderId,
+    options?: { rememberMe?: boolean }
+  ) => Promise<SignInResultStatus>;
   signInWithQrHandoff: (bundle: QrAuthHandoffBundle) => Promise<void>;
   signInWithBiometric: () => Promise<void>;
   biometricEnvironment: BiometricEnvironment | null;
@@ -450,6 +637,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const recaptchaSlotRef = useRef<HTMLDivElement | null>(null);
   const pendingZaloProfileRef = useRef<ZaloAuthProfile | null>(null);
+  const zaloOnlySessionRef = useRef<StoredZaloOnlySession | null>(readStoredZaloOnlySession());
+  const [isZaloOnlySession, setIsZaloOnlySession] = useState<boolean>(() =>
+    Boolean(readStoredZaloOnlySession())
+  );
   const pendingQrDeviceMethodRef = useRef<boolean>(false);
   const pendingBiometricDeviceMethodRef = useRef<boolean>(false);
   const [biometricEnvironment, setBiometricEnvironment] = useState<BiometricEnvironment | null>(null);
@@ -611,13 +802,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       uid: string,
       method: UserVerifiedDevice['verificationMethod'],
       customName?: string,
-      forceTrust = true,
+      forceTrust = false,
       biometricEnabledOverride?: boolean
     ) => {
       const meta = currentDeviceMeta.current;
       const now = new Date().toISOString();
       const devicePath = `users/${uid}/devices/${meta.deviceId}`;
       const existing = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
+      let resolvedTrusted = forceTrust ? true : Boolean(existing?.isTrusted);
+      if (!forceTrust && !existing) {
+        try {
+          const curSnap = await getDoc(doc(db, 'users', uid, 'devices', meta.deviceId));
+          if (curSnap.exists()) {
+            resolvedTrusted = Boolean((curSnap.data() as UserVerifiedDevice)?.isTrusted);
+          } else {
+            const allSnap = await getDocs(collection(db, 'users', uid, 'devices'));
+            resolvedTrusted = allSnap.empty;
+          }
+        } catch {
+          resolvedTrusted = false;
+        }
+      }
       const localBio = getLocalBiometricMeta();
       const resolvedBiometricEnabled =
         typeof biometricEnabledOverride === 'boolean'
@@ -629,7 +834,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         platform: meta.platform,
         os: meta.os,
         browser: meta.browser,
-        isTrusted: forceTrust ? true : Boolean(existing?.isTrusted ?? true),
+        isTrusted: resolvedTrusted,
         verificationMethod: method || existing?.verificationMethod || 'password',
         biometricEnabled: resolvedBiometricEnabled,
         verifiedAt: existing?.verifiedAt || now,
@@ -802,14 +1007,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (!user) {
+        const storedZalo = zaloOnlySessionRef.current || readStoredZaloOnlySession();
+        if (storedZalo?.profile?.zaloId) {
+          zaloOnlySessionRef.current = storedZalo;
+          setIsZaloOnlySession(true);
+          setCurrentUser(buildSyntheticZaloUser(storedZalo.profile));
+          setUserProfile(buildInitialZaloOnlyUserProfile(storedZalo.profile));
+          setTotpConfig(null);
+          setVerifiedDevices([]);
+          setTwoFactorLoading(false);
+          setTwoFactorVerifiedThisSession(false);
+          setLoading(false);
+
+          // Verify server-side session token if available (non-blocking)
+          void fetch('/api/auth/zalo/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ zaloSessionToken: storedZalo.token }),
+          })
+            .then((r) => r.json().catch(() => null))
+            .then((data) => {
+              if (auth.currentUser) return;
+              if (data?.authenticated && data?.zaloProfile?.zaloId) {
+                const refreshed: StoredZaloOnlySession = {
+                  ...storedZalo,
+                  profile: data.zaloProfile,
+                  token: data.zaloSessionToken || storedZalo.token,
+                };
+                zaloOnlySessionRef.current = refreshed;
+                writeStoredZaloOnlySession(refreshed);
+                setCurrentUser(buildSyntheticZaloUser(refreshed.profile));
+                setUserProfile((prev) => buildInitialZaloOnlyUserProfile(refreshed.profile, prev));
+              }
+            })
+            .catch(() => {
+              // keep local verified Zalo session offline
+            });
+          return;
+        }
+
+        // Also check HttpOnly Zalo session cookie in case storage was cleared
+        setIsZaloOnlySession(false);
         setUserProfile(null);
         setTotpConfig(null);
         setVerifiedDevices([]);
         setTwoFactorLoading(false);
         setTwoFactorVerifiedThisSession(false);
-        setLoading(false);
+        void fetch('/api/auth/zalo/session', {
+          method: 'GET',
+          credentials: 'include',
+        })
+          .then((r) => r.json().catch(() => null))
+          .then((data) => {
+            if (auth.currentUser) return;
+            if (data?.authenticated && data?.zaloProfile?.zaloId && data?.zaloSessionToken) {
+              const restored: StoredZaloOnlySession = {
+                profile: data.zaloProfile,
+                token: data.zaloSessionToken,
+                rememberMe: true,
+                savedAt: Date.now(),
+              };
+              zaloOnlySessionRef.current = restored;
+              writeStoredZaloOnlySession(restored);
+              setIsZaloOnlySession(true);
+              setCurrentUser(buildSyntheticZaloUser(restored.profile));
+              setUserProfile(buildInitialZaloOnlyUserProfile(restored.profile));
+            }
+          })
+          .catch(() => {
+            // ignore network error
+          })
+          .finally(() => {
+            setLoading(false);
+          });
         return;
       }
+
+      zaloOnlySessionRef.current = null;
+      clearStoredZaloOnlySession();
+      setIsZaloOnlySession(false);
 
       // Check session verification state for this login session
       let isVerifiedInSession = false;
@@ -850,7 +1127,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (recordedSessionDeviceKey !== sessionKey && !isFirestoreWriteQuotaExceeded()) {
         recordedSessionDeviceKey = sessionKey;
         const meta = currentDeviceMeta.current;
-        const hasGoogle = Boolean(user.providerData?.some((p) => p.providerId === 'google.com'));
         const hasZalo = Boolean(
           isSyntheticZaloEmail(user.email) || pendingZaloProfileRef.current
         );
@@ -868,9 +1144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? 'qr'
           : hasZalo
           ? 'zalo'
-          : hasGoogle
-          ? 'google'
-          : 'password';
+          : resolveVerificationMethodFromUser(user);
         const deviceSyncKey = `tyt_device_sync_${user.uid}_${meta.deviceId}`;
         let hasRecordedDeviceBefore = false;
         try {
@@ -884,46 +1158,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const now = new Date().toISOString();
         const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
         const localBio = getLocalBiometricMeta();
-        const devicePayload: UserVerifiedDevice = {
-          deviceId: meta.deviceId,
-          deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
-          platform: meta.platform,
-          os: meta.os,
-          browser: meta.browser,
-          isTrusted: existingDev?.isTrusted ?? true,
-          verificationMethod: isBiometricLogin
-            ? 'biometric'
-            : isQrLogin
-            ? 'qr'
-            : existingDev?.verificationMethod || method,
-          biometricEnabled: Boolean(
-            isBiometricLogin || existingDev?.biometricEnabled || localBio?.uid === user.uid
-          ),
-          verifiedAt: existingDev?.verifiedAt || now,
-          firstSeenAt: existingDev?.firstSeenAt || (hasRecordedDeviceBefore ? now : now),
-          lastActiveAt: now,
-          activeSessionId: currentSessionIdRef.current,
-          isSessionActive: true,
-          sessionStartedAt: sessionStartedAtRef.current || now,
-          lastHeartbeatAt: now,
-          lastHeartbeatMs: Date.now(),
-          forceLogoutSessionId: '',
-          forceLogoutRequestedAt: '',
-        };
-        setDoc(doc(db, 'users', user.uid, 'devices', meta.deviceId), devicePayload, {
-          merge: true,
-        })
-          .then(() => {
+        void (async () => {
+          let resolvedTrusted = Boolean(existingDev?.isTrusted);
+          if (!existingDev) {
+            if (isQrLogin || isBiometricLogin) {
+              resolvedTrusted = true;
+            } else {
+              try {
+                const curSnap = await getDoc(doc(db, 'users', user.uid, 'devices', meta.deviceId));
+                if (curSnap.exists()) {
+                  resolvedTrusted = Boolean((curSnap.data() as UserVerifiedDevice)?.isTrusted);
+                } else {
+                  const allSnap = await getDocs(collection(db, 'users', user.uid, 'devices'));
+                  resolvedTrusted = allSnap.empty;
+                }
+              } catch {
+                resolvedTrusted = false;
+              }
+            }
+          }
+          const devicePayload: UserVerifiedDevice = {
+            deviceId: meta.deviceId,
+            deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
+            platform: meta.platform,
+            os: meta.os,
+            browser: meta.browser,
+            isTrusted: resolvedTrusted,
+            verificationMethod: isBiometricLogin
+              ? 'biometric'
+              : isQrLogin
+              ? 'qr'
+              : existingDev?.verificationMethod || method,
+            biometricEnabled: Boolean(
+              isBiometricLogin || existingDev?.biometricEnabled || localBio?.uid === user.uid
+            ),
+            verifiedAt: existingDev?.verifiedAt || now,
+            firstSeenAt: existingDev?.firstSeenAt || (hasRecordedDeviceBefore ? now : now),
+            lastActiveAt: now,
+            activeSessionId: currentSessionIdRef.current,
+            isSessionActive: true,
+            sessionStartedAt: sessionStartedAtRef.current || now,
+            lastHeartbeatAt: now,
+            lastHeartbeatMs: Date.now(),
+            forceLogoutSessionId: '',
+            forceLogoutRequestedAt: '',
+          };
+          try {
+            await setDoc(doc(db, 'users', user.uid, 'devices', meta.deviceId), devicePayload, {
+              merge: true,
+            });
             lastHeartbeatWriteMsRef.current = Date.now();
             try {
               localStorage.setItem(deviceSyncKey, JSON.stringify({ ts: Date.now(), method }));
             } catch {
               // ignore
             }
-          })
-          .catch((err) => {
+          } catch (err) {
             markFirestoreWriteQuotaExceededIfMatch(err);
-          });
+          }
+        })();
       }
 
       // Subscribe to strictly isolated owner-only TOTP security document
@@ -959,6 +1252,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user.providerData?.some((p) => p.providerId === 'password') && !userIsSyntheticZalo
       );
       const userHasGoogle = Boolean(user.providerData?.some((p) => p.providerId === 'google.com'));
+      const userHasFacebook = Boolean(
+        user.providerData?.some((p) => p.providerId === 'facebook.com')
+      );
       const googleProviderEmail =
         user.providerData?.find((p) => p.providerId === 'google.com')?.email || '';
       const userSmsFactors = multiFactor(user).enrolledFactors.filter(
@@ -1027,6 +1323,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
               if (userHasGoogle && !profile.googleLinked) {
                 profile.googleLinked = true;
+                changed = true;
+              }
+              if (userHasFacebook && !profile.facebookLinked) {
+                profile.facebookLinked = true;
                 changed = true;
               }
               if (googleProviderEmail && isSyntheticZaloEmail(profile.email)) {
@@ -1159,6 +1459,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 status: 'active',
                 hasPasswordLinked: userHasPassword,
                 googleLinked: userHasGoogle,
+                facebookLinked: userHasFacebook,
                 ...(pendingZalo || userIsSyntheticZalo
                   ? {
                       zaloLinked: true,
@@ -1239,7 +1540,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [syncVerifiedIdentityLocks]);
 
-  const signInWithGoogle = async (): Promise<SignInResultStatus> => {
+  const resetClientSessionBeforeSignIn = async (rememberMe = true) => {
     clearAllTwoFactorSessionMarkers();
     setTwoFactorVerifiedThisSession(false);
     setPendingSmsMfaResolver(null);
@@ -1249,7 +1550,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAcknowledgedSessionKeys([]);
     setRemoteRevokedNotice(false);
     remoteRevokeInProgressRef.current = false;
-    await setPersistence(auth, browserLocalPersistence);
+    await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+  };
+
+  const signInWithGoogle = async (): Promise<SignInResultStatus> => {
+    await resetClientSessionBeforeSignIn(true);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     try {
@@ -1265,35 +1570,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const signInWithFacebook = async (): Promise<SignInResultStatus> => {
+    await resetClientSessionBeforeSignIn(true);
+    const provider = new FacebookAuthProvider();
+    provider.addScope('email');
+    provider.addScope('public_profile');
+    try {
+      await signInWithPopup(auth, provider);
+      return 'signed_in';
+    } catch (err: any) {
+      if (err?.code === 'auth/multi-factor-auth-required') {
+        const resolver = getMultiFactorResolver(auth, err);
+        setPendingSmsMfaResolver(resolver);
+        return 'mfa_required';
+      }
+      throw formatFirebaseOAuthProviderError(err, 'Facebook');
+    }
+  };
+
+  const signInWithProviderMethod = async (
+    providerId: AuthProviderId,
+    options?: { rememberMe?: boolean }
+  ): Promise<SignInResultStatus> => {
+    if (providerId === 'google') return signInWithGoogle();
+    if (providerId === 'facebook') return signInWithFacebook();
+    if (providerId === 'zalo') return signInWithZalo(options?.rememberMe ?? true);
+
+    if (providerId === 'anonymous') {
+      await resetClientSessionBeforeSignIn(options?.rememberMe ?? false);
+      try {
+        await signInAnonymously(auth);
+        return 'signed_in';
+      } catch (err: any) {
+        throw formatFirebaseOAuthProviderError(err, 'Vô danh');
+      }
+    }
+
+    const popupProviderMap: Partial<
+      Record<
+        AuthProviderId,
+        { label: string; create: () => GithubAuthProvider | TwitterAuthProvider | OAuthProvider }
+      >
+    > = {
+      github: { label: 'GitHub', create: () => new GithubAuthProvider() },
+      microsoft: { label: 'Microsoft', create: () => new OAuthProvider('microsoft.com') },
+      apple: { label: 'Apple', create: () => new OAuthProvider('apple.com') },
+      twitter: { label: 'Twitter / X', create: () => new TwitterAuthProvider() },
+      yahoo: { label: 'Yahoo', create: () => new OAuthProvider('yahoo.com') },
+    };
+
+    const popupEntry = popupProviderMap[providerId];
+    if (popupEntry) {
+      await resetClientSessionBeforeSignIn(options?.rememberMe ?? true);
+      try {
+        await signInWithPopup(auth, popupEntry.create());
+        return 'signed_in';
+      } catch (err: any) {
+        if (err?.code === 'auth/multi-factor-auth-required') {
+          const resolver = getMultiFactorResolver(auth, err);
+          setPendingSmsMfaResolver(resolver);
+          return 'mfa_required';
+        }
+        throw formatFirebaseOAuthProviderError(err, popupEntry.label);
+      }
+    }
+
+    const unsupportedMap: Record<string, string> = {
+      phone: 'Điện thoại (SMS OTP)',
+      play_games: 'Chơi trò chơi (Play Games)',
+      game_center: 'Trung tâm trò chơi (Game Center)',
+      oidc: 'Kết nối OpenID (OIDC)',
+      saml: 'SAML',
+    };
+    const label = unsupportedMap[providerId] || providerId;
+    throw new Error(
+      `Phương thức ${label} cần được cấu hình ID nhà cung cấp riêng trên Firebase Authentication Console hoặc SDK di động gốc trước khi sử dụng.`
+    );
+  };
+
   const openZaloOAuthPopup = async (
     mode: 'login' | 'link'
   ): Promise<{
     mode: 'login' | 'link';
     zaloProfile: ZaloAuthProfile;
     bridgeAuth?: { email: string; secret: string };
+    firebaseBridgeDisabled?: boolean;
+    zaloSessionToken?: string;
   }> => {
-    const urlResp = await fetch(`/api/auth/zalo/url?mode=${encodeURIComponent(mode)}`, {
-      method: 'GET',
-      credentials: 'include',
-    });
-    const urlData = (await urlResp.json().catch(() => ({}))) as {
-      ok?: boolean;
-      url?: string;
-      state?: string;
-      error?: string;
-    };
-    if (!urlResp.ok || !urlData?.url || !urlData?.state) {
-      throw new Error(
-        urlData?.error || 'Không thể khởi tạo phiên đăng nhập Zalo. Vui lòng kiểm tra cấu hình máy chủ.'
-      );
-    }
-
+    // Open popup synchronously on user click so Safari/iOS/mobile popup blockers do not block it
     const width = 520;
     const height = 680;
     const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
     const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
     const popup = window.open(
-      urlData.url,
+      '',
       'tyt_zalo_oauth_popup',
       `width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
     );
@@ -1304,9 +1674,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     }
 
+    try {
+      popup.document.title = 'Đang kết nối Zalo...';
+      popup.document.body.innerHTML =
+        '<div style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:90vh;color:#0f172a;text-align:center;padding:24px;"><div><div style="font-weight:700;font-size:15px;margin-bottom:8px;">Đang chuyển tới cổng xác thực Zalo...</div><div style="font-size:13px;color:#64748b;">Vui lòng chờ trong giây lát.</div></div></div>';
+    } catch {
+      // ignore cross-origin reuse error if window already exists
+    }
+
+    let urlData: {
+      ok?: boolean;
+      url?: string;
+      state?: string;
+      pollToken?: string;
+      redirectUri?: string;
+      error?: string;
+    };
+    try {
+      const urlResp = await fetch(`/api/auth/zalo/url?mode=${encodeURIComponent(mode)}`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      urlData = (await urlResp.json().catch(() => ({}))) as typeof urlData;
+      if (!urlResp.ok || !urlData?.url || !urlData?.state) {
+        throw new Error(
+          urlData?.error || 'Không thể khởi tạo phiên đăng nhập Zalo. Vui lòng kiểm tra cấu hình máy chủ.'
+        );
+      }
+      popup.location.replace(urlData.url);
+    } catch (err) {
+      try {
+        if (!popup.closed) popup.close();
+      } catch {
+        // ignore
+      }
+      throw err;
+    }
+
+    let redirectOrigin = '';
+    try {
+      if (urlData.redirectUri) {
+        redirectOrigin = new URL(urlData.redirectUri).origin;
+      }
+    } catch {
+      redirectOrigin = '';
+    }
+
     const isAllowedOrigin = (origin: string): boolean => {
       if (!origin) return false;
       if (origin === window.location.origin) return true;
+      if (redirectOrigin && origin === redirectOrigin) return true;
       try {
         const parsed = new URL(origin);
         if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
@@ -1324,23 +1741,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
+    const resultStorageKey = `tyt_zalo_oauth_result_${urlData.state}`;
+    try {
+      localStorage.removeItem(resultStorageKey);
+    } catch {
+      // ignore
+    }
+
     const exchangeCode = await new Promise<string>((resolve, reject) => {
       let settled = false;
       let closeCheckTimer: number | undefined;
+      let serverPollTimer: number | undefined;
       let closedGraceTimer: number | undefined;
       let overallTimer: number | undefined;
+      let broadcastChannel: BroadcastChannel | null = null;
+      let pollInFlight = false;
 
       const cleanup = () => {
         window.removeEventListener('message', onMessage);
+        window.removeEventListener('storage', onStorageEvent);
+        if (broadcastChannel) {
+          try {
+            broadcastChannel.close();
+          } catch {
+            // ignore
+          }
+          broadcastChannel = null;
+        }
         if (closeCheckTimer !== undefined) window.clearInterval(closeCheckTimer);
+        if (serverPollTimer !== undefined) window.clearInterval(serverPollTimer);
         if (closedGraceTimer !== undefined) window.clearTimeout(closedGraceTimer);
         if (overallTimer !== undefined) window.clearTimeout(overallTimer);
+        try {
+          localStorage.removeItem(resultStorageKey);
+        } catch {
+          // ignore
+        }
       };
 
-      const onMessage = (event: MessageEvent) => {
-        if (!isAllowedOrigin(event.origin)) return;
-        const msg = event.data;
-        if (!msg || typeof msg !== 'object') return;
+      const handleOutcome = (msg: any) => {
+        if (settled || !msg || typeof msg !== 'object') return;
         if (msg.type !== 'ZALO_OAUTH_SUCCESS' && msg.type !== 'ZALO_OAUTH_ERROR') return;
         if (msg.state && msg.state !== urlData.state) return;
 
@@ -1364,13 +1804,107 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resolve(String(msg.exchangeCode));
       };
 
+      const onMessage = (event: MessageEvent) => {
+        if (!isAllowedOrigin(event.origin)) return;
+        handleOutcome(event.data);
+      };
+
+      const checkLocalStorageFallback = () => {
+        try {
+          const raw = localStorage.getItem(resultStorageKey);
+          if (!raw) return false;
+          const parsed = JSON.parse(raw);
+          if (parsed?.payload) {
+            handleOutcome(parsed.payload);
+            return true;
+          }
+        } catch {
+          // ignore
+        }
+        return false;
+      };
+
+      const onStorageEvent = (event: StorageEvent) => {
+        if (event.key === resultStorageKey) {
+          checkLocalStorageFallback();
+        }
+      };
+
+      const checkServerPoll = async (): Promise<boolean> => {
+        if (settled || pollInFlight || !urlData.pollToken || !urlData.state) return false;
+        pollInFlight = true;
+        try {
+          const resp = await fetch('/api/auth/zalo/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              state: urlData.state,
+              pollToken: urlData.pollToken,
+            }),
+          });
+          const data = (await resp.json().catch(() => null)) as {
+            status?: 'pending' | 'success' | 'error';
+            exchangeCode?: string;
+            error?: string;
+          } | null;
+          if (!data) return false;
+          if (data.status === 'success' && data.exchangeCode) {
+            handleOutcome({
+              type: 'ZALO_OAUTH_SUCCESS',
+              state: urlData.state,
+              exchangeCode: data.exchangeCode,
+            });
+            return true;
+          }
+          if (data.status === 'error') {
+            handleOutcome({
+              type: 'ZALO_OAUTH_ERROR',
+              state: urlData.state,
+              error: data.error || 'Đăng nhập Zalo thất bại.',
+            });
+            return true;
+          }
+        } catch {
+          // ignore transient poll error
+        } finally {
+          pollInFlight = false;
+        }
+        return false;
+      };
+
       window.addEventListener('message', onMessage);
+      window.addEventListener('storage', onStorageEvent);
+
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          broadcastChannel = new BroadcastChannel('tyt_zalo_oauth_channel');
+          broadcastChannel.onmessage = (ev) => handleOutcome(ev.data);
+        }
+      } catch {
+        // ignore unsupported BroadcastChannel
+      }
+
+      serverPollTimer = window.setInterval(() => {
+        if (settled) return;
+        if (checkLocalStorageFallback()) return;
+        void checkServerPoll();
+      }, 1000);
 
       closeCheckTimer = window.setInterval(() => {
         if (settled) return;
-        if (popup.closed && closedGraceTimer === undefined) {
-          closedGraceTimer = window.setTimeout(() => {
-            if (!settled) {
+        let isClosed = false;
+        try {
+          isClosed = Boolean(popup.closed);
+        } catch {
+          isClosed = false;
+        }
+        if (isClosed && closedGraceTimer === undefined) {
+          closedGraceTimer = window.setTimeout(async () => {
+            if (settled) return;
+            if (checkLocalStorageFallback()) return;
+            const resolvedByServer = await checkServerPoll();
+            if (!settled && !resolvedByServer) {
               settled = true;
               cleanup();
               reject(new Error('Bạn đã đóng cửa sổ đăng nhập Zalo trước khi hoàn tất.'));
@@ -1404,6 +1938,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       mode?: 'login' | 'link';
       zaloProfile?: ZaloAuthProfile;
       bridgeAuth?: { email: string; secret: string };
+      firebaseBridgeDisabled?: boolean;
+      zaloSessionToken?: string;
       error?: string;
     };
 
@@ -1415,16 +1951,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       mode: completeData.mode === 'link' ? 'link' : 'login',
       zaloProfile: completeData.zaloProfile,
       bridgeAuth: completeData.bridgeAuth,
+      firebaseBridgeDisabled: completeData.firebaseBridgeDisabled,
+      zaloSessionToken: completeData.zaloSessionToken,
     };
   };
 
   const applyZaloProfileToUserDoc = async (user: User, zaloProfile: ZaloAuthProfile) => {
     const now = new Date().toISOString();
     const userDocRef = doc(db, 'users', user.uid);
+    let docExists = false;
     let existingData: Partial<UserProfile> | null = null;
     try {
       const snap = await getDoc(userDocRef);
       if (snap.exists()) {
+        docExists = true;
         existingData = snap.data() as Partial<UserProfile>;
       }
     } catch {
@@ -1476,10 +2016,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    try {
-      await setDoc(userDocRef, updates, { merge: true });
-    } catch (err) {
-      markFirestoreWriteQuotaExceededIfMatch(err);
+    if (!isFirestoreWriteQuotaExceeded()) {
+      try {
+        if (docExists) {
+          await setDoc(userDocRef, updates, { merge: true });
+        } else {
+          // Document not created yet: write a complete valid initial UserProfile satisfying firestore.rules create checks
+          const isTargetAdmin = isBootstrapAdminEmail(user.email);
+          const userIsSyntheticZalo = isSyntheticZaloEmail(user.email);
+          const userHasGoogle = Boolean(user.providerData?.some((p) => p.providerId === 'google.com'));
+          const googleProviderEmail =
+            user.providerData?.find((p) => p.providerId === 'google.com')?.email || '';
+          const userHasPassword = Boolean(
+            user.providerData?.some((p) => p.providerId === 'password') && !userIsSyntheticZalo
+          );
+          const fullNewProfile: UserProfile = {
+            uid: user.uid,
+            email: googleProviderEmail || user.email || '',
+            displayName: updates.displayName || zaloProfile.name || user.displayName || 'Người dùng',
+            phoneNumber: updates.phoneNumber || normalizedPhone || '',
+            ...((updates.avatarUrl || zaloProfile.avatarUrl || user.photoURL)
+              ? { avatarUrl: updates.avatarUrl || zaloProfile.avatarUrl || user.photoURL || '' }
+              : {}),
+            role: isTargetAdmin ? 'super_admin' : 'citizen',
+            accountType: isTargetAdmin ? 'admin' : 'citizen',
+            status: 'active',
+            hasPasswordLinked: userHasPassword,
+            googleLinked: userHasGoogle,
+            zaloLinked: true,
+            zaloId: zaloProfile.zaloId,
+            zaloName: zaloProfile.name,
+            ...(zaloProfile.avatarUrl ? { zaloAvatarUrl: zaloProfile.avatarUrl } : {}),
+            emailVerified: Boolean(!userIsSyntheticZalo && (user.emailVerified || userHasGoogle)),
+            ...(!userIsSyntheticZalo && (user.emailVerified || userHasGoogle)
+              ? { emailVerifiedAt: now }
+              : {}),
+            phoneVerified: Boolean(updates.phoneVerified),
+            ...(updates.verifiedPhone
+              ? { verifiedPhone: updates.verifiedPhone, phoneVerifiedAt: now }
+              : {}),
+            twoFactorEnabled: false,
+            smsMfaEnabled: false,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await setDoc(userDocRef, fullNewProfile, { merge: true });
+        }
+      } catch (err) {
+        markFirestoreWriteQuotaExceededIfMatch(err);
+      }
     }
 
     if (zaloProfile.name || zaloProfile.avatarUrl) {
@@ -1496,9 +2081,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithZalo = async (rememberMe = true): Promise<SignInResultStatus> => {
     const result = await openZaloOAuthPopup('login');
-    if (!result.bridgeAuth?.email || !result.bridgeAuth?.secret) {
-      throw new Error('Không nhận được phiên xác thực Firebase cho tài khoản Zalo.');
-    }
 
     clearAllTwoFactorSessionMarkers();
     setTwoFactorVerifiedThisSession(false);
@@ -1510,28 +2092,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setRemoteRevokedNotice(false);
     remoteRevokeInProgressRef.current = false;
 
-    pendingZaloProfileRef.current = result.zaloProfile;
-    await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+    if (result.bridgeAuth?.email && result.bridgeAuth?.secret) {
+      zaloOnlySessionRef.current = null;
+      clearStoredZaloOnlySession();
+      setIsZaloOnlySession(false);
 
-    try {
-      const cred = await signInWithEmailAndPassword(
-        auth,
-        result.bridgeAuth.email,
-        result.bridgeAuth.secret
-      );
-      await applyZaloProfileToUserDoc(cred.user, result.zaloProfile);
-      await upsertCurrentDeviceDoc(cred.user.uid, 'zalo');
-      pendingZaloProfileRef.current = null;
-      return 'signed_in';
-    } catch (err: any) {
-      if (err?.code === 'auth/multi-factor-auth-required') {
-        const resolver = getMultiFactorResolver(auth, err);
-        setPendingSmsMfaResolver(resolver);
-        return 'mfa_required';
+      pendingZaloProfileRef.current = result.zaloProfile;
+      await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+
+      try {
+        const cred = await signInWithEmailAndPassword(
+          auth,
+          result.bridgeAuth.email,
+          result.bridgeAuth.secret
+        );
+        await applyZaloProfileToUserDoc(cred.user, result.zaloProfile);
+        await upsertCurrentDeviceDoc(cred.user.uid, 'zalo');
+        pendingZaloProfileRef.current = null;
+        return 'signed_in';
+      } catch (err: any) {
+        if (err?.code === 'auth/multi-factor-auth-required') {
+          const resolver = getMultiFactorResolver(auth, err);
+          setPendingSmsMfaResolver(resolver);
+          return 'mfa_required';
+        }
+        pendingZaloProfileRef.current = null;
+        throw err;
       }
-      pendingZaloProfileRef.current = null;
-      throw err;
     }
+
+    if (result.firebaseBridgeDisabled && result.zaloProfile && result.zaloSessionToken) {
+      const zaloSession: StoredZaloOnlySession = {
+        profile: result.zaloProfile,
+        token: result.zaloSessionToken,
+        rememberMe,
+        savedAt: Date.now(),
+      };
+      zaloOnlySessionRef.current = zaloSession;
+      writeStoredZaloOnlySession(zaloSession);
+      setIsZaloOnlySession(true);
+      setCurrentUser(buildSyntheticZaloUser(result.zaloProfile));
+      setUserProfile(buildInitialZaloOnlyUserProfile(result.zaloProfile));
+      setTotpConfig(null);
+      setVerifiedDevices([]);
+      setTwoFactorLoading(false);
+      setLoading(false);
+      return 'signed_in';
+    }
+
+    throw new Error('Không nhận được phiên xác thực cho tài khoản Zalo.');
   };
 
   const writeFirebaseUserToIndexedDb = async (
@@ -1972,7 +2581,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (isTargetAdmin) {
         await setDoc(doc(db, 'admins', res.user.uid), { uid: res.user.uid, email: cleanEmail, role: 'super_admin' });
       }
-      await upsertCurrentDeviceDoc(res.user.uid, 'password');
+      await upsertCurrentDeviceDoc(res.user.uid, 'password', undefined, true);
     } catch (e) {
       console.warn('Save initial profile error:', e);
     }
@@ -1985,17 +2594,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const meta = currentDeviceMeta.current;
       const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
       const now = new Date().toISOString();
-      const hasGoogle = Boolean(activeUser.providerData?.some((p) => p.providerId === 'google.com'));
-      const hasZalo = isSyntheticZaloEmail(activeUser.email);
       const payload: UserVerifiedDevice = {
         deviceId: meta.deviceId,
         deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
         platform: meta.platform,
         os: meta.os,
         browser: meta.browser,
-        isTrusted: existingDev?.isTrusted ?? true,
+        isTrusted: existingDev ? Boolean(existingDev.isTrusted) : false,
         verificationMethod:
-          existingDev?.verificationMethod || (hasZalo ? 'zalo' : hasGoogle ? 'google' : 'password'),
+          existingDev?.verificationMethod || resolveVerificationMethodFromUser(activeUser),
         ...(typeof existingDev?.biometricEnabled === 'boolean'
           ? { biometricEnabled: existingDev.biometricEnabled }
           : {}),
@@ -2015,6 +2622,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
+    zaloOnlySessionRef.current = null;
+    clearStoredZaloOnlySession();
+    setIsZaloOnlySession(false);
+    setCurrentUser(null);
+    setUserProfile(null);
+    void fetch('/api/auth/zalo/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+
     clearAllTwoFactorSessionMarkers();
     clearPendingSmsMfaResolver();
     setTwoFactorVerifiedThisSession(false);
@@ -2027,7 +2641,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!options?.keepRevokedNotice) {
       setRemoteRevokedNotice(false);
     }
-    await signOut(auth);
+    if (activeUser) {
+      await signOut(auth);
+    }
     setSimulatedRole(null);
   }, [clearPendingSmsMfaResolver]);
 
@@ -2046,6 +2662,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateProfileData = async (data: Partial<UserProfile>) => {
     if (!currentUser) return;
+    if (isZaloOnlySession || !auth.currentUser) {
+      const now = new Date().toISOString();
+      const mergedProfile: UserProfile = {
+        ...(userProfile || ({ uid: currentUser.uid, role: 'citizen', accountType: 'citizen', status: 'active' } as UserProfile)),
+        ...data,
+        updatedAt: now,
+      };
+      setUserProfile(mergedProfile);
+      if (zaloOnlySessionRef.current) {
+        const nextZaloProfile: ZaloAuthProfile = {
+          ...zaloOnlySessionRef.current.profile,
+          name: mergedProfile.displayName || zaloOnlySessionRef.current.profile.name,
+          avatarUrl: mergedProfile.avatarUrl || zaloOnlySessionRef.current.profile.avatarUrl,
+          phoneNumber: mergedProfile.phoneNumber || zaloOnlySessionRef.current.profile.phoneNumber,
+        };
+        const nextSess = { ...zaloOnlySessionRef.current, profile: nextZaloProfile };
+        zaloOnlySessionRef.current = nextSess;
+        writeStoredZaloOnlySession(nextSess);
+        setCurrentUser(buildSyntheticZaloUser(nextZaloProfile));
+      }
+      return;
+    }
     const path = `users/${currentUser.uid}`;
     const ref = doc(db, 'users', currentUser.uid);
 
@@ -2503,6 +3141,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshCurrentUserState = async () => {
     if (!currentUser) return;
+    if (isZaloOnlySession || !auth.currentUser) return;
     await currentUser.reload();
     setProviderTick((t) => t + 1);
     await syncVerifiedIdentityLocks(currentUser, userProfile);
@@ -2514,6 +3153,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
+
+    if (isZaloOnlySession || !auth.currentUser) {
+      const pendingZalo = zaloOnlySessionRef.current?.profile || null;
+      if (pendingZalo) {
+        pendingZaloProfileRef.current = pendingZalo;
+      }
+      const cred = await signInWithPopup(auth, provider);
+      zaloOnlySessionRef.current = null;
+      clearStoredZaloOnlySession();
+      setIsZaloOnlySession(false);
+      if (pendingZalo) {
+        await applyZaloProfileToUserDoc(cred.user, pendingZalo);
+        pendingZaloProfileRef.current = null;
+      }
+      return;
+    }
+
     try {
       await linkWithPopup(currentUser, provider);
     } catch (err: any) {
@@ -2540,6 +3196,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Bạn cần đăng nhập để liên kết tài khoản Zalo.');
     }
     const res = await openZaloOAuthPopup('link');
+    if (isZaloOnlySession || !auth.currentUser) {
+      const zaloSession: StoredZaloOnlySession = {
+        profile: res.zaloProfile,
+        token: zaloOnlySessionRef.current?.token || '',
+        rememberMe: zaloOnlySessionRef.current?.rememberMe ?? true,
+        savedAt: Date.now(),
+      };
+      zaloOnlySessionRef.current = zaloSession;
+      writeStoredZaloOnlySession(zaloSession);
+      setCurrentUser(buildSyntheticZaloUser(res.zaloProfile));
+      setUserProfile((prev) => buildInitialZaloOnlyUserProfile(res.zaloProfile, prev));
+      return res.zaloProfile;
+    }
     await applyZaloProfileToUserDoc(currentUser, res.zaloProfile);
     await syncVerifiedIdentityLocks(currentUser, {
       ...(userProfile || ({} as UserProfile)),
@@ -2558,6 +3227,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const normalizedPhone = normalizeAndValidatePhone(rawPhone);
     if (!normalizedPhone) {
       throw new Error('Số điện thoại phải gồm đúng 10 chữ số (VD: 0912345678).');
+    }
+    if (isZaloOnlySession || !auth.currentUser) {
+      const now = new Date().toISOString();
+      await updateProfileData({
+        phoneNumber: normalizedPhone,
+        verifiedPhone: normalizedPhone,
+        phoneVerified: true,
+        phoneVerifiedAt: userProfile?.phoneVerifiedAt || now,
+      });
+      return normalizedPhone;
     }
     const isSuperAdminUser =
       isBootstrapAdminEmail(currentUser.email) || userProfile?.role === 'super_admin';
@@ -2616,25 +3295,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (digits.length < 9 || digits.length > 12) {
       throw new Error('Số CCCD/ĐDCN phải gồm từ 9 đến 12 chữ số.');
     }
-    const prevDigits = (userProfile?.citizenId || '').replace(/\D/g, '');
-    const lockId = buildCccdLockId(digits);
-    const lockRes = await claimExclusiveIdentifierLock({
-      lockId,
-      type: 'cccd',
-      valueMasked: maskCccdForLock(digits),
-      ownerUid: currentUser.uid,
-    });
-    if (!lockRes.ok) {
-      throw new Error(lockRes.error || 'Số CCCD này đã được tài khoản khác xác minh.');
-    }
     const isSuperAdminUser =
       isBootstrapAdminEmail(currentUser.email) || userProfile?.role === 'super_admin';
-    if (
-      (isSuperAdminUser || userProfile?.allowIdentityEditByAdmin) &&
-      prevDigits &&
-      prevDigits !== digits
-    ) {
-      await releaseExclusiveIdentifierLock(buildCccdLockId(prevDigits));
+    if (!isZaloOnlySession && auth.currentUser) {
+      const prevDigits = (userProfile?.citizenId || '').replace(/\D/g, '');
+      const lockId = buildCccdLockId(digits);
+      const lockRes = await claimExclusiveIdentifierLock({
+        lockId,
+        type: 'cccd',
+        valueMasked: maskCccdForLock(digits),
+        ownerUid: currentUser.uid,
+      });
+      if (!lockRes.ok) {
+        throw new Error(lockRes.error || 'Số CCCD này đã được tài khoản khác xác minh.');
+      }
+      if (
+        (isSuperAdminUser || userProfile?.allowIdentityEditByAdmin) &&
+        prevDigits &&
+        prevDigits !== digits
+      ) {
+        await releaseExclusiveIdentifierLock(buildCccdLockId(prevDigits));
+      }
     }
     const now = new Date().toISOString();
     const dbPayload: Partial<UserProfile> = verifiedDatabaseFields
@@ -2664,7 +3345,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     method: UserVerifiedDevice['verificationMethod'] = 'manual',
     customName?: string
   ) => {
-    if (!currentUser) return;
+    if (!currentUser || isZaloOnlySession || !auth.currentUser) return;
     await upsertCurrentDeviceDoc(currentUser.uid, method, customName, true);
   };
 
@@ -3060,15 +3741,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const hasGoogleProvider = Boolean(
     currentUser?.providerData?.some((p) => p.providerId === 'google.com')
   );
+  const hasFacebookProvider = Boolean(
+    currentUser?.providerData?.some((p) => p.providerId === 'facebook.com') ||
+      userProfile?.facebookLinked
+  );
   const hasZaloProvider = Boolean(
     isSyntheticZalo || userProfile?.zaloLinked || userProfile?.zaloId
   );
 
-  const enrolledSmsFactors: PhoneMultiFactorInfo[] = currentUser
-    ? multiFactor(currentUser).enrolledFactors.filter(
-        (f): f is PhoneMultiFactorInfo => f.factorId === PhoneMultiFactorGenerator.FACTOR_ID
-      )
-    : [];
+  const enrolledSmsFactors: PhoneMultiFactorInfo[] =
+    currentUser && !isZaloOnlySession && auth.currentUser
+      ? multiFactor(currentUser).enrolledFactors.filter(
+          (f): f is PhoneMultiFactorInfo => f.factorId === PhoneMultiFactorGenerator.FACTOR_ID
+        )
+      : [];
   const smsMfaEnabled = enrolledSmsFactors.length > 0;
 
   useEffect(() => {
@@ -3148,7 +3834,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Active session heartbeat (every 60s + tab focus) while authenticated & not banned
   useEffect(() => {
-    if (!currentUser || isBanned) return;
+    if (!currentUser || isBanned || isZaloOnlySession || !auth.currentUser) return;
     let disposed = false;
 
     const sendHeartbeat = async (force = false) => {
@@ -3157,6 +3843,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!force && nowMs - lastHeartbeatWriteMsRef.current < 45_000) return;
       const meta = currentDeviceMeta.current;
       const existingDev = verifiedDevicesRef.current.find((d) => d.deviceId === meta.deviceId);
+      if (!existingDev) return;
       // Do not overwrite if this session has already been remotely revoked
       if (
         existingDev?.forceLogoutSessionId &&
@@ -3165,17 +3852,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       const now = new Date().toISOString();
-      const hasGoogle = Boolean(currentUser.providerData?.some((p) => p.providerId === 'google.com'));
-      const hasZalo = isSyntheticZaloEmail(currentUser.email);
       const payload: UserVerifiedDevice = {
         deviceId: meta.deviceId,
         deviceName: (existingDev?.deviceName || meta.deviceName).slice(0, 128),
         platform: meta.platform,
         os: meta.os,
         browser: meta.browser,
-        isTrusted: existingDev?.isTrusted ?? true,
+        isTrusted: Boolean(existingDev.isTrusted),
         verificationMethod:
-          existingDev?.verificationMethod || (hasZalo ? 'zalo' : hasGoogle ? 'google' : 'password'),
+          existingDev?.verificationMethod || resolveVerificationMethodFromUser(currentUser),
         ...(typeof existingDev?.biometricEnabled === 'boolean'
           ? { biometricEnabled: existingDev.biometricEnabled }
           : {}),
@@ -3224,7 +3909,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [currentUser, isBanned]);
+  }, [currentUser, isBanned, isZaloOnlySession]);
 
   // Remote revocation check: if another device clicked "Không phải tôi", sign out immediately
   useEffect(() => {
@@ -3244,6 +3929,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const concurrentActiveDevices = useMemo(() => {
     if (!currentUser || isBanned) return [];
+    const currentDevDoc = verifiedDevices.find((d) => d.deviceId === currentDeviceId);
+    if (!currentDevDoc) return [];
+    const isCurrentTrusted = Boolean(currentDevDoc.isTrusted);
     return verifiedDevices.filter((d) => {
       if (!d || d.deviceId === currentDeviceId) return false;
       if (d.isSessionActive !== true) return false;
@@ -3252,14 +3940,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (d.forceLogoutSessionId && d.activeSessionId && d.forceLogoutSessionId === d.activeSessionId) {
         return false;
       }
+      // Once both devices are approved/trusted, do NOT trigger Concurrent Login alert
+      if (isCurrentTrusted && d.isTrusted === true) {
+        return false;
+      }
       const ackKey = `${d.deviceId}:${d.activeSessionId || d.sessionStartedAt || ''}`;
       if (acknowledgedSessionKeys.includes(ackKey)) return false;
       return true;
     });
   }, [currentUser, isBanned, verifiedDevices, currentDeviceId, sessionNowTick, acknowledgedSessionKeys]);
 
+  const approveTrustedDevice = useCallback(
+    async (deviceId: string) => {
+      if (!currentUser || !deviceId) return;
+      const target = verifiedDevicesRef.current.find((d) => d.deviceId === deviceId);
+      if (!target) return;
+      const now = new Date().toISOString();
+      const devicePath = `users/${currentUser.uid}/devices/${deviceId}`;
+      const payload: UserVerifiedDevice = {
+        deviceId: target.deviceId,
+        deviceName: (target.deviceName || 'Thiết bị').slice(0, 128),
+        platform: target.platform || 'desktop',
+        ...(target.os ? { os: target.os } : {}),
+        ...(target.browser ? { browser: target.browser } : {}),
+        isTrusted: true,
+        verificationMethod: target.verificationMethod || 'password',
+        ...(typeof target.biometricEnabled === 'boolean'
+          ? { biometricEnabled: target.biometricEnabled }
+          : {}),
+        verifiedAt: target.verifiedAt || now,
+        ...(target.firstSeenAt ? { firstSeenAt: target.firstSeenAt } : {}),
+        lastActiveAt: target.lastActiveAt || now,
+        ...(target.activeSessionId ? { activeSessionId: target.activeSessionId } : {}),
+        ...(typeof target.isSessionActive === 'boolean' ? { isSessionActive: target.isSessionActive } : {}),
+        ...(target.sessionStartedAt ? { sessionStartedAt: target.sessionStartedAt } : {}),
+        ...(target.lastHeartbeatAt ? { lastHeartbeatAt: target.lastHeartbeatAt } : {}),
+        ...(typeof target.lastHeartbeatMs === 'number' ? { lastHeartbeatMs: target.lastHeartbeatMs } : {}),
+        forceLogoutSessionId: target.forceLogoutSessionId || '',
+        forceLogoutRequestedAt: target.forceLogoutRequestedAt || '',
+      };
+      try {
+        await setDoc(doc(db, 'users', currentUser.uid, 'devices', deviceId), payload, { merge: true });
+      } catch (err) {
+        handleAuthFirestoreError(err, FirestoreOperationType.UPDATE, devicePath);
+      }
+    },
+    [currentUser]
+  );
+
   const dismissConcurrentLoginAlert = useCallback(
-    (devices?: UserVerifiedDevice[]) => {
+    async (devices?: UserVerifiedDevice[]) => {
       const targetList = devices && devices.length > 0 ? devices : concurrentActiveDevices;
       if (targetList.length === 0) return;
       const newKeys = targetList.map(
@@ -3270,8 +4000,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         writeAckConcurrentKeys(merged);
         return merged;
       });
+      if (currentUser && currentDeviceTrusted) {
+        await Promise.all(
+          targetList
+            .filter((d) => d.isTrusted !== true)
+            .map((d) => approveTrustedDevice(d.deviceId).catch(() => {}))
+        );
+      }
     },
-    [concurrentActiveDevices]
+    [concurrentActiveDevices, currentUser, currentDeviceTrusted, approveTrustedDevice]
   );
 
   const revokeConcurrentDeviceSession = useCallback(
@@ -3303,7 +4040,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await setDoc(doc(db, 'users', currentUser.uid, 'devices', targetDevice.deviceId), payload, {
           merge: true,
         });
-        dismissConcurrentLoginAlert([targetDevice]);
+        await dismissConcurrentLoginAlert([targetDevice]);
       } catch (err) {
         handleAuthFirestoreError(err, FirestoreOperationType.UPDATE, devicePath);
       }
@@ -3331,6 +4068,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isBanned,
         hasPasswordProvider,
         hasGoogleProvider,
+        hasFacebookProvider,
         hasZaloProvider,
         totpConfig,
         twoFactorEnabled,
@@ -3347,6 +4085,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         concurrentActiveDevices,
         remoteRevokedNotice,
         dismissConcurrentLoginAlert,
+        approveTrustedDevice,
         revokeConcurrentDeviceSession,
         clearRemoteRevokedNotice,
         clearPendingSmsMfaResolver,
@@ -3367,7 +4106,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         sendSmsMfaSignInCode,
         resolveSmsMfaSignIn,
         signInWithGoogle,
+        signInWithFacebook,
         signInWithZalo,
+        signInWithProviderMethod,
         signInWithQrHandoff,
         signInWithBiometric,
         biometricEnvironment,

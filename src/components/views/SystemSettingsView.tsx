@@ -270,7 +270,7 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
                 aria-checked={notifEnabled}
                 onClick={handleToggleNotifPref}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                  notifEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  notifEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                 }`}
               >
                 <span
@@ -369,7 +369,7 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
                 aria-checked={locationPref}
                 onClick={handleToggleLocationPref}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                  locationPref ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  locationPref ? 'bg-emerald-600' : 'bg-rose-600'
                 }`}
               >
                 <span

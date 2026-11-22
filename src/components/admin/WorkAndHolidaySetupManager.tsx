@@ -135,12 +135,19 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
     return `${first.label} – ${last.label}: ${hours || '07:00 - 11:00 | 13:00 - 17:00'} (Trực cấp cứu 24/7)`;
   };
 
-  const handleSaveWeeklyWorkSchedule = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const persistWeeklySchedule = async (
+    nextDays: WeeklyWorkDayConfig[],
+    syncField: boolean,
+    options?: {
+      toastMessage?: string;
+      auditDetail?: string;
+      onErrorRollback?: () => void;
+    }
+  ) => {
     setSavingWeekly(true);
     try {
       const nextConfig: WorkScheduleConfig = {
-        weeklyDays: weeklyDays.map(d => ({
+        weeklyDays: nextDays.map(d => ({
           dayOfWeek: d.dayOfWeek,
           label: d.label,
           isWorking: Boolean(d.isWorking),
@@ -158,7 +165,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
         workScheduleConfig: nextConfig,
         updatedAt: new Date().toISOString(),
       };
-      if (syncWorkingHoursField) {
+      if (syncField) {
         updatePayload.workingHours = buildSummaryWorkingHours(nextConfig.weeklyDays);
       }
 
@@ -166,18 +173,60 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
       await logAuditEvent(
         'Cập nhật lịch làm việc tuần',
         'Lịch trực & Làm việc',
-        `Cập nhật giờ làm việc Thứ 2 - Chủ Nhật`,
+        options?.auditDetail || `Cập nhật giờ làm việc Thứ 2 - Chủ Nhật`,
         {
           uid: currentUser?.uid || 'admin',
           name: userProfile?.displayName || 'Quản trị viên',
         }
       );
-      showToast('success', 'Đã lưu cấu hình lịch làm việc tuần');
+      showToast('success', options?.toastMessage || 'Đã lưu cấu hình lịch làm việc tuần');
     } catch (err: any) {
+      if (options?.onErrorRollback) options.onErrorRollback();
       showToast('error', 'Không thể lưu lịch làm việc', err?.message);
     } finally {
       setSavingWeekly(false);
     }
+  };
+
+  const handleSaveWeeklyWorkSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await persistWeeklySchedule(weeklyDays, syncWorkingHoursField);
+  };
+
+  const handleToggleDayWorkingImmediate = (day: WeeklyWorkDayConfig) => {
+    const prevDays = weeklyDays;
+    const nextWorking = !day.isWorking;
+    const nextDays = prevDays.map(d =>
+      d.dayOfWeek === day.dayOfWeek
+        ? {
+            ...d,
+            isWorking: nextWorking,
+            morningHours: nextWorking ? d.morningHours || '07:00 - 11:00' : '',
+            afternoonHours: nextWorking ? d.afternoonHours || '13:00 - 17:00' : '',
+          }
+        : d
+    );
+    setWeeklyDays(nextDays);
+    void persistWeeklySchedule(nextDays, syncWorkingHoursField, {
+      toastMessage: nextWorking
+        ? `Đã BẬT lịch làm việc ${day.label}`
+        : `Đã TẮT lịch hành chính ${day.label} (Nghỉ)`,
+      auditDetail: `${day.label}: ${nextWorking ? 'Làm việc' : 'Nghỉ hành chính'}`,
+      onErrorRollback: () => setWeeklyDays(prevDays),
+    });
+  };
+
+  const handleToggleSyncWorkingHoursImmediate = () => {
+    const prevSync = syncWorkingHoursField;
+    const nextSync = !prevSync;
+    setSyncWorkingHoursField(nextSync);
+    void persistWeeklySchedule(weeklyDays, nextSync, {
+      toastMessage: nextSync
+        ? 'Đã BẬT & đồng bộ giờ làm việc ra Footer và Thông tin đơn vị'
+        : 'Đã TẮT tự động đồng bộ giờ làm việc ra Footer',
+      auditDetail: `Đồng bộ workingHours ra Footer: ${nextSync ? 'BẬT' : 'TẮT'}`,
+      onErrorRollback: () => setSyncWorkingHoursField(prevSync),
+    });
   };
 
   const openCreateHolidayModal = () => {
@@ -404,33 +453,33 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                     {day.label}
                   </td>
                   <td className="p-3 whitespace-nowrap">
-                    <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        checked={day.isWorking}
-                        onChange={e =>
-                          handleDayChange(day.dayOfWeek, {
-                            isWorking: e.target.checked,
-                            morningHours: e.target.checked
-                              ? day.morningHours || '07:00 - 11:00'
-                              : '',
-                            afternoonHours: e.target.checked
-                              ? day.afternoonHours || '13:00 - 17:00'
-                              : '',
-                          })
-                        }
-                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                      />
+                    <div className="inline-flex items-center gap-2 select-none whitespace-nowrap">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={day.isWorking}
+                        aria-label={`Trạng thái làm việc ${day.label}`}
+                        onClick={() => handleToggleDayWorkingImmediate(day)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                          day.isWorking ? 'bg-emerald-600' : 'bg-rose-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                            day.isWorking ? 'translate-x-4.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
                       <span
                         className={`font-semibold whitespace-nowrap ${
                           day.isWorking
                             ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-slate-500'
+                            : 'text-rose-600 dark:text-rose-400'
                         }`}
                       >
                         {day.isWorking ? 'Làm việc' : 'Nghỉ hành chính'}
                       </span>
-                    </label>
+                    </div>
                   </td>
                   <td className="p-2.5 whitespace-nowrap">
                     <input
@@ -511,15 +560,25 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
           </div>
         </div>
 
-        <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={syncWorkingHoursField}
-            onChange={e => setSyncWorkingHoursField(e.target.checked)}
-            className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-          />
+        <div className="inline-flex items-center gap-2.5 text-xs text-slate-600 dark:text-slate-400 select-none">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={syncWorkingHoursField}
+            aria-label="Tự động đồng bộ tóm tắt giờ làm việc ra Footer và Thông tin đơn vị"
+            onClick={handleToggleSyncWorkingHoursImmediate}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+              syncWorkingHoursField ? 'bg-emerald-600' : 'bg-rose-600'
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                syncWorkingHoursField ? 'translate-x-4.5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
           <span>Tự động đồng bộ tóm tắt giờ làm việc ra Footer và Thông tin đơn vị</span>
-        </label>
+        </div>
       </form>
 
       {/* Section 2: Holiday Schedule Setup */}
@@ -915,13 +974,7 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={holShowBanner}
-                    onChange={e => setHolShowBanner(e.target.checked)}
-                    className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Hiện Banner thông báo toàn trang
@@ -930,15 +983,25 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       Hiển thị ngay đầu website khi truy cập đúng ngày lễ
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={holShowBanner}
+                    aria-label="Hiện Banner thông báo toàn trang"
+                    onClick={() => setHolShowBanner(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      holShowBanner ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        holShowBanner ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={holShowModalOnEntry}
-                    onChange={e => setHolShowModalOnEntry(e.target.checked)}
-                    className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Tự bật hộp thoại thông báo khi mở trang
@@ -947,15 +1010,25 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       Hiện rõ thông tin nghỉ lễ &amp; số cấp cứu 24/7
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={holShowModalOnEntry}
+                    aria-label="Tự bật hộp thoại thông báo khi mở trang"
+                    onClick={() => setHolShowModalOnEntry(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      holShowModalOnEntry ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        holShowModalOnEntry ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={holIsAnnual}
-                    onChange={e => setHolIsAnnual(e.target.checked)}
-                    className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Lặp lại hằng năm (theo ngày/tháng)
@@ -964,15 +1037,25 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       Dùng cho ngày lễ dương lịch cố định (01/01, 30/04, 02/09...)
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={holIsAnnual}
+                    aria-label="Lặp lại hằng năm"
+                    onClick={() => setHolIsAnnual(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      holIsAnnual ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        holIsAnnual ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={holIsActive}
-                    onChange={e => setHolIsActive(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Kích hoạt lịch nghỉ lễ
@@ -981,7 +1064,23 @@ export const WorkAndHolidaySetupManager: React.FC<WorkAndHolidaySetupManagerProp
                       Công khai trên trang Lịch trực &amp; Làm việc
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={holIsActive}
+                    aria-label="Kích hoạt lịch nghỉ lễ"
+                    onClick={() => setHolIsActive(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      holIsActive ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        holIsActive ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200 dark:border-slate-800">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Building2,
@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   User,
   CalendarClock,
+  Briefcase,
   MapPin,
   RotateCw,
   Eye,
@@ -41,6 +42,8 @@ import {
   Megaphone,
   LayoutGrid,
   QrCode,
+  FolderOpen,
+  Trash2,
 } from 'lucide-react';
 import { useAuth, PRIMARY_ADMIN_EMAIL } from '../../contexts/AuthContext';
 import { SystemSettings, RoleType, AccountType, VaccinationScheduleItem, HolidayScheduleItem, WorkSchedule } from '../../types';
@@ -82,6 +85,62 @@ import {
   subscribeDeviceToWebPush,
   triggerDeviceSystemNotification,
 } from '../../services/systemNotificationService';
+import { detectClientEnvironment } from '../../utils/deviceAccessDetector';
+
+const PUBLIC_SEARCH_HISTORY_KEY = 'tyt_public_search_history_v1';
+
+interface PublicSearchHistoryEntry {
+  id: string;
+  kind: 'item' | 'category' | 'app';
+  label: string;
+  subLabel?: string;
+  viewId: string;
+  groupId: string;
+  timestamp: number;
+}
+
+function normalizeViSearch(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function loadPublicSearchHistory(): PublicSearchHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(PUBLIC_SEARCH_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
+const PUBLIC_VIEW_KEYWORDS: Record<string, string[]> = {
+  portal: ['trang chủ', 'giới thiệu', 'trạm y tế', 'tổng quan', 'home'],
+  personnel_directory: ['nhân lực', 'khoa phòng', 'bác sĩ', 'cán bộ', 'danh bạ', 'y sĩ'],
+  org_chart: ['sơ đồ tổ chức', 'cơ cấu', 'trưởng trạm', 'ban giám đốc'],
+  duty: ['lịch trực', '24/7', 'làm việc', 'nghỉ lễ', 'giờ khám', 'ca trực'],
+  business_trip: ['công tác', 'lịch công tác', 'cán bộ đi công tác', 'vắng mặt'],
+  vaccination: ['tiêm chủng', 'vắc xin', 'vaccine', 'mở rộng', 'trẻ em', 'đợt tiêm'],
+  events: ['sự kiện', 'ngày lễ', 'hoạt động', 'chúc mừng'],
+  rescue: ['cứu hộ', 'cứu nạn', 'sos', 'bản đồ cứu hộ', 'tai nạn', 'cấp cứu'],
+  offline_emergency: ['cấp cứu ngoại tuyến', 'offline', 'sos', 'số điện thoại khẩn', '115'],
+  map: ['bản đồ', 'định vị', 'chỉ đường', 'gps', 'địa chỉ trạm'],
+  nearby_facilities: ['cơ sở y tế lân cận', 'bệnh viện', 'phòng khám', 'gần đây'],
+  bhyt_lookup: ['bhyt', 'bhxh', 'bảo hiểm y tế', 'tra cứu thẻ', 'vssid'],
+  telehealth: ['bác sĩ cho mọi nhà', 'tư vấn', 'khám từ xa', 'telehealth', 'hồ sơ sức khỏe'],
+  feedback_tracking: ['phản ánh', 'kiến nghị', 'góp ý', 'theo dõi hồ sơ'],
+  apps: ['ứng dụng', 'tiện ích', 'vneid', 'phần mềm'],
+  news: ['tin tức', 'media', 'truyền thông', 'bài viết', 'thông báo'],
+  documents: ['văn bản', 'biểu mẫu', 'tài liệu', 'tải về', 'quyết định'],
+  admin: ['quản trị', 'admin', 'cấu hình', 'bảng điều khiển'],
+  account: ['tài khoản', 'đăng nhập', 'thiết bị', 'hồ sơ', 'mật khẩu', '2fa'],
+};
 
 interface AppShellProps {
   currentView: string;
@@ -167,6 +226,16 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [notificationModalOpen, setNotificationModalOpen] = useState(false);
   const [focusedNotifId, setFocusedNotifId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const isPcClient = useMemo(() => detectClientEnvironment().isPc, []);
+
+  // Public Site Quick Search State & History
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<PublicSearchHistoryEntry[]>(loadPublicSearchHistory);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Dynamic Header Section Title on Scroll Down, Normal Header on Scroll Up
   const [scrollDir, setScrollDir] = useState<'up' | 'down'>('up');
@@ -197,29 +266,28 @@ export const AppShell: React.FC<AppShellProps> = ({
     }
   }, [sidebarCollapsed]);
 
+  const colorSidebarEnabled = Boolean(settings.sidebarColors?.publicEnabled);
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     try {
       const saved = localStorage.getItem('tyt_sidebar_open_groups_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') return parsed;
+        if (parsed && typeof parsed === 'object') {
+          const firstOpenKey = Object.keys(parsed).find(k => Boolean(parsed[k]));
+          return firstOpenKey ? { [firstOpenKey]: true } : {};
+        }
       }
     } catch {
       // ignore
     }
-    return {
-      overview: false,
-      schedules: false,
-      maps: false,
-      media: false,
-      citizen: false,
-      system: false,
-    };
+    return {};
   });
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups(prev => {
-      const next = { ...prev, [groupId]: !prev[groupId] };
+      const willOpen = !prev[groupId];
+      const next: Record<string, boolean> = willOpen ? { [groupId]: true } : {};
       try {
         localStorage.setItem('tyt_sidebar_open_groups_v2', JSON.stringify(next));
       } catch {
@@ -619,6 +687,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: string;
+    disabled?: boolean;
   }
 
   interface NavGroup {
@@ -632,6 +701,14 @@ export const AppShell: React.FC<AppShellProps> = ({
   const tabMaintMap = settings.tabMaintenance || {};
   const rolePerms = resolveRolePermissions(settings);
   const isFullSuperAdmin = Boolean(isSuperAdmin || isPrimaryAdmin);
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isFullSuperAdmin || isAdmin);
+  const isTabDisabledByMaintenance = (tabId: string): boolean =>
+    !canBypassTabMaintenance &&
+    Boolean(tabMaintMap[tabId]) &&
+    tabId !== 'account' &&
+    tabId !== 'admin';
   const isOrganizationAccount = Boolean(
     currentUser &&
       !isFullSuperAdmin &&
@@ -677,39 +754,52 @@ export const AppShell: React.FC<AppShellProps> = ({
         return isAdmin || !hiddenTabSet.has(item.id);
       })
       .map(item => {
+        const disabled = isTabDisabledByMaintenance(item.id);
         if (isAdmin && hiddenTabSet.has(item.id)) {
-          return { ...item, badge: 'Đã ẩn' };
+          return { ...item, badge: 'Đã ẩn', disabled };
         }
         if (tabMaintMap[item.id]) {
-          return { ...item, badge: 'Bảo trì' };
+          return { ...item, badge: 'Bảo trì', disabled };
         }
         if (!currentUser && guestRequireLoginSet.has(item.id)) {
-          return { ...item, badge: 'Đăng nhập' };
+          return { ...item, badge: 'Đăng nhập', disabled };
         }
-        return item;
+        return disabled ? { ...item, disabled } : item;
       });
 
   const overviewItems = decorateOrFilter([
-    { id: 'portal', label: 'Trang chủ & Giới thiệu', icon: Building2 },
-    { id: 'personnel_directory', label: 'Nhân lực & Khoa phòng', icon: Users },
+    { id: 'portal', label: 'Trang chủ', icon: Building2 },
+    { id: 'personnel_directory', label: 'Nhân lực', icon: Users },
     { id: 'org_chart', label: 'Sơ đồ tổ chức', icon: Network },
   ]);
+
+  const showBusinessTripTab = settings.businessTripConfig?.enabled !== false || isAdmin;
 
   const scheduleItems = decorateOrFilter([
     {
       id: 'duty',
-      label: 'Lịch trực 24/7 & Làm việc',
+      label: 'Lịch trực & Làm việc',
       icon: CalendarClock,
       badge: activeHolidaysToday.length > 0 ? 'Nghỉ lễ' : undefined,
     },
+    ...(showBusinessTripTab
+      ? [
+          {
+            id: 'business_trip',
+            label: 'Lịch công tác',
+            icon: Briefcase,
+            badge: settings.businessTripConfig?.enabled === false && isAdmin ? 'Đang tắt' : undefined,
+          },
+        ]
+      : []),
     { id: 'vaccination', label: 'Lịch tiêm chủng', icon: Syringe },
     { id: 'events', label: 'Sự kiện', icon: PartyPopper, badge: hasTodayEvent ? 'Hôm nay' : undefined },
   ]);
 
   const mapItems = decorateOrFilter([
-    { id: 'rescue', label: 'Bản đồ Cứu hộ cứu nạn', icon: Siren, badge: 'SOS' },
-    { id: 'offline_emergency', label: 'Cấp cứu Ngoại tuyến (SOS)', icon: ShieldAlert, badge: 'SOS' },
-    { id: 'map', label: 'Bản đồ & Định vị trạm', icon: MapPin },
+    { id: 'rescue', label: 'Bản đồ Cứu hộ', icon: Siren, badge: 'SOS' },
+    { id: 'offline_emergency', label: 'Cấp cứu Ngoại tuyến', icon: ShieldAlert, badge: 'SOS' },
+    { id: 'map', label: 'Bản đồ', icon: MapPin },
     { id: 'nearby_facilities', label: 'Cơ sở Y tế lân cận', icon: Hospital },
   ]);
 
@@ -721,8 +811,8 @@ export const AppShell: React.FC<AppShellProps> = ({
   ]);
 
   const mediaItems = decorateOrFilter([
-    { id: 'news', label: 'Tin tức & Media', icon: Newspaper },
-    { id: 'documents', label: 'Văn bản & Biểu mẫu', icon: FileText },
+    { id: 'news', label: 'Tin tức', icon: Newspaper },
+    { id: 'documents', label: 'Văn bản', icon: FileText },
   ]);
 
   const systemItems: NavItem[] = [];
@@ -736,30 +826,238 @@ export const AppShell: React.FC<AppShellProps> = ({
   }
   systemItems.push({
     id: 'account',
-    label: currentUser ? 'Tài khoản & Thiết bị' : 'Đăng nhập & Thiết bị',
+    label: currentUser ? 'Tài khoản' : 'Đăng nhập',
     icon: User,
   });
 
   const navGroups: NavGroup[] = [
-    { id: 'overview', title: 'Tổng quan & Trạm Y tế', icon: Building2, items: overviewItems },
-    { id: 'schedules', title: 'Lịch trực 24/7 & Tiêm chủng', icon: CalendarClock, items: scheduleItems },
-    { id: 'maps', title: 'Cấp cứu SOS & Bản đồ Y tế', icon: Siren, items: mapItems },
-    { id: 'citizen', title: 'Dịch vụ & Tiện ích Dân cư', icon: Smartphone, items: citizenItems },
-    { id: 'media', title: 'Tin tức & Văn bản', icon: Newspaper, items: mediaItems },
-    { id: 'system', title: 'Tài khoản & Quản trị', icon: Settings, items: systemItems },
+    { id: 'overview', title: 'Tổng quan', icon: Building2, items: overviewItems },
+    { id: 'schedules', title: 'Lịch', icon: CalendarClock, items: scheduleItems },
+    { id: 'maps', title: 'Cấp cứu & Bản đồ', icon: Siren, items: mapItems },
+    { id: 'citizen', title: 'Tiện ích', icon: Smartphone, items: citizenItems },
+    { id: 'media', title: 'Tin tức', icon: Newspaper, items: mediaItems },
+    { id: 'system', title: 'Tài khoản', icon: Settings, items: systemItems },
   ].filter(group => group.items.length > 0);
 
-  const mobileBottomItems: NavItem[] = [
+  // Public site search shortcut & outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (window.innerWidth < 768) {
+          setMobileSearchOpen(true);
+          setTimeout(() => mobileSearchInputRef.current?.focus(), 40);
+        } else {
+          searchInputRef.current?.focus();
+        }
+        setSearchFocused(true);
+      } else if (e.key === 'Escape' && (searchFocused || mobileSearchOpen)) {
+        setSearchFocused(false);
+        setMobileSearchOpen(false);
+        searchInputRef.current?.blur();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleGlobalKey);
+    };
+  }, [searchFocused, mobileSearchOpen]);
+
+  const activePortalApps = useMemo(
+    () => (settings.portalApps || []).filter(app => app.isActive !== false),
+    [settings.portalApps]
+  );
+
+  const searchResults = useMemo(() => {
+    const qNorm = normalizeViSearch(searchQuery);
+    if (!qNorm) {
+      return {
+        categories: [] as NavGroup[],
+        items: [] as Array<{ item: NavItem; group: NavGroup }>,
+        apps: [] as typeof activePortalApps,
+      };
+    }
+    const categories = navGroups.filter(g => normalizeViSearch(g.title).includes(qNorm));
+    const items: Array<{ item: NavItem; group: NavGroup }> = [];
+    navGroups.forEach(group => {
+      group.items.forEach(item => {
+        const kw = PUBLIC_VIEW_KEYWORDS[item.id] || [];
+        const haystack = normalizeViSearch([item.label, group.title, ...kw].join(' '));
+        if (haystack.includes(qNorm)) {
+          items.push({ item, group });
+        }
+      });
+    });
+    const apps = activePortalApps.filter(app => {
+      const haystack = normalizeViSearch([app.name, app.category, app.url].filter(Boolean).join(' '));
+      return haystack.includes(qNorm);
+    });
+    return { categories, items, apps };
+  }, [navGroups, activePortalApps, searchQuery]);
+
+  const pushSearchHistory = (entry: Omit<PublicSearchHistoryEntry, 'id' | 'timestamp'>) => {
+    setSearchHistory(prev => {
+      const filtered = prev.filter(
+        h => !(h.kind === entry.kind && h.viewId === entry.viewId && h.label === entry.label)
+      );
+      const next: PublicSearchHistoryEntry[] = [
+        { ...entry, id: `${entry.kind}_${entry.viewId}_${Date.now()}`, timestamp: Date.now() },
+        ...filtered,
+      ].slice(0, 8);
+      try {
+        localStorage.setItem(PUBLIC_SEARCH_HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const removeSearchHistoryItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSearchHistory(prev => {
+      const next = prev.filter(h => h.id !== id);
+      try {
+        localStorage.setItem(PUBLIC_SEARCH_HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const clearAllSearchHistory = () => {
+    setSearchHistory([]);
+    try {
+      localStorage.removeItem(PUBLIC_SEARCH_HISTORY_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleJumpFromSearch = (
+    viewId: string,
+    groupId: string,
+    kind: 'item' | 'category' | 'app',
+    label: string,
+    subLabel?: string
+  ) => {
+    if (isTabDisabledByMaintenance(viewId)) return;
+    const nextGroups = { [groupId]: true };
+    setOpenGroups(nextGroups);
+    try {
+      localStorage.setItem('tyt_sidebar_open_groups_v2', JSON.stringify(nextGroups));
+    } catch {
+      // ignore
+    }
+    pushSearchHistory({ kind, label, subLabel, viewId, groupId });
+    setSearchFocused(false);
+    setMobileSearchOpen(false);
+    setMobileDrawerOpen(false);
+    setSearchQuery('');
+    setCurrentView(viewId);
+  };
+
+  const publicGroupColorMap: Record<
+    string,
+    {
+      headerIdle: string;
+      headerActive: string;
+      groupIcon: string;
+      borderLeft: string;
+      activeItem: string;
+      hoverItem: string;
+      itemIcon: string;
+    }
+  > = {
+    overview: {
+      headerIdle:
+        'text-emerald-700 dark:text-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/25 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/45',
+      headerActive:
+        'text-emerald-900 dark:text-emerald-200 bg-emerald-100/90 dark:bg-emerald-950/60 ring-1 ring-emerald-200/80 dark:ring-emerald-800/60',
+      groupIcon: 'text-emerald-600 dark:text-emerald-400',
+      borderLeft: 'border-emerald-300 dark:border-emerald-800',
+      activeItem: 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-emerald-900 dark:hover:text-emerald-200 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/40',
+      itemIcon: 'text-emerald-600 dark:text-emerald-400',
+    },
+    schedules: {
+      headerIdle:
+        'text-sky-700 dark:text-sky-300 bg-sky-50/50 dark:bg-sky-950/25 hover:bg-sky-100/70 dark:hover:bg-sky-950/45',
+      headerActive:
+        'text-sky-900 dark:text-sky-200 bg-sky-100/90 dark:bg-sky-950/60 ring-1 ring-sky-200/80 dark:ring-sky-800/60',
+      groupIcon: 'text-sky-600 dark:text-sky-400',
+      borderLeft: 'border-sky-300 dark:border-sky-800',
+      activeItem: 'bg-gradient-to-r from-sky-600 to-blue-700 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-sky-900 dark:hover:text-sky-200 hover:bg-sky-50/80 dark:hover:bg-sky-950/40',
+      itemIcon: 'text-sky-600 dark:text-sky-400',
+    },
+    maps: {
+      headerIdle:
+        'text-rose-700 dark:text-rose-300 bg-rose-50/50 dark:bg-rose-950/25 hover:bg-rose-100/70 dark:hover:bg-rose-950/45',
+      headerActive:
+        'text-rose-900 dark:text-rose-200 bg-rose-100/90 dark:bg-rose-950/60 ring-1 ring-rose-200/80 dark:ring-rose-800/60',
+      groupIcon: 'text-rose-600 dark:text-rose-400',
+      borderLeft: 'border-rose-300 dark:border-rose-800',
+      activeItem: 'bg-gradient-to-r from-rose-600 to-red-700 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-rose-900 dark:hover:text-rose-200 hover:bg-rose-50/80 dark:hover:bg-rose-950/40',
+      itemIcon: 'text-rose-600 dark:text-rose-400',
+    },
+    citizen: {
+      headerIdle:
+        'text-violet-700 dark:text-violet-300 bg-violet-50/50 dark:bg-violet-950/25 hover:bg-violet-100/70 dark:hover:bg-violet-950/45',
+      headerActive:
+        'text-violet-900 dark:text-violet-200 bg-violet-100/90 dark:bg-violet-950/60 ring-1 ring-violet-200/80 dark:ring-violet-800/60',
+      groupIcon: 'text-violet-600 dark:text-violet-400',
+      borderLeft: 'border-violet-300 dark:border-violet-800',
+      activeItem: 'bg-gradient-to-r from-violet-600 to-indigo-700 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-violet-900 dark:hover:text-violet-200 hover:bg-violet-50/80 dark:hover:bg-violet-950/40',
+      itemIcon: 'text-violet-600 dark:text-violet-400',
+    },
+    media: {
+      headerIdle:
+        'text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/25 hover:bg-amber-100/70 dark:hover:bg-amber-950/45',
+      headerActive:
+        'text-amber-900 dark:text-amber-200 bg-amber-100/90 dark:bg-amber-950/60 ring-1 ring-amber-200/80 dark:ring-amber-800/60',
+      groupIcon: 'text-amber-600 dark:text-amber-400',
+      borderLeft: 'border-amber-300 dark:border-amber-800',
+      activeItem: 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-amber-900 dark:hover:text-amber-200 hover:bg-amber-50/80 dark:hover:bg-amber-950/40',
+      itemIcon: 'text-amber-600 dark:text-amber-400',
+    },
+    system: {
+      headerIdle:
+        'text-cyan-700 dark:text-cyan-300 bg-cyan-50/50 dark:bg-cyan-950/25 hover:bg-cyan-100/70 dark:hover:bg-cyan-950/45',
+      headerActive:
+        'text-cyan-900 dark:text-cyan-200 bg-cyan-100/90 dark:bg-cyan-950/60 ring-1 ring-cyan-200/80 dark:ring-cyan-800/60',
+      groupIcon: 'text-cyan-600 dark:text-cyan-400',
+      borderLeft: 'border-cyan-300 dark:border-cyan-800',
+      activeItem: 'bg-gradient-to-r from-cyan-600 to-teal-700 text-white shadow-md',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:text-cyan-900 dark:hover:text-cyan-200 hover:bg-cyan-50/80 dark:hover:bg-cyan-950/40',
+      itemIcon: 'text-cyan-600 dark:text-cyan-400',
+    },
+  };
+
+  const mobileBottomItems: NavItem[] = decorateOrFilter([
     { id: 'portal', label: 'Trang chủ', icon: Building2 },
     { id: 'vaccination', label: 'Lịch tiêm', icon: Syringe },
     { id: 'news', label: 'Tin tức', icon: Newspaper },
     { id: 'map', label: 'Bản đồ', icon: MapPin },
     { id: 'account', label: 'Tài khoản', icon: User },
-  ].filter(item => {
-    if (isFullSuperAdmin) return true;
-    if (currentRoleBlockedTabs.has(item.id)) return false;
-    return isAdmin || !hiddenTabSet.has(item.id);
-  });
+  ]);
 
   const isConfigured = settings.stationName && !settings.stationName.includes('Chưa cấu hình');
 
@@ -796,9 +1094,18 @@ export const AppShell: React.FC<AppShellProps> = ({
         {/* Brand Header */}
         <div className="h-16 px-3 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
           {!sidebarCollapsed ? (
-            <div
-              onClick={() => setCurrentView('portal')}
-              className="cursor-pointer overflow-hidden group flex items-center gap-3 flex-1"
+            <button
+              type="button"
+              disabled={isTabDisabledByMaintenance('portal')}
+              aria-disabled={isTabDisabledByMaintenance('portal') || undefined}
+              onClick={() => {
+                if (isTabDisabledByMaintenance('portal')) return;
+                setCurrentView('portal');
+              }}
+              title={isTabDisabledByMaintenance('portal') ? 'Trang chủ đang bảo trì' : undefined}
+              className={`overflow-hidden group flex items-center gap-3 flex-1 text-left ${
+                isTabDisabledByMaintenance('portal') ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+              }`}
             >
               <StationLogo size={38} />
               <div className="overflow-hidden flex-1">
@@ -810,7 +1117,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                   </h1>
                 )}
               </div>
-            </div>
+            </button>
           ) : (
             <button
               type="button"
@@ -857,6 +1164,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             const highlightBadge = !isOpen
               ? group.items.find(i => i.badge && i.badge !== 'Đã ẩn' && i.badge !== 'Admin')?.badge
               : undefined;
+            const palette = colorSidebarEnabled ? publicGroupColorMap[group.id] : undefined;
 
             return (
               <div key={group.id} className="space-y-1">
@@ -870,7 +1178,11 @@ export const AppShell: React.FC<AppShellProps> = ({
                     onClick={() => toggleGroup(group.id)}
                     aria-expanded={isOpen}
                     className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-[11.5px] font-bold uppercase tracking-wider transition cursor-pointer ${
-                      hasActiveChild
+                      palette
+                        ? hasActiveChild || isOpen
+                          ? palette.headerActive
+                          : palette.headerIdle
+                        : hasActiveChild
                         ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40'
                         : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800/50'
                     }`}
@@ -878,7 +1190,11 @@ export const AppShell: React.FC<AppShellProps> = ({
                     <span className="flex items-center gap-2 min-w-0">
                       <GroupIcon
                         className={`w-3.5 h-3.5 shrink-0 ${
-                          hasActiveChild ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
+                          palette
+                            ? palette.groupIcon
+                            : hasActiveChild
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-slate-400'
                         }`}
                       />
                       <span className="truncate">{group.title}</span>
@@ -909,18 +1225,25 @@ export const AppShell: React.FC<AppShellProps> = ({
                     className={
                       sidebarCollapsed
                         ? 'space-y-1'
-                        : 'space-y-1 pl-2 ml-2.5 border-l border-slate-200/80 dark:border-slate-800'
+                        : `space-y-1 pl-2 ml-2.5 border-l ${
+                            palette ? palette.borderLeft : 'border-slate-200/80 dark:border-slate-800'
+                          }`
                     }
                   >
                     {group.items.map(item => {
                       const Icon = item.icon;
                       const isActive = currentView === item.id;
+                      const isDisabled = Boolean(item.disabled);
 
                       return (
                         <button
                           key={item.id}
                           type="button"
+                          disabled={isDisabled}
+                          aria-disabled={isDisabled || undefined}
+                          title={isDisabled ? `${item.label} đang bảo trì - tạm khóa truy cập` : undefined}
                           onClick={() => {
+                            if (isDisabled) return;
                             setHoveredNav(null);
                             setCurrentView(item.id);
                           }}
@@ -950,19 +1273,29 @@ export const AppShell: React.FC<AppShellProps> = ({
                           onBlur={() => setHoveredNav(null)}
                           className={`w-full flex items-center ${
                             sidebarCollapsed ? 'justify-center px-2' : 'gap-2.5 px-2.5'
-                          } py-2 rounded-xl text-[13px] font-semibold transition cursor-pointer text-left ${
-                            isActive
-                              ? 'bg-gradient-to-r from-emerald-700 to-teal-800 text-white shadow-md'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                          } py-2 rounded-xl text-[13px] font-semibold transition text-left ${
+                            isDisabled
+                              ? 'opacity-55 cursor-not-allowed bg-slate-100/70 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500'
+                              : isActive
+                              ? palette
+                                ? `${palette.activeItem} cursor-pointer`
+                                : 'bg-gradient-to-r from-emerald-700 to-teal-800 text-white shadow-md cursor-pointer'
+                              : palette
+                              ? `${palette.hoverItem} cursor-pointer`
+                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60 cursor-pointer'
                           }`}
-                          aria-label={item.label}
+                          aria-label={isDisabled ? `${item.label} (Đang bảo trì)` : item.label}
                         >
                           <Icon
                             className={`w-4 h-4 shrink-0 ${
-                              isActive
+                              isDisabled
+                                ? 'text-slate-400 dark:text-slate-500'
+                                : isActive
                                 ? 'text-white'
                                 : item.id === 'rescue'
                                 ? 'text-rose-600 dark:text-rose-400'
+                                : palette
+                                ? palette.itemIcon
                                 : 'text-emerald-600 dark:text-emerald-400'
                             }`}
                           />
@@ -972,7 +1305,9 @@ export const AppShell: React.FC<AppShellProps> = ({
                           {!sidebarCollapsed && item.badge && (
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold whitespace-nowrap ${
-                                isActive
+                                isDisabled
+                                  ? 'bg-amber-100/90 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
+                                  : isActive
                                   ? 'bg-white/20 text-white'
                                   : item.badge === 'Admin' || item.badge === 'SOS'
                                   ? 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300'
@@ -1120,6 +1455,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 const GroupIcon = group.icon;
                 const isOpen = Boolean(openGroups[group.id]);
                 const hasActiveChild = group.items.some(i => i.id === currentView);
+                const palette = colorSidebarEnabled ? publicGroupColorMap[group.id] : undefined;
                 return (
                   <div key={group.id} className="space-y-1">
                     <button
@@ -1127,13 +1463,17 @@ export const AppShell: React.FC<AppShellProps> = ({
                       onClick={() => toggleGroup(group.id)}
                       aria-expanded={isOpen}
                       className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
-                        hasActiveChild
+                        palette
+                          ? hasActiveChild || isOpen
+                            ? palette.headerActive
+                            : palette.headerIdle
+                          : hasActiveChild
                           ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40'
                           : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/60'
                       }`}
                     >
                       <span className="flex items-center gap-2 min-w-0">
-                        <GroupIcon className="w-3.5 h-3.5 shrink-0" />
+                        <GroupIcon className={`w-3.5 h-3.5 shrink-0 ${palette ? palette.groupIcon : ''}`} />
                         <span className="truncate">{group.title}</span>
                       </span>
                       <ChevronDown
@@ -1144,34 +1484,59 @@ export const AppShell: React.FC<AppShellProps> = ({
                     </button>
 
                     {isOpen && (
-                      <div className="space-y-1 pl-2 ml-2.5 border-l border-slate-200 dark:border-slate-800">
+                      <div
+                        className={`space-y-1 pl-2 ml-2.5 border-l ${
+                          palette ? palette.borderLeft : 'border-slate-200 dark:border-slate-800'
+                        }`}
+                      >
                         {group.items.map(item => {
                           const Icon = item.icon;
                           const isActive = currentView === item.id;
+                          const isDisabled = Boolean(item.disabled);
                           return (
                             <button
                               key={item.id}
                               type="button"
+                              disabled={isDisabled}
+                              aria-disabled={isDisabled || undefined}
+                              title={isDisabled ? `${item.label} đang bảo trì - tạm khóa truy cập` : undefined}
                               onClick={() => {
+                                if (isDisabled) return;
                                 setCurrentView(item.id);
                                 setMobileDrawerOpen(false);
                               }}
                               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-semibold text-left ${
-                                isActive
-                                  ? 'bg-emerald-700 text-white'
-                                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                isDisabled
+                                  ? 'opacity-55 cursor-not-allowed bg-slate-100/70 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500'
+                                  : isActive
+                                  ? palette
+                                    ? `${palette.activeItem} cursor-pointer`
+                                    : 'bg-emerald-700 text-white cursor-pointer'
+                                  : palette
+                                  ? `${palette.hoverItem} cursor-pointer`
+                                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
                               }`}
                             >
                               <Icon
                                 className={`w-4 h-4 shrink-0 ${
-                                  !isActive && item.id === 'rescue' ? 'text-rose-600 dark:text-rose-400' : ''
+                                  isDisabled
+                                    ? 'text-slate-400 dark:text-slate-500'
+                                    : isActive
+                                    ? 'text-white'
+                                    : item.id === 'rescue'
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : palette
+                                    ? palette.itemIcon
+                                    : ''
                                 }`}
                               />
                               <span className="flex-1 truncate">{item.label}</span>
                               {item.badge && (
                                 <span
                                   className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold whitespace-nowrap ${
-                                    isActive
+                                    isDisabled
+                                      ? 'bg-amber-100/90 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
+                                      : isActive
                                       ? 'bg-white/20 text-white'
                                       : item.badge === 'Admin' || item.badge === 'SOS'
                                       ? 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300'
@@ -1194,7 +1559,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
               <PWAInstallButton variant="drawer" />
 
-              {currentUser && (
+              {currentUser && !isPcClient && (
                 <button
                   type="button"
                   onClick={() => {
@@ -1270,145 +1635,635 @@ export const AppShell: React.FC<AppShellProps> = ({
             scrollDir === 'down' && isScrolledPastTop && Boolean(activeSectionTitle);
 
           return (
-            <header className="h-16 border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md sticky top-0 z-20 px-4 sm:px-8 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <button
-                  type="button"
-                  onClick={() => setMobileDrawerOpen(true)}
-                  className="lg:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
-                  aria-label="Mở menu điều hướng"
-                >
-                  <Menu className="w-5 h-5" />
-                </button>
+            <>
+              <header className="h-16 border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md sticky top-0 z-30 px-4 sm:px-8 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0 flex-1 md:flex-initial md:max-w-[240px] lg:max-w-[280px]">
+                  <button
+                    type="button"
+                    onClick={() => setMobileDrawerOpen(true)}
+                    className="lg:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+                    aria-label="Mở menu điều hướng"
+                  >
+                    <Menu className="w-5 h-5" />
+                  </button>
 
-                <div className="min-w-0 flex-1 overflow-hidden">
-                  {showSectionHeader ? (
-                    <div
-                      key={activeSectionTitle}
-                      className="flex items-center gap-2 min-w-0 animate-in fade-in duration-200"
-                    >
-                      <span className="hidden sm:inline-block text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 whitespace-nowrap shrink-0">
-                        Mục hiện tại
-                      </span>
-                      <span className="hidden sm:inline-block text-slate-300 dark:text-slate-700">·</span>
-                      <span className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white truncate">
-                        {activeSectionTitle}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 min-w-0 animate-in fade-in duration-200">
-                      <span className="lg:hidden font-bold text-sm text-slate-900 dark:text-white truncate">
-                        {isConfigured ? settings.stationName : 'Trạm Y Tế'}
-                      </span>
-                      <span className="hidden lg:inline-block font-bold text-sm text-slate-700 dark:text-slate-200 truncate">
-                        {currentNavTitle}
-                      </span>
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    {showSectionHeader ? (
+                      <div
+                        key={activeSectionTitle}
+                        className="flex items-center gap-2 min-w-0 animate-in fade-in duration-200"
+                      >
+                        <span className="hidden sm:inline-block text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 whitespace-nowrap shrink-0">
+                          Mục hiện tại
+                        </span>
+                        <span className="hidden sm:inline-block text-slate-300 dark:text-slate-700">·</span>
+                        <span className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white truncate">
+                          {activeSectionTitle}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 min-w-0 animate-in fade-in duration-200">
+                        <span className="lg:hidden font-bold text-sm text-slate-900 dark:text-white truncate">
+                          {isConfigured ? settings.stationName : 'Trạm Y Tế'}
+                        </span>
+                        <span className="hidden lg:inline-block font-bold text-sm text-slate-700 dark:text-slate-200 truncate">
+                          {currentNavTitle}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Desktop Public Quick Search Bar (Ctrl+K) */}
+                <div ref={searchBoxRef} className="relative hidden md:block flex-1 max-w-md mx-2">
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onFocus={() => setSearchFocused(true)}
+                      onChange={e => {
+                        setSearchQuery(e.target.value);
+                        setSearchFocused(true);
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const firstEnabledItem = searchResults.items.find(entry => !entry.item.disabled);
+                          if (firstEnabledItem) {
+                            handleJumpFromSearch(
+                              firstEnabledItem.item.id,
+                              firstEnabledItem.group.id,
+                              'item',
+                              firstEnabledItem.item.label,
+                              firstEnabledItem.group.title
+                            );
+                          } else {
+                            const firstEnabledCat = searchResults.categories.find(cat =>
+                              cat.items.some(i => !i.disabled)
+                            );
+                            const targetCatItem = firstEnabledCat?.items.find(i => !i.disabled);
+                            if (firstEnabledCat && targetCatItem) {
+                              handleJumpFromSearch(
+                                targetCatItem.id,
+                                firstEnabledCat.id,
+                                'category',
+                                firstEnabledCat.title,
+                                `${firstEnabledCat.items.length} mục`
+                              );
+                            } else if (searchResults.apps.length > 0 && !isTabDisabledByMaintenance('apps')) {
+                              const app = searchResults.apps[0];
+                              handleJumpFromSearch('apps', 'citizen', 'app', app.name, 'Ứng dụng');
+                            }
+                          }
+                        }
+                      }}
+                      placeholder="Tìm lịch trực, công tác, tiêm chủng, BHYT... (Ctrl+K)"
+                      className="w-full pl-9 pr-14 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white dark:focus:bg-slate-800 transition"
+                    />
+                    {searchQuery ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery('');
+                          searchInputRef.current?.focus();
+                        }}
+                        aria-label="Xóa từ khóa tìm kiếm"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <kbd className="hidden xl:inline-flex items-center px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[10px] font-mono text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                        Ctrl+K
+                      </kbd>
+                    )}
+                  </div>
+
+                  {/* Desktop Search Dropdown */}
+                  {searchFocused && (
+                    <div className="absolute left-0 right-0 top-full mt-2 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden z-50 max-h-[70vh] flex flex-col">
+                      <div className="overflow-y-auto p-2.5 space-y-3">
+                        {!searchQuery.trim() ? (
+                          <>
+                            {searchHistory.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    <span>Tìm kiếm gần đây</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={clearAllSearchHistory}
+                                    className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 hover:underline normal-case font-semibold cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    <span>Xóa lịch sử</span>
+                                  </button>
+                                </div>
+                                <div className="space-y-0.5">
+                                  {searchHistory.map(h => {
+                                    const isHistoryDisabled = isTabDisabledByMaintenance(h.viewId);
+                                    return (
+                                      <div
+                                        key={h.id}
+                                        role="button"
+                                        aria-disabled={isHistoryDisabled || undefined}
+                                        tabIndex={isHistoryDisabled ? -1 : 0}
+                                        onClick={() => {
+                                          if (isHistoryDisabled) return;
+                                          handleJumpFromSearch(h.viewId, h.groupId, h.kind, h.label, h.subLabel);
+                                        }}
+                                        onKeyDown={e => {
+                                          if (isHistoryDisabled) return;
+                                          if (e.key === 'Enter') {
+                                            handleJumpFromSearch(h.viewId, h.groupId, h.kind, h.label, h.subLabel);
+                                          }
+                                        }}
+                                        className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs group ${
+                                          isHistoryDisabled
+                                            ? 'opacity-55 cursor-not-allowed bg-slate-50/70 dark:bg-slate-800/40'
+                                            : 'hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                          <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">
+                                            {h.label}
+                                          </span>
+                                          {h.subLabel && (
+                                            <span className="text-[11px] text-slate-400 truncate">
+                                              · {h.subLabel}
+                                            </span>
+                                          )}
+                                          {isHistoryDisabled && (
+                                            <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                                              Bảo trì
+                                            </span>
+                                          )}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={e => removeSearchHistoryItem(h.id, e)}
+                                          title="Xóa khỏi lịch sử"
+                                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 opacity-70 group-hover:opacity-100 cursor-pointer shrink-0"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="space-y-1.5">
+                              <div className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                Danh mục chức năng ({navGroups.length})
+                              </div>
+                              <div className="grid grid-cols-2 gap-1.5 px-1">
+                                {navGroups.map(cat => {
+                                  const firstEnabledItem = cat.items.find(i => !i.disabled);
+                                  const isCatDisabled = !firstEnabledItem;
+                                  return (
+                                    <button
+                                      key={cat.id}
+                                      type="button"
+                                      disabled={isCatDisabled}
+                                      aria-disabled={isCatDisabled || undefined}
+                                      onClick={() => {
+                                        if (firstEnabledItem) {
+                                          handleJumpFromSearch(
+                                            firstEnabledItem.id,
+                                            cat.id,
+                                            'category',
+                                            cat.title,
+                                            `${cat.items.length} mục`
+                                          );
+                                        }
+                                      }}
+                                      className={`px-2.5 py-2 rounded-xl border border-slate-200/80 dark:border-slate-700/70 text-left transition ${
+                                        isCatDisabled
+                                          ? 'opacity-55 cursor-not-allowed bg-slate-100/70 dark:bg-slate-800/40'
+                                          : 'bg-slate-50 dark:bg-slate-800/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-1.5">
+                                        <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                                          {cat.title}
+                                        </span>
+                                        {isCatDisabled && (
+                                          <span className="px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[9px] font-bold shrink-0">
+                                            Bảo trì
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                                        {cat.items.length} mục
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        ) : searchResults.categories.length === 0 &&
+                          searchResults.items.length === 0 &&
+                          searchResults.apps.length === 0 ? (
+                          <div className="py-6 text-center text-xs text-slate-400">
+                            Không tìm thấy chức năng phù hợp với &quot;{searchQuery}&quot;
+                          </div>
+                        ) : (
+                          <>
+                            {searchResults.categories.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                                  Nhóm danh mục ({searchResults.categories.length})
+                                </div>
+                                {searchResults.categories.map(cat => {
+                                  const firstEnabledItem = cat.items.find(i => !i.disabled);
+                                  const isCatDisabled = !firstEnabledItem;
+                                  return (
+                                    <button
+                                      key={cat.id}
+                                      type="button"
+                                      disabled={isCatDisabled}
+                                      aria-disabled={isCatDisabled || undefined}
+                                      onClick={() => {
+                                        if (firstEnabledItem) {
+                                          handleJumpFromSearch(
+                                            firstEnabledItem.id,
+                                            cat.id,
+                                            'category',
+                                            cat.title,
+                                            `${cat.items.length} mục`
+                                          );
+                                        }
+                                      }}
+                                      className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs text-left ${
+                                        isCatDisabled
+                                          ? 'opacity-55 cursor-not-allowed bg-slate-50/70 dark:bg-slate-800/40'
+                                          : 'hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer'
+                                      }`}
+                                    >
+                                      <span className="inline-flex items-center gap-2 min-w-0 font-bold text-slate-900 dark:text-white">
+                                        <FolderOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                        <span className="truncate">{cat.title}</span>
+                                      </span>
+                                      <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 shrink-0 tabular-nums">
+                                        {isCatDisabled && (
+                                          <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold">
+                                            Bảo trì
+                                          </span>
+                                        )}
+                                        <span>{cat.items.length} mục</span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {searchResults.items.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                  Chức năng ({searchResults.items.length})
+                                </div>
+                                {searchResults.items.map(({ item, group }) => {
+                                  const Icon = item.icon;
+                                  const isCurrent = item.id === currentView;
+                                  const isDisabled = Boolean(item.disabled);
+                                  return (
+                                    <button
+                                      key={item.id}
+                                      type="button"
+                                      disabled={isDisabled}
+                                      aria-disabled={isDisabled || undefined}
+                                      onClick={() => {
+                                        if (isDisabled) return;
+                                        handleJumpFromSearch(
+                                          item.id,
+                                          group.id,
+                                          'item',
+                                          item.label,
+                                          group.title
+                                        );
+                                      }}
+                                      className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs text-left transition ${
+                                        isDisabled
+                                          ? 'opacity-55 cursor-not-allowed bg-slate-50/70 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500'
+                                          : isCurrent
+                                          ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 cursor-pointer'
+                                          : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 cursor-pointer'
+                                      }`}
+                                    >
+                                      <span className="inline-flex items-center gap-2.5 min-w-0">
+                                        <Icon
+                                          className={`w-4 h-4 shrink-0 ${
+                                            isDisabled ? 'text-slate-400' : 'text-emerald-600 dark:text-emerald-400'
+                                          }`}
+                                        />
+                                        <span className="min-w-0">
+                                          <span className="font-bold block truncate">{item.label}</span>
+                                          <span className="text-[10px] text-slate-400 block truncate">
+                                            {group.title}
+                                          </span>
+                                        </span>
+                                      </span>
+                                      {item.badge && (
+                                        <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                                          {item.badge}
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {searchResults.apps.length > 0 && (() => {
+                              const appsDisabled = isTabDisabledByMaintenance('apps');
+                              return (
+                                <div className="space-y-1">
+                                  <div className="px-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                    Ứng dụng liên kết ({searchResults.apps.length})
+                                  </div>
+                                  {searchResults.apps.slice(0, 5).map(app => (
+                                    <button
+                                      key={app.id}
+                                      type="button"
+                                      disabled={appsDisabled}
+                                      aria-disabled={appsDisabled || undefined}
+                                      onClick={() => {
+                                        if (appsDisabled) return;
+                                        handleJumpFromSearch('apps', 'citizen', 'app', app.name, app.category || 'Ứng dụng');
+                                      }}
+                                      className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs text-left ${
+                                        appsDisabled
+                                          ? 'opacity-55 cursor-not-allowed bg-slate-50/70 dark:bg-slate-800/40'
+                                          : 'hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
+                                      }`}
+                                    >
+                                      <span className="inline-flex items-center gap-2.5 min-w-0">
+                                        <LayoutGrid className={`w-4 h-4 shrink-0 ${appsDisabled ? 'text-slate-400' : 'text-teal-600'}`} />
+                                        <span className="min-w-0">
+                                          <span className="font-bold block truncate text-slate-800 dark:text-slate-100">{app.name}</span>
+                                          <span className="text-[10px] text-slate-400 block truncate">
+                                            {app.category || 'Menu Ứng dụng'}
+                                          </span>
+                                        </span>
+                                      </span>
+                                      {appsDisabled && (
+                                        <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                                          Bảo trì
+                                        </span>
+                                      )}
+                                    </button>
+                                  ))}
+                                </div>
+                              );
+                            })()}
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
 
-              {/* Right Header Affordances */}
-              <div className="flex items-center gap-2 shrink-0">
-                {(isPrimaryAdmin || userProfile?.accountType === 'admin') && (
-                  <div className="hidden md:flex items-center gap-1 p-1 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-xl text-xs">
-                    <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300 px-2 flex items-center gap-1 whitespace-nowrap">
-                      <Eye className="w-3.5 h-3.5 shrink-0" />
-                      <span className="hidden xl:inline">Vai trò:</span>
-                    </span>
-                    <select
-                      value={activeAccountType === 'admin' ? 'admin' : activeAccountType === 'employee' ? 'staff' : 'citizen'}
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (val === 'admin') switchPreviewRole('super_admin', 'admin');
-                        else if (val === 'staff') switchPreviewRole('doctor', 'employee');
-                        else switchPreviewRole('citizen', 'citizen');
-                      }}
-                      className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 text-xs font-semibold px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 focus:outline-none cursor-pointer"
-                    >
-                      <option value="admin">Quản trị viên</option>
-                      <option value="staff">Cán bộ Y tế</option>
-                      <option value="citizen">Công dân</option>
-                    </select>
+                {/* Right Header Affordances */}
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  {/* Mobile Search Toggle Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileSearchOpen(v => !v);
+                      setTimeout(() => mobileSearchInputRef.current?.focus(), 40);
+                    }}
+                    className={`md:hidden p-2 rounded-xl transition cursor-pointer shrink-0 ${
+                      mobileSearchOpen
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                    title="Tìm kiếm chức năng"
+                    aria-label="Tìm kiếm chức năng"
+                  >
+                    <Search className="w-4 h-4" />
+                  </button>
 
-                    {isSimulatingRole && (
-                      <button
-                        type="button"
-                        onClick={resetRoleToActual}
-                        className="px-2 py-1 rounded-lg bg-amber-600 text-white font-bold text-[11px] hover:bg-amber-700 transition whitespace-nowrap"
-                        title="Khôi phục quyền thực tế"
+                  {(isPrimaryAdmin || userProfile?.accountType === 'admin') && (
+                    <div className="hidden md:flex items-center gap-1 p-1 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-xl text-xs">
+                      <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300 px-2 flex items-center gap-1 whitespace-nowrap">
+                        <Eye className="w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden xl:inline">Vai trò:</span>
+                      </span>
+                      <select
+                        value={activeAccountType === 'admin' ? 'admin' : activeAccountType === 'employee' ? 'staff' : 'citizen'}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (val === 'admin') switchPreviewRole('super_admin', 'admin');
+                          else if (val === 'staff') switchPreviewRole('doctor', 'employee');
+                          else switchPreviewRole('citizen', 'citizen');
+                        }}
+                        className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 text-xs font-semibold px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 focus:outline-none cursor-pointer"
                       >
-                        Khôi phục
-                      </button>
-                    )}
-                  </div>
-                )}
+                        <option value="admin">Quản trị viên</option>
+                        <option value="staff">Cán bộ Y tế</option>
+                        <option value="citizen">Công dân</option>
+                      </select>
 
-                {/* Dark Mode Toggle Button */}
-                <button
-                  type="button"
-                  onClick={() => setIsDarkMode(v => !v)}
-                  className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
-                  title={isDarkMode ? 'Chuyển sang giao diện Sáng' : 'Chuyển sang giao diện Tối (Dark Mode)'}
-                >
-                  {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-700" />}
-                </button>
-
-                {/* Refresh Data & Location Button */}
-                <button
-                  type="button"
-                  onClick={handleManualRefresh}
-                  className={`p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0 ${
-                    isRefreshing ? 'animate-spin text-emerald-600' : ''
-                  }`}
-                  title="Cập nhật dữ liệu & GPS"
-                >
-                  <RotateCw className="w-4 h-4" />
-                </button>
-
-                {/* Quick switch button to Standalone Admin Site */}
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => setCurrentView('admin')}
-                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-emerald-700 hover:bg-slate-800 dark:hover:bg-emerald-800 text-white text-xs font-bold transition cursor-pointer shrink-0 whitespace-nowrap shadow-xs"
-                    title="Chuyển sang Trang Quản Trị (Admin)"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 dark:text-white shrink-0" />
-                    <span className="hidden sm:inline">Trang Quản trị</span>
-                    <span className="sm:hidden">Quản trị</span>
-                  </button>
-                )}
-
-                {/* Quick QR Scanner Button for Authenticated Users */}
-                {currentUser && (
-                  <button
-                    type="button"
-                    onClick={() => window.dispatchEvent(new CustomEvent('tyt:open-qr-scanner'))}
-                    className="p-2 rounded-xl text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer shrink-0"
-                    title="Quét mã QR đăng nhập trên PC"
-                    aria-label="Quét mã QR đăng nhập trên PC"
-                  >
-                    <QrCode className="w-4 h-4" />
-                  </button>
-                )}
-
-                {/* Notification Bell Button */}
-                <button
-                  type="button"
-                  onClick={() => setNotificationModalOpen(true)}
-                  className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition relative cursor-pointer shrink-0"
-                  title="Thông báo cá nhân & hệ thống"
-                >
-                  <Bell className="w-4 h-4 text-slate-700 dark:text-slate-200" />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
-                      {unreadCount}
-                    </span>
+                      {isSimulatingRole && (
+                        <button
+                          type="button"
+                          onClick={resetRoleToActual}
+                          className="px-2 py-1 rounded-lg bg-amber-600 text-white font-bold text-[11px] hover:bg-amber-700 transition whitespace-nowrap"
+                          title="Khôi phục quyền thực tế"
+                        >
+                          Khôi phục
+                        </button>
+                      )}
+                    </div>
                   )}
-                </button>
-              </div>
-            </header>
+
+                  {/* Dark Mode Toggle Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(v => !v)}
+                    className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
+                    title={isDarkMode ? 'Chuyển sang giao diện Sáng' : 'Chuyển sang giao diện Tối (Dark Mode)'}
+                  >
+                    {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-700" />}
+                  </button>
+
+                  {/* Refresh Data & Location Button */}
+                  <button
+                    type="button"
+                    onClick={handleManualRefresh}
+                    className={`p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0 ${
+                      isRefreshing ? 'animate-spin text-emerald-600' : ''
+                    }`}
+                    title="Cập nhật dữ liệu & GPS"
+                  >
+                    <RotateCw className="w-4 h-4" />
+                  </button>
+
+                  {/* Quick switch button to Standalone Admin Site */}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('admin')}
+                      className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-emerald-700 hover:bg-slate-800 dark:hover:bg-emerald-800 text-white text-xs font-bold transition cursor-pointer shrink-0 whitespace-nowrap shadow-xs"
+                      title="Chuyển sang Trang Quản Trị (Admin)"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 dark:text-white shrink-0" />
+                      <span className="hidden sm:inline">Trang Quản trị</span>
+                      <span className="sm:hidden">Quản trị</span>
+                    </button>
+                  )}
+
+                  {/* Quick QR Scanner Button for Authenticated Users (Mobile Only) */}
+                  {currentUser && !isPcClient && (
+                    <button
+                      type="button"
+                      onClick={() => window.dispatchEvent(new CustomEvent('tyt:open-qr-scanner'))}
+                      className="p-2 rounded-xl text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer shrink-0"
+                      title="Quét mã QR đăng nhập trên PC"
+                      aria-label="Quét mã QR đăng nhập trên PC"
+                    >
+                      <QrCode className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* Notification Bell Button */}
+                  <button
+                    type="button"
+                    onClick={() => setNotificationModalOpen(true)}
+                    className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition relative cursor-pointer shrink-0"
+                    title="Thông báo cá nhân & hệ thống"
+                  >
+                    <Bell className="w-4 h-4 text-slate-700 dark:text-slate-200" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </header>
+
+              {/* Mobile Collapsible Inline Search Strip */}
+              {mobileSearchOpen && (
+                <div className="md:hidden sticky top-16 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-2.5 space-y-2 shadow-sm">
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      ref={mobileSearchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Tìm lịch trực, công tác, tiêm chủng, BHYT..."
+                      className="w-full pl-9 pr-9 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (searchQuery) {
+                          setSearchQuery('');
+                        } else {
+                          setMobileSearchOpen(false);
+                        }
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                      aria-label="Đóng tìm kiếm"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {searchQuery.trim() && (
+                    <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 p-1.5 space-y-1">
+                      {searchResults.items.length === 0 &&
+                      searchResults.categories.length === 0 &&
+                      searchResults.apps.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-slate-400">
+                          Không tìm thấy kết quả phù hợp với &quot;{searchQuery}&quot;
+                        </div>
+                      ) : (
+                        <>
+                          {searchResults.items.map(({ item, group }) => {
+                            const Icon = item.icon;
+                            const isDisabled = Boolean(item.disabled);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                disabled={isDisabled}
+                                aria-disabled={isDisabled || undefined}
+                                onClick={() => {
+                                  if (isDisabled) return;
+                                  handleJumpFromSearch(item.id, group.id, 'item', item.label, group.title);
+                                }}
+                                className={`w-full px-2.5 py-2 rounded-xl flex items-center gap-2.5 text-xs text-left ${
+                                  isDisabled
+                                    ? 'opacity-55 cursor-not-allowed bg-slate-100/80 dark:bg-slate-800/40'
+                                    : 'hover:bg-white dark:hover:bg-slate-800 cursor-pointer'
+                                }`}
+                              >
+                                <Icon className={`w-4 h-4 shrink-0 ${isDisabled ? 'text-slate-400' : 'text-emerald-600'}`} />
+                                <span className="min-w-0 flex-1">
+                                  <span className="font-bold block truncate text-slate-900 dark:text-white">
+                                    {item.label}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 block truncate">
+                                    {group.title}
+                                  </span>
+                                </span>
+                                {item.badge && (
+                                  <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                                    {item.badge}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {searchResults.apps.slice(0, 4).map(app => {
+                            const appsDisabled = isTabDisabledByMaintenance('apps');
+                            return (
+                              <button
+                                key={app.id}
+                                type="button"
+                                disabled={appsDisabled}
+                                aria-disabled={appsDisabled || undefined}
+                                onClick={() => {
+                                  if (appsDisabled) return;
+                                  handleJumpFromSearch('apps', 'citizen', 'app', app.name, app.category || 'Ứng dụng');
+                                }}
+                                className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2.5 text-xs text-left ${
+                                  appsDisabled
+                                    ? 'opacity-55 cursor-not-allowed bg-slate-100/80 dark:bg-slate-800/40'
+                                    : 'hover:bg-white dark:hover:bg-slate-800 cursor-pointer'
+                                }`}
+                              >
+                                <span className="inline-flex items-center gap-2.5 min-w-0">
+                                  <LayoutGrid className={`w-4 h-4 shrink-0 ${appsDisabled ? 'text-slate-400' : 'text-teal-600'}`} />
+                                  <span className="font-bold truncate text-slate-900 dark:text-white">{app.name}</span>
+                                </span>
+                                {appsDisabled && (
+                                  <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                                    Bảo trì
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           );
         })()}
 
@@ -1484,16 +2339,28 @@ export const AppShell: React.FC<AppShellProps> = ({
                     </a>
                   )}
 
-                  {currentView !== 'duty' && (
-                    <button
-                      type="button"
-                      onClick={() => setCurrentView('duty')}
-                      className="px-3.5 py-1.5 rounded-xl bg-white text-rose-900 hover:bg-rose-50 text-xs font-extrabold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
-                    >
-                      <span>Xem lịch trực lễ 24/7</span>
-                      <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-                    </button>
-                  )}
+                  {currentView !== 'duty' && (() => {
+                    const dutyDisabled = isTabDisabledByMaintenance('duty');
+                    return (
+                      <button
+                        type="button"
+                        disabled={dutyDisabled}
+                        aria-disabled={dutyDisabled || undefined}
+                        onClick={() => {
+                          if (dutyDisabled) return;
+                          setCurrentView('duty');
+                        }}
+                        className={`px-3.5 py-1.5 rounded-xl bg-white text-rose-900 text-xs font-extrabold inline-flex items-center gap-1.5 transition whitespace-nowrap shadow-xs ${
+                          dutyDisabled
+                            ? 'opacity-60 cursor-not-allowed'
+                            : 'hover:bg-rose-50 cursor-pointer'
+                        }`}
+                      >
+                        <span>{dutyDisabled ? 'Lịch trực đang bảo trì' : 'Xem lịch trực lễ 24/7'}</span>
+                        {!dutyDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -1532,16 +2399,28 @@ export const AppShell: React.FC<AppShellProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {ctaTarget && currentView !== ctaTarget && (
-                    <button
-                      type="button"
-                      onClick={() => setCurrentView(ctaTarget)}
-                      className="hidden sm:inline-flex px-3 py-1.5 rounded-xl bg-white/95 hover:bg-white text-amber-900 text-xs font-extrabold items-center gap-1 transition cursor-pointer whitespace-nowrap shadow-xs"
-                    >
-                      <span>{ctaText}</span>
-                      <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-                    </button>
-                  )}
+                  {ctaTarget && currentView !== ctaTarget && (() => {
+                    const ctaDisabled = isTabDisabledByMaintenance(ctaTarget);
+                    return (
+                      <button
+                        type="button"
+                        disabled={ctaDisabled}
+                        aria-disabled={ctaDisabled || undefined}
+                        onClick={() => {
+                          if (ctaDisabled) return;
+                          setCurrentView(ctaTarget);
+                        }}
+                        className={`hidden sm:inline-flex px-3 py-1.5 rounded-xl bg-white/95 text-amber-900 text-xs font-extrabold items-center gap-1 transition whitespace-nowrap shadow-xs ${
+                          ctaDisabled
+                            ? 'opacity-60 cursor-not-allowed'
+                            : 'hover:bg-white cursor-pointer'
+                        }`}
+                      >
+                        <span>{ctaDisabled ? `${ctaText} (Bảo trì)` : ctaText}</span>
+                        {!ctaDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })()}
 
                   <button
                     type="button"
@@ -1658,16 +2537,28 @@ export const AppShell: React.FC<AppShellProps> = ({
                     </span>
                   </div>
 
-                  {currentView !== 'vaccination' && (
-                    <button
-                      type="button"
-                      onClick={() => setCurrentView('vaccination')}
-                      className="px-4 py-2 rounded-xl bg-white text-emerald-900 hover:bg-emerald-50 text-xs font-extrabold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
-                    >
-                      <span>Đến lịch tiêm</span>
-                      <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-                    </button>
-                  )}
+                  {currentView !== 'vaccination' && (() => {
+                    const vacDisabled = isTabDisabledByMaintenance('vaccination');
+                    return (
+                      <button
+                        type="button"
+                        disabled={vacDisabled}
+                        aria-disabled={vacDisabled || undefined}
+                        onClick={() => {
+                          if (vacDisabled) return;
+                          setCurrentView('vaccination');
+                        }}
+                        className={`px-4 py-2 rounded-xl bg-white text-emerald-900 text-xs font-extrabold inline-flex items-center gap-1.5 transition whitespace-nowrap shrink-0 shadow-sm ${
+                          vacDisabled
+                            ? 'opacity-60 cursor-not-allowed'
+                            : 'hover:bg-emerald-50 cursor-pointer'
+                        }`}
+                      >
+                        <span>{vacDisabled ? 'Lịch tiêm đang bảo trì' : 'Đến lịch tiêm'}</span>
+                        {!vacDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })()}
 
                   <button
                     type="button"
@@ -1731,19 +2622,38 @@ export const AppShell: React.FC<AppShellProps> = ({
         {mobileBottomItems.map(item => {
           const Icon = item.icon;
           const isActive = currentView === item.id;
+          const isDisabled = Boolean(item.disabled);
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => setCurrentView(item.id)}
-              className={`h-14 min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold transition cursor-pointer ${
-                isActive
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              disabled={isDisabled}
+              aria-disabled={isDisabled || undefined}
+              title={isDisabled ? `${item.label} đang bảo trì` : undefined}
+              onClick={() => {
+                if (isDisabled) return;
+                setCurrentView(item.id);
+              }}
+              className={`h-14 min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold transition relative ${
+                isDisabled
+                  ? 'text-slate-400 dark:text-slate-600 opacity-55 cursor-not-allowed'
+                  : isActive
+                  ? 'text-emerald-700 dark:text-emerald-400 cursor-pointer'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white cursor-pointer'
               }`}
             >
-              <Icon className={`w-5 h-5 ${isActive ? 'text-emerald-600 dark:text-emerald-400' : ''}`} />
-              <span className="truncate max-w-full px-1">{item.label}</span>
+              <Icon
+                className={`w-5 h-5 ${
+                  isDisabled
+                    ? 'text-slate-400 dark:text-slate-600'
+                    : isActive
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : ''
+                }`}
+              />
+              <span className="truncate max-w-full px-1">
+                {isDisabled ? `${item.label} (BT)` : item.label}
+              </span>
             </button>
           );
         })}
@@ -1762,7 +2672,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         }`}
       >
         <ArrowUp className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline">Lên đầu trang</span>
+        <span className="hidden sm:inline"></span>
       </button>
 
       {/* Portaled Hover Label Tooltip for Collapsed Desktop Sidebar */}

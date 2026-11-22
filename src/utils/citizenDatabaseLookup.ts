@@ -13,6 +13,7 @@ export interface CitizenDatabaseLookupRecord {
 
 export interface CitizenLookupResult {
   found: boolean;
+  disabled?: boolean;
   isMasked?: boolean;
   citizenId: string;
   record?: CitizenDatabaseLookupRecord;
@@ -160,6 +161,16 @@ export async function lookupCitizenByCccd(
   });
 
   const data = await res.json().catch(() => null);
+  if (res.status === 403 && data?.disabled) {
+    return {
+      found: false,
+      disabled: true,
+      citizenId: digits,
+      error:
+        data.error ||
+        'Tính năng tra cứu CCCD đang tạm tắt theo cấu hình bảo mật. Vui lòng điền thông tin thủ công.',
+    };
+  }
   if (!res.ok || !data) {
     throw new Error(data?.error || 'Không thể tra cứu cơ sở dữ liệu CCCD.');
   }

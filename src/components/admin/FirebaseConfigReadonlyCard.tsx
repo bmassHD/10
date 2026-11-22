@@ -215,11 +215,14 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
     }
   };
 
-  const handleSaveSandbox = async () => {
+  const persistSandboxConfig = async (
+    nextEnabled: boolean,
+    options?: { isToggle?: boolean; onRollback?: () => void }
+  ) => {
     setSavingSandbox(true);
     try {
       const sandboxPayload: SandboxFirebaseConfig = {
-        enabled: sandboxEnabled,
+        enabled: nextEnabled,
         mode: sandboxMode,
         projectId: sandboxProjectId.trim(),
         firestoreDatabaseId: sandboxDatabaseId.trim() || '(default)',
@@ -240,17 +243,40 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
 
       showToast(
         'success',
-        'Đã lưu cấu hình Sandbox Firebase',
-        sandboxEnabled
+        options?.isToggle
+          ? nextEnabled
+            ? 'Đã BẬT chế độ Sandbox Firebase'
+            : 'Đã TẮT chế độ Sandbox Firebase'
+          : 'Đã lưu cấu hình Sandbox Firebase',
+        nextEnabled
           ? `Chế độ Sandbox đang BẬT (${sandboxMode === 'independent' ? 'Độc lập' : 'Song song'})`
-          : 'Đã lưu cấu hình Sandbox (Đang tắt)'
+          : 'Chế độ Sandbox đang TẮT'
       );
       if (onRefresh) onRefresh();
     } catch (err: any) {
+      if (options?.onRollback) options.onRollback();
       showToast('error', 'Không thể lưu cấu hình Sandbox', err?.message);
     } finally {
       setSavingSandbox(false);
     }
+  };
+
+  const handleSaveSandbox = async () => {
+    await persistSandboxConfig(sandboxEnabled);
+  };
+
+  const handleToggleSandboxImmediate = () => {
+    const prevEnabled = sandboxEnabled;
+    const nextEnabled = !prevEnabled;
+    if (nextEnabled && !sandboxProjectId.trim()) {
+      showToast('warning', 'Vui lòng nhập Sandbox Project ID trước khi bật chế độ Sandbox');
+      return;
+    }
+    setSandboxEnabled(nextEnabled);
+    void persistSandboxConfig(nextEnabled, {
+      isToggle: true,
+      onRollback: () => setSandboxEnabled(prevEnabled),
+    });
   };
 
   const handleTestSandbox = async () => {
@@ -314,23 +340,34 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
 
       const collectionsToSync = [
         'systemSettings',
+        'nearbyFacilities',
+        'events',
         'posts',
+        'announcements',
         'services',
         'documents',
-        'feedback',
-        'appointments',
-        'stationEvents',
-        'holidaySchedules',
-        'nearbyFacilities',
-        'users',
-        'announcements',
-        'staffTasks',
         'workSchedules',
+        'businessTrips',
+        'attendanceRecords',
+        'feedback',
+        'serviceRatings',
+        'appointments',
+        'targetedNotifications',
         'storeItems',
         'storeOrders',
-        'serviceRatings',
+        'referralCodes',
+        'userReferralLinks',
+        'referralTracking',
+        'users',
         'verifiedIdentifiers',
-        'userDevices',
+        'legacyUserSnapshots',
+        'userMigrationClaims',
+        'admins',
+        'tasks',
+        'rescueSignals',
+        'siteStats',
+        'onlinePresence',
+        'pushSubscriptions',
         'auditLogs',
       ];
 
@@ -340,8 +377,25 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
         try {
           const snapshot = await getDocs(collection(db, collName));
           for (const d of snapshot.docs) {
+            if (collName === 'systemSettings' && d.id === 'connection_test') continue;
             await setDoc(doc(sandboxDb, collName, d.id), d.data(), { merge: true });
             totalSynced++;
+
+            if (collName === 'users') {
+              try {
+                const devSnap = await getDocs(collection(db, 'users', d.id, 'devices'));
+                for (const devDoc of devSnap.docs) {
+                  await setDoc(
+                    doc(sandboxDb, 'users', d.id, 'devices', devDoc.id),
+                    devDoc.data(),
+                    { merge: true }
+                  );
+                  totalSynced++;
+                }
+              } catch {
+                // non-blocking subcollection sync
+              }
+            }
           }
         } catch (colErr) {
           console.warn(`Sync collection ${collName} skipped:`, colErr);
@@ -444,9 +498,10 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
             </div>
             <button
               type="button"
-              onClick={() => setSandboxEnabled(prev => !prev)}
+              onClick={handleToggleSandboxImmediate}
+              disabled={savingSandbox}
               className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                sandboxEnabled ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                sandboxEnabled ? 'bg-emerald-600' : 'bg-rose-600'
               }`}
               role="switch"
               aria-checked={sandboxEnabled}

@@ -898,34 +898,10 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header Section */}
+      {/* Action Toolbar */}
       <RevealOnScroll immediate>
-        <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs p-6 sm:p-8 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
-          <div className="space-y-2 min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">
-              <span>NHÂN LỰC NIÊM YẾT</span>
-              <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
-              <span className="tabular-nums">{stats.departmentCount} khoa / phòng</span>
-              <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
-              <span className="tabular-nums">{stats.totalMembers} nhân sự</span>
-            </div>
-
-            {embeddedInAdmin ? (
-              <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-                Quản Lý Nhân Lực &amp; Khoa Phòng (Liên Kết Sơ Đồ Tổ Chức)
-              </h3>
-            ) : (
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-snug">
-                Nhân Lực &amp; Khoa Phòng Trạm Y Tế
-              </h1>
-            )}
-
-            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
-              Dữ liệu nhân sự niêm yết độc lập của Trạm Y tế — liên kết trực tiếp 2 chiều với Sơ đồ tổ chức, tách biệt hoàn toàn với tài khoản đăng nhập / Admin.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-start xl:justify-end gap-2 shrink-0">
+        <div className="rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             {onOpenOrgChart && (
               <button
                 type="button"
@@ -966,29 +942,29 @@ export const PersonnelDirectoryView: React.FC<PersonnelDirectoryViewProps> = ({
                 <span>Lưu mặc định</span>
               </button>
             )}
-
-            {isAdmin && (
-              <>
-                <button
-                  type="button"
-                  onClick={openAddDeptModal}
-                  className="px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Building2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Thêm Khoa / Phòng</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => openAddMemberModal()}
-                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <UserPlus className="w-4 h-4 shrink-0" />
-                  <span>Thêm nhân sự</span>
-                </button>
-              </>
-            )}
           </div>
+
+          {isAdmin && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={openAddDeptModal}
+                className="px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Building2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Thêm Khoa / Phòng</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAddMemberModal()}
+                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span>Thêm nhân sự</span>
+              </button>
+            </div>
+          )}
         </div>
       </RevealOnScroll>
 

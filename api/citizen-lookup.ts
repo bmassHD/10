@@ -242,10 +242,53 @@ function getCitizenIndex(): Map<string, CitizenDatabaseRecord> {
   return index;
 }
 
+async function isCccdLookupEnabledInFirestore(): Promise<{
+  enabled: boolean;
+  error?: string;
+}> {
+  const fbCfg = getFirebaseAppletCfg();
+  if (!fbCfg?.projectId || !fbCfg?.firestoreDatabaseId) {
+    return { enabled: true };
+  }
+  try {
+    const keyParam = fbCfg.apiKey ? `?key=${encodeURIComponent(fbCfg.apiKey)}` : '';
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      fbCfg.projectId
+    )}/databases/${encodeURIComponent(
+      fbCfg.firestoreDatabaseId
+    )}/documents/systemSettings/general${keyParam}`;
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (resp.status === 404) {
+      return { enabled: true };
+    }
+    if (!resp.ok) {
+      return {
+        enabled: false,
+        error:
+          'Không thể xác minh trạng thái cho phép tra cứu CCCD từ hệ thống. Vui lòng nhập thủ công.',
+      };
+    }
+    const docData = (await resp.json().catch(() => ({}))) as {
+      fields?: { cccdLookupEnabled?: { booleanValue?: boolean } };
+    };
+    if (docData?.fields?.cccdLookupEnabled?.booleanValue === false) {
+      return { enabled: false };
+    }
+    return { enabled: true };
+  } catch {
+    return {
+      enabled: false,
+      error:
+        'Không thể kiểm tra cấu hình bảo mật tra cứu CCCD. Vui lòng nhập thông tin thủ công.',
+    };
+  }
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -253,6 +296,19 @@ export default async function handler(req: any, res: any) {
 
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ found: false, error: 'Phương thức không được hỗ trợ' });
+  }
+
+  const lookupPolicy = await isCccdLookupEnabledInFirestore();
+  if (!lookupPolicy.enabled) {
+    cachedCitizenIndex = null;
+    cachedLoadError = null;
+    return res.status(403).json({
+      found: false,
+      disabled: true,
+      error:
+        lookupPolicy.error ||
+        'Tính năng tra cứu dữ liệu CCCD đang được Quản trị viên tắt để bảo mật thông tin công dân. Vui lòng tự điền thông tin thủ công.',
+    });
   }
 
   const rawInput =

@@ -14,6 +14,7 @@ import {
 import { StationEvent, SystemSettings } from '../../types';
 import { formatIsoDateVN, getVietnamTodayKey } from '../../services/firebaseService';
 import { StationLogo } from '../common/StationLogo';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface EventCelebrationModalProps {
   events: StationEvent[];
@@ -41,6 +42,11 @@ export const EventCelebrationModal: React.FC<EventCelebrationModalProps> = ({
   onClose,
   onGoToEventsTab,
 }) => {
+  const { isAdmin, isSuperAdmin, isPrimaryAdmin, isSimulatingRole } = useAuth();
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isSuperAdmin || isPrimaryAdmin || isAdmin);
+  const eventsTabDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.events);
   const [dontShowToday, setDontShowToday] = useState(false);
 
   useEffect(() => {
@@ -211,14 +217,21 @@ export const EventCelebrationModal: React.FC<EventCelebrationModalProps> = ({
             {!isPreview && (
               <button
                 type="button"
+                disabled={eventsTabDisabled}
+                aria-disabled={eventsTabDisabled || undefined}
                 onClick={() => {
+                  if (eventsTabDisabled) return;
                   onClose(dontShowToday);
                   onGoToEventsTab();
                 }}
-                className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className={`px-3.5 py-2 rounded-xl font-semibold text-xs transition inline-flex items-center gap-1.5 whitespace-nowrap ${
+                  eventsTabDisabled
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 cursor-not-allowed opacity-70'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                }`}
               >
-                <span>Xem tab Sự kiện</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <span>{eventsTabDisabled ? 'Tab Sự kiện đang bảo trì' : 'Xem tab Sự kiện'}</span>
+                {!eventsTabDisabled && <ArrowRight className="w-3.5 h-3.5" />}
               </button>
             )}
 

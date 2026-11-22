@@ -43,7 +43,7 @@ import {
   X,
   Ticket,
   Search,
-  QrCode,
+  Wrench,
 } from 'lucide-react';
 import {
   useAuth,
@@ -61,7 +61,13 @@ import { UserAvatar } from '../common/UserAvatar';
 import { AccountSecurityCard } from '../account/AccountSecurityCard';
 import { LoggedInDevicesPanel } from '../account/LoggedInDevicesPanel';
 import { QrLoginModal } from '../auth/QrLoginModal';
+import { OtherAuthMethodsPanel } from '../auth/OtherAuthMethodsPanel';
 import {
+  AUTH_PROVIDER_CATALOG,
+  resolveAuthProvidersMap,
+} from '../../constants/authProviders';
+import {
+  AuthProviderId,
   SystemSettings,
   UserProfile,
   EthnicItem,
@@ -83,7 +89,6 @@ import { db } from '../../firebase/config';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
 import { SoftwareTeamContactCard } from '../common/SoftwareTeamContactCard';
 import { getUserVerificationProgress } from '../../utils/verificationBadge';
-import { formatFirebaseGoogleAuthError } from '../../utils/smsMfaUtils';
 import {
   buildEmailLockId,
   buildPhoneLockId,
@@ -123,6 +128,11 @@ import {
   CitizenDatabaseLookupRecord,
   ParsedAdministrativeAddress,
 } from '../../utils/citizenDatabaseLookup';
+import {
+  getStationDepartmentOptions,
+  resolveDepartmentOptionValue,
+  isNonAdminHealthStaffAccount,
+} from '../../services/orgPersonnelSyncService';
 
 interface AccountDeviceViewProps {
   settings: SystemSettings;
@@ -203,14 +213,14 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     isPrimaryAdmin,
     hasPasswordProvider,
     hasGoogleProvider,
+    hasFacebookProvider,
     hasZaloProvider,
     totpConfig,
     twoFactorEnabled,
     enrolledSmsFactors,
     smsMfaEnabled,
     verifiedDevices,
-    signInWithGoogle,
-    signInWithZalo,
+    signInWithProviderMethod,
     loginWithEmail,
     registerWithEmail,
     confirmAndLockPhoneNumber,
@@ -251,7 +261,10 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [showOtherAuthMethods, setShowOtherAuthMethods] = useState(false);
   const isPcClient = detectCurrentDeviceMeta().platform !== 'mobile';
+  const providersMap = resolveAuthProvidersMap(settings);
+  const emailPasswordStatus = providersMap.email_password;
   const [forgotMode, setForgotMode] = useState(false);
   const [resetEmail, setResetEmail] = useState(savedCreds.email);
   const [resetPhone, setResetPhone] = useState('');
@@ -374,7 +387,32 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     matchedCitizenRecord && !canViewFullIdentity && !allowIdentityEditByAdmin
   );
 
+  const cccdLookupEnabled = settings?.cccdLookupEnabled !== false;
+
+  useEffect(() => {
+    if (!cccdLookupEnabled) {
+      setMatchedCitizenRecord(null);
+      setCccdLookupStatus('idle');
+      setCccdLookupMessage(null);
+      lastLookedUpCccdRef.current = '';
+    }
+  }, [cccdLookupEnabled]);
+
   const handleLookupCccdInDatabase = async (rawValue?: string, silent = false) => {
+    if (!cccdLookupEnabled) {
+      setMatchedCitizenRecord(null);
+      setCccdLookupStatus('idle');
+      setCccdLookupMessage(null);
+      if (!silent) {
+        showToast(
+          'info',
+          'Tra cứu CCCD đang tạm tắt',
+          'Quản trị viên đã tắt tra cứu tự động để bảo mật dữ liệu. Vui lòng điền thông tin thủ công bên dưới.'
+        );
+      }
+      return;
+    }
+
     const digits = String(rawValue ?? profileForm.citizenId ?? '')
       .replace(/\D/g, '')
       .trim();
@@ -393,6 +431,19 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     try {
       const idToken = await currentUser?.getIdToken().catch(() => null);
       const res = await lookupCitizenByCccd(digits, { idToken, action: 'lookup' });
+      if (res.disabled) {
+        setMatchedCitizenRecord(null);
+        setCccdLookupStatus('idle');
+        setCccdLookupMessage(null);
+        if (!silent) {
+          showToast(
+            'info',
+            'Tra cứu CCCD đang tạm tắt',
+            res.error || 'Vui lòng nhập thông tin thủ công bên dưới.'
+          );
+        }
+        return;
+      }
       if (res.found && res.record) {
         const shouldMask = Boolean(res.isMasked || !canViewFullIdentity);
         if (shouldMask) {
@@ -517,6 +568,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
   }, [provincesList, matchedCitizenRecord]);
 
   useEffect(() => {
+    if (!cccdLookupEnabled) return;
     if (!editingProfile) return;
     if (userProfile?.citizenIdVerified && !allowIdentityEditByAdmin) return;
     const digits = (profileForm.citizenId || '').replace(/\D/g, '').trim();
@@ -528,7 +580,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     }, 300);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileForm.citizenId, editingProfile, userProfile?.citizenIdVerified, allowIdentityEditByAdmin]);
+  }, [profileForm.citizenId, editingProfile, userProfile?.citizenIdVerified, allowIdentityEditByAdmin, cccdLookupEnabled]);
 
   const handleConfirmNfcFallback = (e: React.FormEvent) => {
     e.preventDefault();
@@ -543,7 +595,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     }));
     setNfcFallbackModalOpen(false);
     showToast('success', 'Đã nhận số CCCD qua NFC mô phỏng', `Số CCCD: ${cleaned}`);
-    if (!userProfile?.citizenIdVerified || allowIdentityEditByAdmin) {
+    if (cccdLookupEnabled && (!userProfile?.citizenIdVerified || allowIdentityEditByAdmin)) {
       void handleLookupCccdInDatabase(cleaned, false);
     }
   };
@@ -569,7 +621,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
               citizenId: text,
             }));
             showToast('success', 'Đọc thẻ NFC CCCD thành công', `Số CCCD: ${text}`);
-            if (!userProfile?.citizenIdVerified || allowIdentityEditByAdmin) {
+            if (cccdLookupEnabled && (!userProfile?.citizenIdVerified || allowIdentityEditByAdmin)) {
               void handleLookupCccdInDatabase(text, false);
             }
             break;
@@ -1511,74 +1563,76 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
 
     setLockingCccd(true);
     try {
-      const idToken = await currentUser?.getIdToken().catch(() => null);
-      const lookup = await lookupCitizenByCccd(targetDigits, { idToken, action: 'lookup' });
-      if (lookup.found && lookup.record) {
-        const shouldMask = Boolean(lookup.isMasked || !canViewFullIdentity);
-        lastLookedUpCccdRef.current = targetDigits;
-        if (shouldMask) {
-          setMatchedCitizenRecord({
-            citizenId: maskVerifiedValue(lookup.record.citizenId || targetDigits, 'cccd'),
-            displayName: lookup.record.displayName.startsWith('****')
-              ? lookup.record.displayName
-              : maskNameForLookup(lookup.record.displayName),
-            dob: lookup.record.dob,
-            dobRaw: lookup.record.dobRaw,
-            gender: '****',
-            permanentAddress: maskAddressForLookup(lookup.record.permanentAddress),
-            currentAddress: maskAddressForLookup(lookup.record.currentAddress),
-            fullAddress: lookup.record.fullAddress.startsWith('****')
-              ? lookup.record.fullAddress
-              : maskAddressForLookup(lookup.record.fullAddress),
-            provinceCode: '',
-            provinceName: '',
-            wardCode: '',
-            wardName: '',
-            address: '',
-            rawLookupDigits: targetDigits,
-            isMasked: true,
-          });
-          setProfileForm(prev => ({
-            ...prev,
-            citizenId: targetDigits,
-            dob: lookup.record!.dob || prev.dob,
-          }));
-        } else {
-          const parsedAddr = parseAddressIntoAdministrativeParts(
-            lookup.record.fullAddress,
-            provincesList
+      if (cccdLookupEnabled) {
+        const idToken = await currentUser?.getIdToken().catch(() => null);
+        const lookup = await lookupCitizenByCccd(targetDigits, { idToken, action: 'lookup' });
+        if (lookup.found && lookup.record && !lookup.disabled) {
+          const shouldMask = Boolean(lookup.isMasked || !canViewFullIdentity);
+          lastLookedUpCccdRef.current = targetDigits;
+          if (shouldMask) {
+            setMatchedCitizenRecord({
+              citizenId: maskVerifiedValue(lookup.record.citizenId || targetDigits, 'cccd'),
+              displayName: lookup.record.displayName.startsWith('****')
+                ? lookup.record.displayName
+                : maskNameForLookup(lookup.record.displayName),
+              dob: lookup.record.dob,
+              dobRaw: lookup.record.dobRaw,
+              gender: '****',
+              permanentAddress: maskAddressForLookup(lookup.record.permanentAddress),
+              currentAddress: maskAddressForLookup(lookup.record.currentAddress),
+              fullAddress: lookup.record.fullAddress.startsWith('****')
+                ? lookup.record.fullAddress
+                : maskAddressForLookup(lookup.record.fullAddress),
+              provinceCode: '',
+              provinceName: '',
+              wardCode: '',
+              wardName: '',
+              address: '',
+              rawLookupDigits: targetDigits,
+              isMasked: true,
+            });
+            setProfileForm(prev => ({
+              ...prev,
+              citizenId: targetDigits,
+              dob: lookup.record!.dob || prev.dob,
+            }));
+          } else {
+            const parsedAddr = parseAddressIntoAdministrativeParts(
+              lookup.record.fullAddress,
+              provincesList
+            );
+            setMatchedCitizenRecord({
+              ...lookup.record,
+              ...parsedAddr,
+              rawLookupDigits: targetDigits,
+              isMasked: false,
+            });
+            setProfileForm(prev => ({
+              ...prev,
+              citizenId: lookup.record!.citizenId,
+              displayName: lookup.record!.displayName,
+              dob: lookup.record!.dob,
+              gender: lookup.record!.gender === '****' ? 'Nam' : lookup.record!.gender,
+              provinceCode: parsedAddr.provinceCode,
+              provinceName: parsedAddr.provinceName,
+              wardCode: parsedAddr.wardCode,
+              wardName: parsedAddr.wardName,
+              address: parsedAddr.address,
+            }));
+          }
+          setCccdLookupStatus('found');
+          setCccdLookupMessage(
+            'Tìm thấy thông tin công dân trong cơ sở dữ liệu. Vui lòng kiểm tra kỹ và nhấn "Xác nhận đúng thông tin & Khóa hồ sơ".'
           );
-          setMatchedCitizenRecord({
-            ...lookup.record,
-            ...parsedAddr,
-            rawLookupDigits: targetDigits,
-            isMasked: false,
-          });
-          setProfileForm(prev => ({
-            ...prev,
-            citizenId: lookup.record!.citizenId,
-            displayName: lookup.record!.displayName,
-            dob: lookup.record!.dob,
-            gender: lookup.record!.gender === '****' ? 'Nam' : lookup.record!.gender,
-            provinceCode: parsedAddr.provinceCode,
-            provinceName: parsedAddr.provinceName,
-            wardCode: parsedAddr.wardCode,
-            wardName: parsedAddr.wardName,
-            address: parsedAddr.address,
-          }));
+          setIdentityExpanded(true);
+          setEditingProfile(true);
+          showToast(
+            'info',
+            'Vui lòng kiểm tra & xác nhận thông tin',
+            'Nhấn "Xác nhận đúng thông tin & Khóa hồ sơ" để hoàn tất.'
+          );
+          return;
         }
-        setCccdLookupStatus('found');
-        setCccdLookupMessage(
-          'Tìm thấy thông tin công dân trong cơ sở dữ liệu. Vui lòng kiểm tra kỹ và nhấn "Xác nhận đúng thông tin & Khóa hồ sơ".'
-        );
-        setIdentityExpanded(true);
-        setEditingProfile(true);
-        showToast(
-          'info',
-          'Vui lòng kiểm tra & xác nhận thông tin',
-          'Nhấn "Xác nhận đúng thông tin & Khóa hồ sơ" để hoàn tất.'
-        );
-        return;
       }
 
       if (!profileForm.displayName?.trim()) {
@@ -1602,30 +1656,16 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setSubmitting(true);
-    try {
-      const status = await signInWithGoogle();
-      if (status === 'mfa_required') {
-        showToast(
-          'info',
-          'Bước 2/2: Xác thực OTP qua tin nhắn SMS',
-          'Vui lòng nhận và nhập mã OTP gửi tới số điện thoại đã liên kết.'
-        );
-        return;
-      }
-      showToast('success', 'Đăng nhập Google thành công');
-    } catch (err: any) {
-      showToast('error', 'Đăng nhập Google thất bại', formatFirebaseGoogleAuthError(err));
-    } finally {
-      setSubmitting(false);
+  const handleProviderSignIn = async (providerId: AuthProviderId) => {
+    if (providersMap[providerId] === 'maintenance' || providersMap[providerId] === 'disabled') {
+      return;
     }
-  };
-
-  const handleZaloSignIn = async () => {
     setSubmitting(true);
+    setPendingReferralCode(referralCode);
+    const providerLabel =
+      AUTH_PROVIDER_CATALOG.find((item) => item.id === providerId)?.label || providerId;
     try {
-      const status = await signInWithZalo(rememberMe);
+      const status = await signInWithProviderMethod(providerId, { rememberMe });
       if (status === 'mfa_required') {
         showToast(
           'info',
@@ -1634,9 +1674,13 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
         );
         return;
       }
-      showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+      if (providerId === 'zalo') {
+        showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+      } else {
+        showToast('success', `Đăng nhập ${providerLabel} thành công`);
+      }
     } catch (err: any) {
-      showToast('error', 'Đăng nhập Zalo thất bại', err?.message || 'Vui lòng thử lại.');
+      showToast('error', `Đăng nhập ${providerLabel} thất bại`, err?.message || 'Vui lòng thử lại.');
     } finally {
       setSubmitting(false);
     }
@@ -2071,6 +2115,8 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                       <span>
                         {hasEmailDone
                           ? 'Gmail: Đã xác minh'
+                          : hasFacebookProvider
+                          ? 'Facebook: Đã liên kết'
                           : hasZaloProvider
                           ? 'Zalo: Đã liên kết'
                           : 'Gmail: Chưa xác minh'}
@@ -2105,7 +2151,11 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 </button>
               ) : (
                 <div className="min-h-[42px] px-3 py-2 rounded-xl bg-white/10 text-emerald-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <img
+                    src="/zalo.png"
+                    alt="Zalo"
+                    className="w-4 h-4 rounded bg-white p-0.5 object-contain shrink-0"
+                  />
                   <span>Đăng nhập Zalo</span>
                 </div>
               )}
@@ -2699,15 +2749,17 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                           </span>
                         ) : (
                           <div className="flex flex-wrap items-center gap-2.5">
-                            <button
-                              type="button"
-                              disabled={lookingUpCccd || (profileForm.citizenId || '').replace(/\D/g, '').length < 9}
-                              onClick={() => void handleLookupCccdInDatabase(profileForm.citizenId, false)}
-                              className="text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                            >
-                              <Search className="w-3.5 h-3.5" />
-                              <span>{lookingUpCccd ? 'Đang tra cứu...' : 'Tra cứu CCCD'}</span>
-                            </button>
+                            {cccdLookupEnabled && (
+                              <button
+                                type="button"
+                                disabled={lookingUpCccd || (profileForm.citizenId || '').replace(/\D/g, '').length < 9}
+                                onClick={() => void handleLookupCccdInDatabase(profileForm.citizenId, false)}
+                                className="text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <Search className="w-3.5 h-3.5" />
+                                <span>{lookingUpCccd ? 'Đang tra cứu...' : 'Tra cứu CCCD'}</span>
+                              </button>
+                            )}
                             {!allowIdentityEditByAdmin &&
                               profileForm.citizenId &&
                               profileForm.citizenId.replace(/\D/g, '').length >= 9 &&
@@ -2757,10 +2809,22 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                             lastLookedUpCccdRef.current = '';
                             setProfileForm({ ...profileForm, citizenId: val });
                           }}
-                          placeholder="Nhập số CCCD (10 hoặc 12 số) để tự động tra cứu..."
+                          placeholder={
+                            cccdLookupEnabled
+                              ? 'Nhập số CCCD (10 hoặc 12 số) để tự động tra cứu...'
+                              : 'Nhập số CCCD (9-12 số) và điền thông tin thủ công bên dưới...'
+                          }
                           className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
                         />
                       </div>
+                      {!cccdLookupEnabled && !isCccdLocked && (
+                        <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                          <span>
+                            Chế độ nhập thủ công bảo mật: Tính năng tự động quét tra cứu CCCD đang tắt, vui lòng tự điền đầy đủ thông tin bên dưới.
+                          </span>
+                        </p>
+                      )}
 
                       {matchedCitizenRecord && !allowIdentityEditByAdmin && !userProfile?.citizenIdVerified && (
                         <div className="mt-2.5 p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 space-y-2.5 text-xs">
@@ -3102,14 +3166,48 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                           <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
                             Khoa / Phòng {isProfileLocked && <Lock className="w-3 h-3 inline ml-1 text-amber-600" />}
                           </label>
-                          <input
-                            type="text"
-                            readOnly={isProfileLocked}
-                            disabled={isProfileLocked}
-                            value={profileForm.department || ''}
-                            onChange={e => setProfileForm({ ...profileForm, department: e.target.value })}
-                            className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
-                          />
+                          {!isPrimaryAdmin &&
+                          isNonAdminHealthStaffAccount(
+                            userProfile?.accountType,
+                            userProfile?.role
+                          ) ? (
+                            (() => {
+                              const deptOptions = getStationDepartmentOptions(
+                                settings?.orgChart,
+                                profileForm.department
+                              );
+                              const selectedDeptValue = resolveDepartmentOptionValue(
+                                profileForm.department,
+                                deptOptions
+                              );
+                              return (
+                                <select
+                                  disabled={isProfileLocked}
+                                  value={selectedDeptValue}
+                                  onChange={e =>
+                                    setProfileForm({ ...profileForm, department: e.target.value })
+                                  }
+                                  className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
+                                >
+                                  <option value="">-- Chọn Khoa / Phòng / Đơn vị --</option>
+                                  {deptOptions.map(opt => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              );
+                            })()
+                          ) : (
+                            <input
+                              type="text"
+                              readOnly={isProfileLocked}
+                              disabled={isProfileLocked}
+                              value={profileForm.department || ''}
+                              onChange={e => setProfileForm({ ...profileForm, department: e.target.value })}
+                              className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
+                            />
+                          )}
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
@@ -3352,100 +3450,47 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 </div>
               ) : (
                 <>
-                  {/* Segmented Login / Register Switch */}
-                  <div className="p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setAuthMode('login')}
-                      className={`min-h-[40px] rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
-                        authMode === 'login'
-                          ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
-                          : 'text-slate-600 dark:text-slate-400'
-                      }`}
-                    >
-                      Đăng nhập
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAuthMode('register')}
-                      className={`min-h-[40px] rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
-                        authMode === 'register'
-                          ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
-                          : 'text-slate-600 dark:text-slate-400'
-                      }`}
-                    >
-                      Đăng ký tài khoản
-                    </button>
-                  </div>
+                  {emailPasswordStatus !== 'disabled' && (
+                    <>
+                      {emailPasswordStatus === 'maintenance' && (
+                        <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
+                          <Wrench className="w-4 h-4 shrink-0" />
+                          <span>Đăng nhập / Đăng ký bằng Email &amp; Mật khẩu đang tạm bảo trì. Vui lòng chọn phương thức khác bên dưới.</span>
+                        </div>
+                      )}
 
-                  <div className="space-y-2.5">
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={handleGoogleSignIn}
-                        className="min-h-[46px] py-2.5 px-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm font-semibold text-slate-800 dark:text-slate-100 shadow-xs transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                      <div
+                        className={
+                          emailPasswordStatus === 'maintenance'
+                            ? 'space-y-4 opacity-50 grayscale pointer-events-none select-none'
+                            : 'space-y-4'
+                        }
                       >
-                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                          <path
-                            fill="#4285F4"
-                            d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                          />
-                          <path
-                            fill="#34A853"
-                            d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                          />
-                          <path
-                            fill="#FBBC05"
-                            d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                          />
-                          <path
-                            fill="#EA4335"
-                            d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                          />
-                        </svg>
-                        <span>Google</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={handleZaloSignIn}
-                        className="min-h-[46px] py-2.5 px-3 rounded-2xl bg-[#0068FF] hover:bg-[#0057D8] text-white text-sm font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
-                      >
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white text-[#0068FF] font-black text-xs leading-none shrink-0">
-                          Z
-                        </span>
-                        <span>Zalo</span>
-                      </button>
-                    </div>
-
-                    {authMode === 'login' && isPcClient && (
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={() => setQrModalOpen(true)}
-                        className="w-full min-h-[46px] py-2.5 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
-                      >
-                        <QrCode className="w-4 h-4 shrink-0" />
-                        <span>Đăng nhập bằng mã QR (Quét từ điện thoại)</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <QrLoginModal
-                    isOpen={qrModalOpen}
-                    onClose={() => setQrModalOpen(false)}
-                    onSuccess={() => setQrModalOpen(false)}
-                  />
-
-                  <div className="relative flex py-1 items-center">
-                    <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
-                    <span className="flex-shrink mx-3 text-[11px] text-slate-400 uppercase font-semibold">
-                      hoặc email
-                    </span>
-                    <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
-                  </div>
+                        {/* Segmented Login / Register Switch */}
+                        <div className="p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 grid grid-cols-2 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setAuthMode('login')}
+                            className={`min-h-[40px] rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+                              authMode === 'login'
+                                ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
+                                : 'text-slate-600 dark:text-slate-400'
+                            }`}
+                          >
+                            Đăng nhập
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAuthMode('register')}
+                            className={`min-h-[40px] rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+                              authMode === 'register'
+                                ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
+                                : 'text-slate-600 dark:text-slate-400'
+                            }`}
+                          >
+                            Đăng ký tài khoản
+                          </button>
+                        </div>
 
                   {authMode === 'login' ? (
                     <form onSubmit={handleAuthSubmit} className="space-y-3 text-sm">
@@ -3615,6 +3660,36 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                       </button>
                     </form>
                   )}
+
+                      </div>
+
+                      <div className="relative flex py-1 items-center">
+                        <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
+                        <span className="flex-shrink mx-3 text-[11px] text-slate-400 uppercase font-semibold">
+                          hoặc
+                        </span>
+                        <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
+                      </div>
+                    </>
+                  )}
+
+                  <OtherAuthMethodsPanel
+                    settings={settings}
+                    authMode={authMode}
+                    isPcClient={isPcClient}
+                    loading={submitting}
+                    expanded={showOtherAuthMethods || emailPasswordStatus === 'disabled'}
+                    onToggleExpand={() => setShowOtherAuthMethods(v => !v)}
+                    onSelectProvider={(providerId) => void handleProviderSignIn(providerId)}
+                    onOpenQrModal={() => setQrModalOpen(true)}
+                    size="md"
+                  />
+
+                  <QrLoginModal
+                    isOpen={qrModalOpen}
+                    onClose={() => setQrModalOpen(false)}
+                    onSuccess={() => setQrModalOpen(false)}
+                  />
                 </>
               )}
             </div>
@@ -3686,7 +3761,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-60 ${
                   notifEnabled && notificationStatus === 'granted'
                     ? 'bg-emerald-600'
-                    : 'bg-slate-300 dark:bg-slate-700'
+                    : 'bg-rose-600'
                 }`}
               >
                 <span
@@ -3788,7 +3863,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 aria-checked={locationPref}
                 onClick={handleToggleLocationPref}
                 className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                  locationPref ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  locationPref ? 'bg-emerald-600' : 'bg-rose-600'
                 }`}
               >
                 <span
@@ -3910,7 +3985,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 aria-checked={isDarkMode}
                 onClick={handleToggleDarkMode}
                 className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                  isDarkMode ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700'
+                  isDarkMode ? 'bg-emerald-600' : 'bg-rose-600'
                 }`}
               >
                 <span

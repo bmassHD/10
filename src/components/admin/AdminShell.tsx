@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Syringe,
   CalendarClock,
+  Briefcase,
   Building,
   Network,
   FileText,
@@ -54,6 +55,7 @@ export type AdminSubTab =
   | 'apps_setup'
   | 'vaccination_setup'
   | 'work_holiday_setup'
+  | 'business_trip_setup'
   | 'station_setup'
   | 'org_personnel'
   | 'functions_duties'
@@ -87,6 +89,7 @@ export interface AdminNavItem {
 export interface AdminNavGroup {
   id: string;
   title: string;
+  icon: React.ComponentType<{ className?: string }>;
   items: AdminNavItem[];
 }
 
@@ -99,6 +102,7 @@ export function buildAdminNavGroups(counts?: {
     {
       id: 'dashboard_group',
       title: 'Tổng quan hệ thống',
+      icon: LayoutGrid,
       items: [
         {
           id: 'dashboard',
@@ -112,6 +116,7 @@ export function buildAdminNavGroups(counts?: {
     {
       id: 'operations',
       title: 'Điều hành & Công dân',
+      icon: Activity,
       items: [
         {
           id: 'feedback',
@@ -123,15 +128,15 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'notifications',
-          label: 'Thông báo & Pop-up',
+          label: 'Thông báo',
           shortLabel: 'Thông báo',
           icon: BellRing,
           keywords: ['thông báo', 'popup', 'banner', 'khẩn', 'gửi thông báo', 'tiêm chủng'],
         },
         {
           id: 'ratings',
-          label: 'Đánh giá Dịch vụ ★',
-          shortLabel: 'Đánh giá ★',
+          label: 'Đánh giá',
+          shortLabel: 'Đánh giá',
           icon: Star,
           badgeCount: counts?.ratingsCount,
           keywords: ['đánh giá', 'sao', 'nhận xét', 'hài lòng', 'rating'],
@@ -140,7 +145,8 @@ export function buildAdminNavGroups(counts?: {
     },
     {
       id: 'schedules',
-      title: 'Lịch Trực, Tiêm Chủng & Sự Kiện',
+      title: 'Lịch',
+      icon: CalendarClock,
       items: [
         {
           id: 'work_holiday_setup',
@@ -148,6 +154,13 @@ export function buildAdminNavGroups(counts?: {
           shortLabel: 'Lịch trực & Lễ',
           icon: CalendarClock,
           keywords: ['lịch trực', 'chấm công', 'giờ làm việc', 'nghỉ lễ', 'ca trực', 'nhân sự'],
+        },
+        {
+          id: 'business_trip_setup',
+          label: 'Lịch & Cấu hình Công tác',
+          shortLabel: 'Lịch công tác',
+          icon: Briefcase,
+          keywords: ['công tác', 'lịch công tác', 'cán bộ', 'địa điểm', 'cấu hình công tác'],
         },
         {
           id: 'vaccination_setup',
@@ -168,6 +181,7 @@ export function buildAdminNavGroups(counts?: {
     {
       id: 'organization',
       title: 'Tổ chức, Địa bàn & Tiện ích',
+      icon: Building2,
       items: [
         {
           id: 'station_setup',
@@ -178,14 +192,14 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'org_personnel',
-          label: 'Sơ đồ Tổ chức & Nhân sự',
+          label: 'Sơ đồ Tổ chức',
           shortLabel: 'Nhân sự',
           icon: Network,
           keywords: ['sơ đồ tổ chức', 'nhân sự', 'khoa phòng', 'bác sĩ', 'trưởng trạm'],
         },
         {
           id: 'map_locations',
-          label: 'Bản đồ & Điểm Trạm',
+          label: 'Bản đồ',
           shortLabel: 'Bản đồ',
           icon: MapPin,
           keywords: ['bản đồ', 'tọa độ', 'gps', 'điểm trạm', 'trụ sở chính'],
@@ -224,19 +238,20 @@ export function buildAdminNavGroups(counts?: {
     },
     {
       id: 'citizens_users',
-      title: 'Tài khoản & Phân quyền',
+      title: 'Tài khoản',
+      icon: Users,
       items: [
         {
           id: 'users',
-          label: 'Tài khoản, Phân quyền & Di trú',
-          shortLabel: 'Tài khoản & Di trú',
+          label: 'Tài khoản, Phân quyền',
+          shortLabel: 'Tài khoản',
           icon: Users,
           badgeCount: counts?.disputedMigrations,
           keywords: ['tài khoản', 'người dùng', 'user', 'phân quyền', 'di trú', 'khóa', 'xác minh'],
         },
         {
           id: 'referral_codes',
-          label: 'Link & Mã Giới Thiệu (Super Admin & Admin)',
+          label: 'Link & Mã Giới Thiệu',
           shortLabel: 'Link & Mã giới thiệu',
           icon: Ticket,
           adminOnly: true,
@@ -253,7 +268,7 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'org_accounts',
-          label: 'Tài khoản Doanh nghiệp / Tổ chức',
+          label: 'Tài khoản Doanh nghiệp',
           shortLabel: 'Tổ chức & DN',
           icon: Building2,
           adminOnly: true,
@@ -265,13 +280,24 @@ export function buildAdminNavGroups(counts?: {
           shortLabel: 'Điều khiển',
           icon: Wrench,
           adminOnly: true,
-          keywords: ['bảo trì', 'chặn tab', 'ẩn tab', 'quyền truy cập', 'giới hạn thiết bị'],
+          keywords: [
+            'bảo trì',
+            'chặn tab',
+            'ẩn tab',
+            'quyền truy cập',
+            'giới hạn thiết bị',
+            'tra cứu cccd',
+            'cccd',
+            'bảo mật dữ liệu',
+            'dữ liệu dân cư',
+          ],
         },
       ],
     },
     {
       id: 'backup_storage',
-      title: 'Sao lưu, Lưu trữ & Kiểm toán',
+      title: 'Sao lưu, Lưu trữ',
+      icon: Database,
       items: [
         {
           id: 'backup',
@@ -283,7 +309,7 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'github_storage',
-          label: 'Kho tệp & GitHub PAT',
+          label: 'GitHub PAT',
           shortLabel: 'GitHub PAT',
           icon: FolderGit2,
           adminOnly: true,
@@ -291,7 +317,7 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'audit',
-          label: 'Nhật ký Kiểm toán',
+          label: 'Nhật ký',
           shortLabel: 'Kiểm toán',
           icon: Shield,
           adminOnly: true,
@@ -301,11 +327,12 @@ export function buildAdminNavGroups(counts?: {
     },
     {
       id: 'system_tech',
-      title: 'Kỹ thuật & Tích hợp API',
+      title: 'Tích hợp API',
+      icon: ShieldCheck,
       items: [
         {
           id: 'ai_automation',
-          label: 'Tự động hóa Agent AI (Đa API Key)',
+          label: 'Agent AI',
           shortLabel: 'Agent AI',
           icon: Sparkles,
           adminOnly: true,
@@ -321,7 +348,7 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'diagnostics',
-          label: 'Chẩn đoán & Vercel',
+          label: 'Vercel',
           shortLabel: 'Chẩn đoán',
           icon: Activity,
           adminOnly: true,
@@ -329,7 +356,7 @@ export function buildAdminNavGroups(counts?: {
         },
         {
           id: 'firebase_config',
-          label: 'Cấu hình Firebase (Chỉ xem)',
+          label: 'Cấu hình Firebase',
           shortLabel: 'Firebase Config',
           icon: Lock,
           adminOnly: true,
@@ -462,7 +489,107 @@ export const AdminShell: React.FC<AdminShellProps> = ({
     [activeGroup, activeSubTab]
   );
 
-  // Accordion open state: expand active group by default, others collapsed
+  const colorSidebarEnabled = Boolean(settings.sidebarColors?.adminEnabled);
+
+  const adminGroupColorMap: Record<
+    string,
+    {
+      headerIdle: string;
+      headerActive: string;
+      borderLeft: string;
+      activeItem: string;
+      hoverItem: string;
+      itemIcon: string;
+      groupIcon: string;
+    }
+  > = {
+    dashboard_group: {
+      headerIdle:
+        'text-emerald-700 dark:text-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/25 hover:bg-emerald-100/70 dark:hover:bg-emerald-950/45',
+      headerActive:
+        'text-emerald-900 dark:text-emerald-200 bg-emerald-100/90 dark:bg-emerald-950/60 ring-1 ring-emerald-200/80 dark:ring-emerald-800/60',
+      borderLeft: 'border-emerald-300 dark:border-emerald-800',
+      activeItem: 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/40 hover:text-emerald-900 dark:hover:text-emerald-200',
+      itemIcon: 'text-emerald-600 dark:text-emerald-400',
+      groupIcon: 'text-emerald-600 dark:text-emerald-400',
+    },
+    operations: {
+      headerIdle:
+        'text-blue-700 dark:text-blue-300 bg-blue-50/50 dark:bg-blue-950/25 hover:bg-blue-100/70 dark:hover:bg-blue-950/45',
+      headerActive:
+        'text-blue-900 dark:text-blue-200 bg-blue-100/90 dark:bg-blue-950/60 ring-1 ring-blue-200/80 dark:ring-blue-800/60',
+      borderLeft: 'border-blue-300 dark:border-blue-800',
+      activeItem: 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-blue-50/80 dark:hover:bg-blue-950/40 hover:text-blue-900 dark:hover:text-blue-200',
+      itemIcon: 'text-blue-600 dark:text-blue-400',
+      groupIcon: 'text-blue-600 dark:text-blue-400',
+    },
+    schedules: {
+      headerIdle:
+        'text-amber-700 dark:text-amber-300 bg-amber-50/50 dark:bg-amber-950/25 hover:bg-amber-100/70 dark:hover:bg-amber-950/45',
+      headerActive:
+        'text-amber-900 dark:text-amber-200 bg-amber-100/90 dark:bg-amber-950/60 ring-1 ring-amber-200/80 dark:ring-amber-800/60',
+      borderLeft: 'border-amber-300 dark:border-amber-800',
+      activeItem: 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-amber-50/80 dark:hover:bg-amber-950/40 hover:text-amber-900 dark:hover:text-amber-200',
+      itemIcon: 'text-amber-600 dark:text-amber-400',
+      groupIcon: 'text-amber-600 dark:text-amber-400',
+    },
+    organization: {
+      headerIdle:
+        'text-teal-700 dark:text-teal-300 bg-teal-50/50 dark:bg-teal-950/25 hover:bg-teal-100/70 dark:hover:bg-teal-950/45',
+      headerActive:
+        'text-teal-900 dark:text-teal-200 bg-teal-100/90 dark:bg-teal-950/60 ring-1 ring-teal-200/80 dark:ring-teal-800/60',
+      borderLeft: 'border-teal-300 dark:border-teal-800',
+      activeItem: 'bg-gradient-to-r from-teal-600 to-cyan-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-teal-50/80 dark:hover:bg-teal-950/40 hover:text-teal-900 dark:hover:text-teal-200',
+      itemIcon: 'text-teal-600 dark:text-teal-400',
+      groupIcon: 'text-teal-600 dark:text-teal-400',
+    },
+    citizens_users: {
+      headerIdle:
+        'text-violet-700 dark:text-violet-300 bg-violet-50/50 dark:bg-violet-950/25 hover:bg-violet-100/70 dark:hover:bg-violet-950/45',
+      headerActive:
+        'text-violet-900 dark:text-violet-200 bg-violet-100/90 dark:bg-violet-950/60 ring-1 ring-violet-200/80 dark:ring-violet-800/60',
+      borderLeft: 'border-violet-300 dark:border-violet-800',
+      activeItem: 'bg-gradient-to-r from-violet-600 to-purple-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-violet-50/80 dark:hover:bg-violet-950/40 hover:text-violet-900 dark:hover:text-violet-200',
+      itemIcon: 'text-violet-600 dark:text-violet-400',
+      groupIcon: 'text-violet-600 dark:text-violet-400',
+    },
+    backup_storage: {
+      headerIdle:
+        'text-cyan-700 dark:text-cyan-300 bg-cyan-50/50 dark:bg-cyan-950/25 hover:bg-cyan-100/70 dark:hover:bg-cyan-950/45',
+      headerActive:
+        'text-cyan-900 dark:text-cyan-200 bg-cyan-100/90 dark:bg-cyan-950/60 ring-1 ring-cyan-200/80 dark:ring-cyan-800/60',
+      borderLeft: 'border-cyan-300 dark:border-cyan-800',
+      activeItem: 'bg-gradient-to-r from-cyan-600 to-sky-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-cyan-50/80 dark:hover:bg-cyan-950/40 hover:text-cyan-900 dark:hover:text-cyan-200',
+      itemIcon: 'text-cyan-600 dark:text-cyan-400',
+      groupIcon: 'text-cyan-600 dark:text-cyan-400',
+    },
+    system_tech: {
+      headerIdle:
+        'text-rose-700 dark:text-rose-300 bg-rose-50/50 dark:bg-rose-950/25 hover:bg-rose-100/70 dark:hover:bg-rose-950/45',
+      headerActive:
+        'text-rose-900 dark:text-rose-200 bg-rose-100/90 dark:bg-rose-950/60 ring-1 ring-rose-200/80 dark:ring-rose-800/60',
+      borderLeft: 'border-rose-300 dark:border-rose-800',
+      activeItem: 'bg-gradient-to-r from-rose-600 to-pink-700 text-white shadow-xs font-bold',
+      hoverItem:
+        'text-slate-700 dark:text-slate-300 hover:bg-rose-50/80 dark:hover:bg-rose-950/40 hover:text-rose-900 dark:hover:text-rose-200',
+      itemIcon: 'text-rose-600 dark:text-rose-400',
+      groupIcon: 'text-rose-600 dark:text-rose-400',
+    },
+  };
+
+  // Exclusive accordion open state: only active group open by default
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     if (activeGroup) initial[activeGroup.id] = true;
@@ -471,7 +598,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
 
   useEffect(() => {
     if (activeGroup) {
-      setOpenGroups(prev => ({ ...prev, [activeGroup.id]: true }));
+      setOpenGroups({ [activeGroup.id]: true });
     }
   }, [activeGroup?.id]);
 
@@ -560,7 +687,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
   };
 
   const toggleGroup = (id: string) => {
-    setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }));
+    setOpenGroups(prev => (prev[id] ? {} : { [id]: true }));
   };
 
   const handleSelectItem = (tabId: AdminSubTab) => {
@@ -576,7 +703,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
     label: string,
     subLabel?: string
   ) => {
-    setOpenGroups(prev => ({ ...prev, [groupId]: true }));
+    setOpenGroups({ [groupId]: true });
     pushSearchHistory({
       kind,
       label,
@@ -727,8 +854,10 @@ export const AdminShell: React.FC<AdminShellProps> = ({
           }`}
         >
           {groups.map((group, gIdx) => {
+            const GroupIcon = group.icon;
             const isGroupOpen = collapsed ? true : Boolean(openGroups[group.id]);
             const hasActive = group.items.some(it => it.id === activeSubTab);
+            const palette = colorSidebarEnabled ? adminGroupColorMap[group.id] : undefined;
 
             return (
               <div key={group.id} className="space-y-1">
@@ -740,13 +869,27 @@ export const AdminShell: React.FC<AdminShellProps> = ({
                   <button
                     type="button"
                     onClick={() => toggleGroup(group.id)}
+                    aria-expanded={isGroupOpen}
                     className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between gap-2 text-[11px] font-extrabold uppercase tracking-wider transition cursor-pointer ${
-                      hasActive
+                      palette
+                        ? hasActive || isGroupOpen
+                          ? palette.headerActive
+                          : palette.headerIdle
+                        : hasActive
                         ? 'text-emerald-700 dark:text-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/30'
                         : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70'
                     }`}
                   >
-                    <span className="truncate text-left">{group.title}</span>
+                    <span className="flex items-center gap-2 min-w-0">
+                      {GroupIcon && (
+                        <GroupIcon
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            palette ? palette.groupIcon : 'text-slate-500 dark:text-slate-400'
+                          }`}
+                        />
+                      )}
+                      <span className="truncate text-left">{group.title}</span>
+                    </span>
                     <ChevronDown
                       className={`w-3.5 h-3.5 shrink-0 transition-transform ${
                         isGroupOpen ? 'rotate-180' : ''
@@ -756,7 +899,15 @@ export const AdminShell: React.FC<AdminShellProps> = ({
                 )}
 
                 {isGroupOpen && (
-                  <div className={collapsed ? 'space-y-1' : 'space-y-1 pl-0.5'}>
+                  <div
+                    className={
+                      collapsed
+                        ? 'space-y-1'
+                        : palette
+                        ? `space-y-1 pl-1.5 ml-2 border-l ${palette.borderLeft}`
+                        : 'space-y-1 pl-0.5'
+                    }
+                  >
                     {group.items.map(item => {
                       const Icon = item.icon;
                       const isActive = item.id === activeSubTab;
@@ -800,14 +951,24 @@ export const AdminShell: React.FC<AdminShellProps> = ({
                             collapsed ? 'justify-center px-2' : 'justify-between px-3'
                           } py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer ${
                             isActive
-                              ? 'bg-slate-900 dark:bg-emerald-600 text-white shadow-xs font-bold'
+                              ? palette
+                                ? palette.activeItem
+                                : 'bg-slate-900 dark:bg-emerald-600 text-white shadow-xs font-bold'
+                              : palette
+                              ? palette.hoverItem
                               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                           }`}
                         >
                           <span className="inline-flex items-center gap-2.5 min-w-0">
                             <Icon
                               className={`w-4 h-4 shrink-0 ${
-                                isActive ? 'text-emerald-400 dark:text-white' : 'text-slate-500 dark:text-slate-400'
+                                isActive
+                                  ? palette
+                                    ? 'text-white'
+                                    : 'text-emerald-400 dark:text-white'
+                                  : palette
+                                  ? palette.itemIcon
+                                  : 'text-slate-500 dark:text-slate-400'
                               }`}
                             />
                             {!collapsed && (
@@ -927,7 +1088,11 @@ export const AdminShell: React.FC<AdminShellProps> = ({
 
               <div className="min-w-0 flex-1">
                 <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                  {activeGroup?.icon ? (
+                    <activeGroup.icon className="w-3.5 h-3.5 shrink-0" />
+                  ) : (
+                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                  )}
                   <span className="truncate">{activeGroup?.title || 'Bảng Quản Trị'}</span>
                 </div>
                 <h1 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
@@ -1082,8 +1247,11 @@ export const AdminShell: React.FC<AdminShellProps> = ({
                                 }}
                                 className="px-2.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-slate-200/80 dark:border-slate-700/70 text-left transition cursor-pointer"
                               >
-                                <div className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
-                                  {cat.title}
+                                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                                  {cat.icon && (
+                                    <cat.icon className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                  )}
+                                  <span className="truncate">{cat.title}</span>
                                 </div>
                                 <div className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
                                   {cat.items.length} chức năng

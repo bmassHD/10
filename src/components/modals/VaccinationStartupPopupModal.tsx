@@ -17,6 +17,7 @@ import {
   formatVaccinationDateRange,
   resolveVaccinationLifecycle,
 } from '../../services/firebaseService';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface VaccinationStartupPopupModalProps {
   settings: SystemSettings;
@@ -83,6 +84,11 @@ export const VaccinationStartupPopupModal: React.FC<VaccinationStartupPopupModal
   onVisibilityChange,
   onNavigateToView,
 }) => {
+  const { isAdmin, isSuperAdmin, isPrimaryAdmin, isSimulatingRole } = useAuth();
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isSuperAdmin || isPrimaryAdmin || isAdmin);
+  const vacTabDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.vaccination);
   const [isOpen, setIsOpen] = useState(false);
   const [dontShowToday, setDontShowToday] = useState(false);
   const [handledKey, setHandledKey] = useState<string | null>(null);
@@ -449,14 +455,21 @@ export const VaccinationStartupPopupModal: React.FC<VaccinationStartupPopupModal
 
             <button
               type="button"
+              disabled={vacTabDisabled}
+              aria-disabled={vacTabDisabled || undefined}
               onClick={() => {
+                if (vacTabDisabled) return;
                 handleClose();
                 onNavigateToView('vaccination');
               }}
-              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-sm transition inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              className={`w-full py-2.5 px-4 rounded-xl font-bold text-sm transition inline-flex items-center justify-center gap-2 shadow-sm ${
+                vacTabDisabled
+                  ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 cursor-not-allowed opacity-70'
+                  : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white cursor-pointer'
+              }`}
             >
-              <span>{ctaLabel}</span>
-              <ArrowRight className="w-4 h-4 shrink-0" />
+              <span>{vacTabDisabled ? 'Lịch tiêm chủng đang bảo trì' : ctaLabel}</span>
+              {!vacTabDisabled && <ArrowRight className="w-4 h-4 shrink-0" />}
             </button>
           </div>
         </div>

@@ -1,8 +1,11 @@
 import {
   completeZaloExchange,
   createZaloAuthorizationUrl,
+  getZaloSessionFromRequest,
   getZaloStatusPayload,
   handleZaloOAuthCallback,
+  logoutZaloSession,
+  pollZaloOAuthResult,
   resolveZaloMiniAppPhone,
 } from '../../../src/server/zaloAuthService';
 
@@ -78,6 +81,35 @@ export default async function handler(req: any, res: any) {
         error: err?.message || 'Không thể hoàn tất đăng nhập Zalo.',
       });
     }
+  }
+
+  if (action === 'poll') {
+    if (req.method !== 'POST' && req.method !== 'GET') {
+      return res.status(405).json({ error: 'Phương thức không được hỗ trợ' });
+    }
+    try {
+      const result = pollZaloOAuthResult(req);
+      return res.status(200).json(result);
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể kiểm tra trạng thái đăng nhập Zalo.',
+      });
+    }
+  }
+
+  if (action === 'session') {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      return res.status(405).json({ error: 'Phương thức không được hỗ trợ' });
+    }
+    return res.status(200).json(getZaloSessionFromRequest(req));
+  }
+
+  if (action === 'logout') {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Chỉ chấp nhận phương thức POST' });
+    }
+    return res.status(200).json(logoutZaloSession(req, res));
   }
 
   if (action === 'phone') {

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { StartupPopupConfig, SystemSettings } from '../../types';
 import { StationLogo } from '../common/StationLogo';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface StartupPopupModalProps {
   settings: SystemSettings;
@@ -86,6 +87,10 @@ export const StartupPopupModal: React.FC<StartupPopupModalProps> = ({
   onVisibilityChange,
   onNavigateToView,
 }) => {
+  const { isAdmin, isSuperAdmin, isPrimaryAdmin, isSimulatingRole } = useAuth();
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isSuperAdmin || isPrimaryAdmin || isAdmin);
   const [isOpen, setIsOpen] = useState(false);
   const [dontShowToday, setDontShowToday] = useState(false);
   const [handledKey, setHandledKey] = useState<string | null>(null);
@@ -275,19 +280,30 @@ export const StartupPopupModal: React.FC<StartupPopupModalProps> = ({
           </label>
 
           <div className="flex items-center gap-2">
-            {ctaView && (
-              <button
-                type="button"
-                onClick={() => {
-                  handleClose();
-                  onNavigateToView(ctaView);
-                }}
-                className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 font-semibold text-xs transition inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
-              >
-                <span>{ctaLabel}</span>
-                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-              </button>
-            )}
+            {ctaView && (() => {
+              const ctaDisabled =
+                !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.[ctaView]);
+              return (
+                <button
+                  type="button"
+                  disabled={ctaDisabled}
+                  aria-disabled={ctaDisabled || undefined}
+                  onClick={() => {
+                    if (ctaDisabled) return;
+                    handleClose();
+                    onNavigateToView(ctaView);
+                  }}
+                  className={`px-3.5 py-2 rounded-xl border font-semibold text-xs transition inline-flex items-center gap-1 whitespace-nowrap ${
+                    ctaDisabled
+                      ? 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 cursor-not-allowed opacity-65'
+                      : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 cursor-pointer'
+                  }`}
+                >
+                  <span>{ctaDisabled ? `${ctaLabel} (Bảo trì)` : ctaLabel}</span>
+                  {!ctaDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
+                </button>
+              );
+            })()}
 
             <button
               type="button"

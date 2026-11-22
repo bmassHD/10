@@ -33,7 +33,7 @@ import { AppsLauncherView } from './components/views/AppsLauncherView';
 import { OfflineEmergencyView } from './components/views/OfflineEmergencyView';
 import { NotFoundView } from './components/views/NotFoundView';
 import { ShieldAlert, LogIn, Wrench, EyeOff, Phone, ArrowLeft, Building2, MapPin, UserCheck, FolderGit2, RefreshCw, Ban, MonitorSmartphone, Clock, LogOut, Lock } from 'lucide-react';
-import { evaluateAccessRestriction } from './utils/deviceAccessDetector';
+import { evaluateAccessRestriction, detectClientEnvironment } from './utils/deviceAccessDetector';
 import { getBannedUntilMs, formatBanTimestampVi, formatBanRemainingVi } from './utils/userBan';
 
 import { AdminSetupWizard } from './components/modals/AdminSetupWizard';
@@ -50,11 +50,9 @@ import { HolidayNoticeModal } from './components/modals/HolidayNoticeModal';
 import { GithubBackupReminderModal } from './components/modals/GithubBackupReminderModal';
 import { FullScreenLoadingOverlay } from './components/common/FullScreenLoadingOverlay';
 import { FirstSessionSplashOverlay } from './components/common/FirstSessionSplashOverlay';
-import { MandatoryPermissionGate } from './components/common/MandatoryPermissionGate';
 import { ConfettiEffect } from './components/common/ConfettiEffect';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { PasswordResetActionModal } from './components/auth/PasswordResetActionModal';
-import { useUserPermissions } from './hooks/useUserPermissions';
 
 import {
   SystemSettings,
@@ -143,17 +141,6 @@ function parseHashRoute(): { view: string; query: string } {
 function MainApp() {
   const { currentUser, userProfile, isPrimaryAdmin, isSuperAdmin, isAdmin, isStaff, isBanned, logout, requiresTwoFactorVerification, pendingSmsMfaResolver, concurrentActiveDevices, remoteRevokedNotice } = useAuth();
   const { showToast } = useToast();
-  const {
-    locationStatus,
-    notificationStatus,
-    locationSupported,
-    notificationSupported,
-    permissionsChecked,
-    hasAllRequiredPermissions,
-    requestLocation,
-    requestNotification,
-    requestRequiredPermissions,
-  } = useUserPermissions();
 
   const initialReferralRef = useRef<string>(captureReferralCodeFromUrl());
   const initialRoute = parseHashRoute();
@@ -311,6 +298,15 @@ function MainApp() {
   // Open MobileQrScannerModal via custom window event from anywhere (LoggedInDevicesPanel, AppShell)
   useEffect(() => {
     const handleOpenQrScanner = () => {
+      const clientEnv = detectClientEnvironment();
+      if (clientEnv.isPc) {
+        showToast(
+          'info',
+          'Chỉ hỗ trợ quét mã QR trên điện thoại',
+          'Trên PC, bạn chỉ cần mở màn hình Đăng nhập để hiển thị mã QR, sau đó dùng điện thoại đã đăng nhập để quét.'
+        );
+        return;
+      }
       if (!currentUser) {
         setIsAuthModalOpen(true);
         showToast(
@@ -1075,44 +1071,6 @@ function MainApp() {
     </>
   );
 
-  if (!permissionsChecked) {
-    return (
-      <FullScreenLoadingOverlay
-        visible
-        settings={settings}
-        settingsLoaded={settingsLoaded}
-        subtitle="Đang kiểm tra quyền Vị trí..."
-        mode="splash"
-      />
-    );
-  }
-
-  if (!hasAllRequiredPermissions && !isSuperAdminActual) {
-    return (
-      <>
-        <MandatoryPermissionGate
-          locationStatus={locationStatus}
-          notificationStatus={notificationStatus}
-          locationSupported={locationSupported}
-          notificationSupported={notificationSupported}
-          stationName={settings.stationName}
-          onRequestAll={requestRequiredPermissions}
-          onRequestLocation={requestLocation}
-          onRequestNotification={requestNotification}
-          onOpenAuthModal={() => setIsAuthModalOpen(true)}
-        />
-        <AuthModal
-          isOpen={isAuthModalOpen}
-          onClose={() => setIsAuthModalOpen(false)}
-          onRegisteredNavigate={() => setCurrentView('account')}
-        />
-        <TwoFactorGateModal />
-        <SmsMfaChallengeModal />
-        <ConcurrentLoginAlertModal onOpenAccountSecurity={() => setCurrentView('account')} />
-      </>
-    );
-  }
-
   return (
     <>
       {isStandaloneAdminMode ? (
@@ -1868,7 +1826,7 @@ function MainApp() {
           )}
 
           {currentView === 'business_trip' && (
-            <BusinessTripView userProfiles={users} />
+            <BusinessTripView userProfiles={users} settings={settings} />
           )}
 
           {currentView === 'duty' && (
@@ -2011,6 +1969,7 @@ function MainApp() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         onRegisteredNavigate={() => setCurrentView('account')}
+        settings={settings}
       />
 
       <MobileQrScannerModal

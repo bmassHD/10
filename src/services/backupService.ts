@@ -164,6 +164,7 @@ export const BACKUP_COLLECTIONS: ReadonlyArray<{ key: string; label: string }> =
   { key: 'services', label: 'Danh mục dịch vụ' },
   { key: 'documents', label: 'Văn bản & Biểu mẫu' },
   { key: 'workSchedules', label: 'Lịch trực 24/7' },
+  { key: 'businessTrips', label: 'Lịch công tác' },
   { key: 'attendanceRecords', label: 'Chấm công nhân sự' },
   { key: 'feedback', label: 'Phản ánh kiến nghị' },
   { key: 'serviceRatings', label: 'Đánh giá dịch vụ (★)' },
@@ -185,6 +186,7 @@ export const BACKUP_COLLECTIONS: ReadonlyArray<{ key: string; label: string }> =
   { key: 'onlinePresence', label: 'Trạng thái trực tuyến' },
   { key: 'pushSubscriptions', label: 'Đăng ký thông báo đẩy' },
   { key: 'bhxhServerConfig', label: 'Cấu hình API BHXH (Server)' },
+  { key: 'aiServerConfig', label: 'Cấu hình Agent AI (Server)' },
   { key: 'auditLogs', label: 'Nhật ký kiểm toán' },
 ];
 
@@ -197,6 +199,7 @@ const RESTORABLE_COLLECTIONS = new Set<string>([
   'services',
   'documents',
   'workSchedules',
+  'businessTrips',
   'attendanceRecords',
   'feedback',
   'serviceRatings',
@@ -218,10 +221,50 @@ const RESTORABLE_COLLECTIONS = new Set<string>([
   'onlinePresence',
   'pushSubscriptions',
   'bhxhServerConfig',
+  'aiServerConfig',
   'auditLogs',
 ]);
 
-const MAX_CLOUD_BACKUP_BYTES = 950_000; // Safe margin under Firestore 1MB document limit
+const MAX_SINGLE_DOC_BACKUP_BYTES = 800_000; // Safe margin under Firestore 1 MiB document limit
+const BACKUP_CHUNK_CHAR_SIZE = 280_000; // Max ~840 KB UTF-8 per chunk doc (strictly under 900 KB rule & 1 MiB limit)
+
+async function exportAiServerConfigForBackup(): Promise<any[]> {
+  if (!auth.currentUser) return [];
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch('/api/ai/backup-export', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const ct = res.headers.get('content-type') || '';
+  if (res.status === 404 || !ct.includes('application/json')) {
+    return [];
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  if (data?.ok && data?.hasConfigured && data?.record) {
+    return [data.record];
+  }
+  return [];
+}
+
+async function restoreAiServerConfigFromBackup(record: Record<string, any>): Promise<boolean> {
+  if (!auth.currentUser || !record) return false;
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const res = await fetch('/api/ai/backup-restore', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ record }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export class BackupService {
   /**
@@ -246,6 +289,7 @@ export class BackupService {
       usersCount: 0,
       feedbackCount: 0,
       workSchedulesCount: 0,
+      businessTripsCount: 0,
       announcementsCount: 0,
       appointmentsCount: 0,
       tasksCount: 0,
@@ -263,6 +307,7 @@ export class BackupService {
       verifiedIdentifiersCount: 0,
       userDevicesCount: 0,
       bhxhServerConfigCount: 0,
+      aiServerConfigCount: 0,
       referralCodesCount: 0,
       userReferralLinksCount: 0,
       referralTrackingCount: 0,
@@ -290,6 +335,20 @@ export class BackupService {
           stats.totalRecords = (stats.totalRecords || 0) + bhxhRecords.length;
         } catch (bhxhErr) {
           console.warn('Snapshot reading BHXH server config failed:', bhxhErr);
+          backupData[collName] = [];
+          failedCollections.push(collName);
+        }
+        continue;
+      }
+      if (collName === 'aiServerConfig') {
+        try {
+          const aiRecords = await exportAiServerConfigForBackup();
+          backupData[collName] = aiRecords;
+          collectionsIncluded.push(collName);
+          stats.aiServerConfigCount = aiRecords.length;
+          stats.totalRecords = (stats.totalRecords || 0) + aiRecords.length;
+        } catch (aiErr) {
+          console.warn('Snapshot reading AI server config failed:', aiErr);
           backupData[collName] = [];
           failedCollections.push(collName);
         }
@@ -359,6 +418,7 @@ export class BackupService {
           );
         }
         if (collName === 'workSchedules') stats.workSchedulesCount = count;
+        if (collName === 'businessTrips') stats.businessTripsCount = count;
         if (collName === 'announcements') stats.announcementsCount = count;
         if (collName === 'appointments') stats.appointmentsCount = count;
         if (collName === 'tasks') stats.tasksCount = count;
@@ -417,19 +477,20 @@ export class BackupService {
         sizeBytes,
       } = await this.collectSnapshot();
 
-      if (sizeBytes > MAX_CLOUD_BACKUP_BYTES) {
-        return {
-          success: false,
-          error: `Dung lượng sao lưu (${Math.round(sizeBytes / 1024)} KB) vượt giới hạn lưu trữ 1MB trên Cloud Firestore. Vui lòng dùng nút "Tải JSON về máy".`,
-        };
-      }
-
       const nowIso = new Date().toISOString();
       const backupTitle =
         title?.trim() ||
         `Bản sao lưu hệ thống ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN')}`;
 
-      const backupPayload = {
+      const needsChunking = sizeBytes > MAX_SINGLE_DOC_BACKUP_BYTES;
+      const chunks: string[] = [];
+      if (needsChunking) {
+        for (let offset = 0; offset < dataJson.length; offset += BACKUP_CHUNK_CHAR_SIZE) {
+          chunks.push(dataJson.slice(offset, offset + BACKUP_CHUNK_CHAR_SIZE));
+        }
+      }
+
+      const backupPayload: Omit<BackupItem, 'id'> = {
         title: backupTitle,
         version: CURRENT_SYSTEM_VERSION,
         createdAt: nowIso,
@@ -437,10 +498,31 @@ export class BackupService {
         sizeBytes,
         collectionsIncluded,
         stats,
-        dataJson,
+        storageType: 'cloud',
+        encoding: needsChunking ? 'chunked' : 'json',
+        isChunked: needsChunking,
+        chunkCount: chunks.length,
+        dataJson: needsChunking ? '' : dataJson,
       };
 
       const ref = await addDoc(collection(db, 'backups'), cleanDataForFirestore(backupPayload));
+
+      if (needsChunking) {
+        try {
+          for (let idx = 0; idx < chunks.length; idx++) {
+            const chunkId = `chunk_${String(idx).padStart(4, '0')}`;
+            await setDoc(doc(db, 'backups', ref.id, 'chunks', chunkId), {
+              chunkIndex: idx,
+              totalChunks: chunks.length,
+              data: chunks[idx],
+              createdAt: nowIso,
+            });
+          }
+        } catch (chunkErr) {
+          await this.deleteBackup(ref.id);
+          throw chunkErr;
+        }
+      }
 
       // Update lastBackupAt in systemSettings/general
       try {
@@ -458,7 +540,9 @@ export class BackupService {
         await logAuditEvent(
           'Tạo bản sao lưu hệ thống',
           'Sao lưu & Phục hồi',
-          `${backupTitle} (${stats.totalRecords || 0} bản ghi, ${Math.max(1, Math.round(sizeBytes / 1024))} KB)`,
+          `${backupTitle} (${stats.totalRecords || 0} bản ghi, ${Math.max(1, Math.round(sizeBytes / 1024))} KB${
+            needsChunking ? `, chia ${chunks.length} phân mảnh` : ''
+          })`,
           { uid: userEmail || 'admin', name: userEmail || 'Admin' }
         );
       } catch {
@@ -485,15 +569,47 @@ export class BackupService {
   }
 
   /**
+   * Resolve full JSON string for a Cloud backup item (handles both inline and chunked subcollection backups)
+   */
+  public static async resolveCloudBackupJson(backup: BackupItem): Promise<string> {
+    if (backup.dataJson && backup.dataJson.trim()) {
+      return backup.dataJson;
+    }
+    if (!backup.id || (!backup.isChunked && backup.encoding !== 'chunked')) {
+      return '';
+    }
+    const chunkSnap = await getDocs(collection(db, 'backups', backup.id, 'chunks'));
+    if (chunkSnap.empty) {
+      throw new Error('Không tìm thấy các phân mảnh dữ liệu của bản sao lưu Cloud này.');
+    }
+    const chunks = chunkSnap.docs
+      .map(d => d.data() as { chunkIndex?: number; data?: string })
+      .sort((a, b) => Number(a.chunkIndex ?? 0) - Number(b.chunkIndex ?? 0));
+    if (backup.chunkCount && chunks.length < backup.chunkCount) {
+      throw new Error(
+        `Bản sao lưu bị thiếu phân mảnh (${chunks.length}/${backup.chunkCount}). Vui lòng tạo bản sao lưu mới.`
+      );
+    }
+    return chunks.map(c => c.data || '').join('');
+  }
+
+  /**
    * Snapshot all collections and immediately download as a local JSON file (no 1MB cloud limit)
    */
   public static async exportLocalBackup(
     userEmail: string,
     title?: string,
     options?: { excludeUsers?: boolean }
-  ): Promise<{ success: boolean; totalRecords?: number; sizeBytes?: number; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    totalRecords?: number;
+    sizeBytes?: number;
+    warning?: string;
+    error?: string;
+  }> {
     try {
-      const { stats, collectionsIncluded, dataJson, sizeBytes } = await this.collectSnapshot(options);
+      const { stats, collectionsIncluded, failedCollections, dataJson, sizeBytes } =
+        await this.collectSnapshot(options);
       const nowIso = new Date().toISOString();
       const backupItem: BackupItem = {
         id: `local_${Date.now()}`,
@@ -511,7 +627,15 @@ export class BackupService {
         dataJson,
       };
       this.downloadBackupFile(backupItem);
-      return { success: true, totalRecords: stats.totalRecords || 0, sizeBytes };
+      return {
+        success: true,
+        totalRecords: stats.totalRecords || 0,
+        sizeBytes,
+        warning:
+          failedCollections.length > 0
+            ? `Một số phân hệ không đọc được nên có thể bị thiếu: ${failedCollections.join(', ')}`
+            : undefined,
+      };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Không thể xuất tệp sao lưu' };
     }
@@ -533,6 +657,7 @@ export class BackupService {
     htmlUrl?: string;
     totalRecords?: number;
     sizeBytes?: number;
+    warning?: string;
     error?: string;
   }> {
     const isAutoBackup = Boolean(options?.isAutoBackup);
@@ -563,7 +688,8 @@ export class BackupService {
     }
 
     try {
-      const { stats, collectionsIncluded, backupData, sizeBytes } = await this.collectSnapshot();
+      const { stats, collectionsIncluded, failedCollections, backupData, sizeBytes } =
+        await this.collectSnapshot();
       const nowIso = new Date().toISOString();
       const defaultTitle = isAutoBackup
         ? `Sao lưu tự động 03:00 lên GitHub ${new Date().toLocaleDateString('vi-VN')}`
@@ -675,6 +801,10 @@ export class BackupService {
         htmlUrl: res.htmlUrl,
         totalRecords: stats.totalRecords || 0,
         sizeBytes,
+        warning:
+          failedCollections.length > 0
+            ? `Một số phân hệ không đọc được: ${failedCollections.join(', ')}`
+            : undefined,
       };
     } catch (err: any) {
       const errMsg = err?.message || 'Lỗi khi sao lưu dữ liệu lên GitHub';
@@ -884,6 +1014,14 @@ export class BackupService {
    */
   public static async deleteBackup(id: string): Promise<boolean> {
     try {
+      try {
+        const chunkSnap = await getDocs(collection(db, 'backups', id, 'chunks'));
+        for (const cDoc of chunkSnap.docs) {
+          await deleteDoc(doc(db, 'backups', id, 'chunks', cDoc.id));
+        }
+      } catch {
+        // non-blocking if chunks subcollection does not exist
+      }
       await deleteDoc(doc(db, 'backups', id));
       return true;
     } catch {
@@ -1355,15 +1493,18 @@ export class BackupService {
           message: `Đang phục hồi "${collLabel}" (${items.length} bản ghi)...`,
         });
 
-        if (collName === 'bhxhServerConfig') {
-          let bhxhRestored = 0;
+        if (collName === 'bhxhServerConfig' || collName === 'aiServerConfig') {
+          let serverCfgRestored = 0;
           for (let i = 0; i < items.length; i++) {
             const item = items[i];
             if (item && typeof item === 'object') {
-              const ok = await restoreBhxhServerConfigFromBackup(item);
+              const ok =
+                collName === 'bhxhServerConfig'
+                  ? await restoreBhxhServerConfigFromBackup(item)
+                  : await restoreAiServerConfigFromBackup(item);
               if (ok) {
                 restoredCount++;
-                bhxhRestored++;
+                serverCfgRestored++;
               } else {
                 skippedCount++;
               }
@@ -1389,7 +1530,7 @@ export class BackupService {
               });
             }
           }
-          if (bhxhRestored > 0) {
+          if (serverCfgRestored > 0) {
             restoredCollections.push(collName);
           }
           processedCollections++;
@@ -1552,6 +1693,9 @@ export class BackupService {
                           : {}),
                         ...(dev.verificationMethod
                           ? { verificationMethod: dev.verificationMethod }
+                          : {}),
+                        ...(typeof dev.biometricEnabled === 'boolean'
+                          ? { biometricEnabled: dev.biometricEnabled }
                           : {}),
                         ...(typeof dev.firstSeenAt === 'string'
                           ? { firstSeenAt: dev.firstSeenAt.slice(0, 64) }
@@ -1737,6 +1881,22 @@ export class BackupService {
     if (backup.dataJson && backup.dataJson.trim()) {
       this.downloadBackupFile(backup);
       return { success: true };
+    }
+
+    if (backup.isChunked || backup.encoding === 'chunked') {
+      try {
+        const assembled = await this.resolveCloudBackupJson(backup);
+        if (!assembled) {
+          return { success: false, error: 'Không tải được dữ liệu phân mảnh từ Cloud.' };
+        }
+        this.downloadBackupFile({ ...backup, dataJson: assembled });
+        return { success: true };
+      } catch (chunkErr: any) {
+        return {
+          success: false,
+          error: chunkErr?.message || 'Lỗi khi ghép các phân mảnh sao lưu từ Cloud.',
+        };
+      }
     }
 
     if (backup.storageType === 'github' && backup.githubPath) {

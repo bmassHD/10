@@ -21,13 +21,27 @@ export interface ZaloCompletionResponse {
     email: string;
     secret: string;
   };
+  firebaseBridgeDisabled?: boolean;
+  firebaseBridgeReason?: string;
+  zaloSessionToken?: string;
 }
 
 interface PendingOAuthSession {
   state: string;
+  pollToken: string;
   codeVerifier: string;
   redirectUri: string;
   mode: ZaloAuthMode;
+  exp: number;
+}
+
+interface PendingPollRecord {
+  state: string;
+  pollToken: string;
+  status: 'pending' | 'success' | 'error';
+  mode: ZaloAuthMode;
+  exchangeCode?: string;
+  error?: string;
   exp: number;
 }
 
@@ -38,15 +52,43 @@ interface PendingExchangeRecord {
   exp: number;
 }
 
+interface SealedZaloSessionPayload {
+  p: ZaloUserProfilePayload;
+  iat: number;
+  exp: number;
+}
+
 const OAUTH_COOKIE_NAME = 'tyt_zalo_oauth_v1';
 const EXCHANGE_COOKIE_NAME = 'tyt_zalo_xchg_v1';
+const SESSION_COOKIE_NAME = 'tyt_zalo_session_v1';
 const OAUTH_SESSION_TTL_MS = 5 * 60 * 1000;
 const EXCHANGE_TTL_MS = 2 * 60 * 1000;
+const ZALO_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-const pendingOAuthMap = new Map<string, PendingOAuthSession>();
-const consumedStates = new Map<string, number>();
-const pendingExchangeMap = new Map<string, PendingExchangeRecord>();
-const consumedExchangeCodes = new Map<string, number>();
+const globalForZalo = globalThis as typeof globalThis & {
+  __tytZaloPendingOAuthMap?: Map<string, PendingOAuthSession>;
+  __tytZaloConsumedStates?: Map<string, number>;
+  __tytZaloPendingPollMap?: Map<string, PendingPollRecord>;
+  __tytZaloPendingExchangeMap?: Map<string, PendingExchangeRecord>;
+  __tytZaloConsumedExchangeCodes?: Map<string, number>;
+};
+
+const pendingOAuthMap =
+  globalForZalo.__tytZaloPendingOAuthMap || new Map<string, PendingOAuthSession>();
+const consumedStates =
+  globalForZalo.__tytZaloConsumedStates || new Map<string, number>();
+const pendingPollMap =
+  globalForZalo.__tytZaloPendingPollMap || new Map<string, PendingPollRecord>();
+const pendingExchangeMap =
+  globalForZalo.__tytZaloPendingExchangeMap || new Map<string, PendingExchangeRecord>();
+const consumedExchangeCodes =
+  globalForZalo.__tytZaloConsumedExchangeCodes || new Map<string, number>();
+
+globalForZalo.__tytZaloPendingOAuthMap = pendingOAuthMap;
+globalForZalo.__tytZaloConsumedStates = consumedStates;
+globalForZalo.__tytZaloPendingPollMap = pendingPollMap;
+globalForZalo.__tytZaloPendingExchangeMap = pendingExchangeMap;
+globalForZalo.__tytZaloConsumedExchangeCodes = consumedExchangeCodes;
 
 const PKCE_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const PKCE_LOWER = 'abcdefghijklmnopqrstuvwxyz';
@@ -60,6 +102,9 @@ function pruneExpiredMaps(): void {
   }
   for (const [key, exp] of consumedStates.entries()) {
     if (exp <= now) consumedStates.delete(key);
+  }
+  for (const [key, val] of pendingPollMap.entries()) {
+    if (val.exp <= now) pendingPollMap.delete(key);
   }
   for (const [key, val] of pendingExchangeMap.entries()) {
     if (val.exp <= now) pendingExchangeMap.delete(key);
@@ -115,6 +160,33 @@ function unsealJsonCookie<T>(token: string, appSecret: string): T | null {
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     const parsed = JSON.parse(decrypted.toString('utf8')) as T;
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function sealCompactToken(payload: unknown, appSecret: string): string {
+  const key = deriveCookieKey(appSecret);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const plaintext = Buffer.from(JSON.stringify(payload), 'utf8');
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, encrypted]).toString('base64url');
+}
+
+function unsealCompactToken<T>(token: string, appSecret: string): T | null {
+  try {
+    const raw = Buffer.from(token, 'base64url');
+    if (raw.length <= 28) return null;
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const encrypted = raw.subarray(28);
+    const key = deriveCookieKey(appSecret);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return JSON.parse(decrypted.toString('utf8')) as T;
   } catch {
     return null;
   }
@@ -337,14 +409,20 @@ function renderPopupCallbackHtml(payload: {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 48px;
-      height: 48px;
+      width: 52px;
+      height: 52px;
       border-radius: 14px;
-      font-weight: 800;
-      font-size: 18px;
-      color: #fff;
-      background: ${payload.ok ? '#0068FF' : '#e11d48'};
+      background: ${payload.ok ? '#eef5ff' : '#fff1f2'};
+      border: 1px solid ${payload.ok ? '#bfdbfe' : '#fecdd3'};
       margin-bottom: 12px;
+      padding: 6px;
+      box-sizing: border-box;
+    }
+    .badge img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
     }
     h1 { font-size: 16px; margin: 0 0 8px; }
     p { font-size: 13px; color: #475569; margin: 0 0 16px; line-height: 1.5; }
@@ -362,7 +440,7 @@ function renderPopupCallbackHtml(payload: {
 </head>
 <body>
   <div class="card">
-    <div class="badge">Z</div>
+    <div class="badge"><img src="/zalo.png" alt="Zalo" /></div>
     <h1>${escapeHtmlText(heading)}</h1>
     <p>${escapeHtmlText(subtext)}</p>
     <button type="button" onclick="window.close()">Đóng cửa sổ</button>
@@ -375,9 +453,24 @@ function renderPopupCallbackHtml(payload: {
           window.opener.postMessage(payload, '*');
         }
       } catch (e) {}
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          var bc = new BroadcastChannel('tyt_zalo_oauth_channel');
+          bc.postMessage(payload);
+          setTimeout(function () { try { bc.close(); } catch (e) {} }, 300);
+        }
+      } catch (e) {}
+      try {
+        if (payload.state && typeof localStorage !== 'undefined') {
+          localStorage.setItem('tyt_zalo_oauth_result_' + payload.state, JSON.stringify({
+            payload: payload,
+            ts: Date.now()
+          }));
+        }
+      } catch (e) {}
       setTimeout(function () {
         try { window.close(); } catch (e) {}
-      }, ${payload.ok ? 250 : 1200});
+      }, ${payload.ok ? 350 : 1400});
     })();
   </script>
 </body>
@@ -422,10 +515,17 @@ function buildFirebaseBridgeCredentials(
 async function ensureFirebaseBridgeAccount(
   zaloProfile: ZaloUserProfilePayload,
   appSecret: string
-): Promise<{ email: string; secret: string }> {
+): Promise<{
+  bridgeAuth?: { email: string; secret: string };
+  firebaseBridgeDisabled?: boolean;
+  reason?: string;
+}> {
   const apiKey = readFirebaseWebApiKey();
   if (!apiKey) {
-    throw new Error('Không tìm thấy cấu hình Firebase API Key để đồng bộ phiên đăng nhập Zalo.');
+    return {
+      firebaseBridgeDisabled: true,
+      reason: 'MISSING_FIREBASE_API_KEY',
+    };
   }
 
   const creds = buildFirebaseBridgeCredentials(zaloProfile.zaloId, appSecret);
@@ -453,6 +553,16 @@ async function ensureFirebaseBridgeAccount(
     idToken = signInData.idToken;
   } else {
     const errMsg = String(signInData?.error?.message || '');
+    if (
+      errMsg.includes('PASSWORD_LOGIN_DISABLED') ||
+      errMsg.includes('OPERATION_NOT_ALLOWED')
+    ) {
+      return {
+        firebaseBridgeDisabled: true,
+        reason: errMsg,
+      };
+    }
+
     const canTrySignUp =
       errMsg.includes('EMAIL_NOT_FOUND') ||
       errMsg.includes('INVALID_LOGIN_CREDENTIALS') ||
@@ -476,6 +586,16 @@ async function ensureFirebaseBridgeAccount(
     };
     if (!signUpResp.ok || !signUpData.idToken) {
       const signUpErr = String(signUpData?.error?.message || '');
+      if (
+        signUpErr.includes('OPERATION_NOT_ALLOWED') ||
+        signUpErr.includes('PASSWORD_LOGIN_DISABLED') ||
+        signUpErr.includes('EMAIL_EXISTS')
+      ) {
+        return {
+          firebaseBridgeDisabled: true,
+          reason: signUpErr,
+        };
+      }
       throw new Error(`Không thể khởi tạo phiên tài khoản Zalo (${signUpErr || signUpResp.status}).`);
     }
     idToken = signUpData.idToken;
@@ -498,7 +618,7 @@ async function ensureFirebaseBridgeAccount(
     }
   }
 
-  return creds;
+  return { bridgeAuth: creds };
 }
 
 export function getZaloStatusPayload(req?: any) {
@@ -519,7 +639,7 @@ export function createZaloAuthorizationUrl(
   req: any,
   res: any,
   rawMode?: unknown
-): { url: string; state: string; redirectUri: string; mode: ZaloAuthMode } {
+): { url: string; state: string; pollToken: string; redirectUri: string; mode: ZaloAuthMode } {
   pruneExpiredMaps();
   const cfg = getZaloEnvConfig();
   if (!cfg.configured) {
@@ -533,13 +653,15 @@ export function createZaloAuthorizationUrl(
   const codeChallenge = generateZaloCodeChallenge(codeVerifier);
   const redirectUri = getZaloRedirectUri(req);
   const exp = Date.now() + OAUTH_SESSION_TTL_MS;
+  const pollToken = crypto.randomBytes(16).toString('hex');
 
-  // Compact AES-256-GCM sealed state enables stateless verification across iframe/serverless hops
-  const sealedState = sealJsonCookie(
+  // Compact dot-free AES-256-GCM sealed state enables stateless verification across iframe/serverless hops
+  const sealedState = sealCompactToken(
     {
       v: codeVerifier,
       m: mode === 'link' ? 'k' : 'l',
       e: exp,
+      p: pollToken,
     },
     cfg.appSecret
   );
@@ -547,6 +669,7 @@ export function createZaloAuthorizationUrl(
 
   const session: PendingOAuthSession = {
     state,
+    pollToken,
     codeVerifier,
     redirectUri,
     mode,
@@ -554,6 +677,13 @@ export function createZaloAuthorizationUrl(
   };
 
   pendingOAuthMap.set(state, session);
+  pendingPollMap.set(state, {
+    state,
+    pollToken,
+    status: 'pending',
+    mode,
+    exp,
+  });
 
   const sealedCookie = sealJsonCookie(session, cfg.appSecret);
   appendSetCookie(
@@ -571,6 +701,7 @@ export function createZaloAuthorizationUrl(
   return {
     url: `https://oauth.zaloapp.com/v4/permission?${authParams.toString()}`,
     state,
+    pollToken,
     redirectUri,
     mode,
   };
@@ -646,6 +777,28 @@ export async function refreshZaloAccessToken(refreshToken: string): Promise<{
   };
 }
 
+function recordPollOutcome(
+  state: string,
+  outcome: {
+    status: 'success' | 'error';
+    mode?: ZaloAuthMode;
+    exchangeCode?: string;
+    error?: string;
+  }
+): void {
+  if (!state) return;
+  const existing = pendingPollMap.get(state);
+  if (!existing) return;
+  pendingPollMap.set(state, {
+    ...existing,
+    status: outcome.status,
+    mode: outcome.mode || existing.mode,
+    exchangeCode: outcome.exchangeCode,
+    error: outcome.error,
+    exp: Math.max(existing.exp, Date.now() + EXCHANGE_TTL_MS),
+  });
+}
+
 export async function handleZaloOAuthCallback(req: any, res: any): Promise<string> {
   pruneExpiredMaps();
   const cfg = getZaloEnvConfig();
@@ -664,38 +817,45 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
   const state = String(query.state || '').trim();
 
   if (!cfg.configured) {
+    const errText = 'Máy chủ chưa cấu hình ZALO_APP_ID / ZALO_APP_SECRET.';
+    recordPollOutcome(state, { status: 'error', error: errText });
     return renderPopupCallbackHtml({
       ok: false,
       state,
-      error: 'Máy chủ chưa cấu hình ZALO_APP_ID / ZALO_APP_SECRET.',
+      error: errText,
     });
   }
 
   if (hasCallbackError) {
     const detail = formatZaloApiError(query, rawErrorCode || 'Lỗi xác thực Zalo');
+    const errText =
+      rawErrorCode === 'access_denied'
+        ? 'Bạn đã từ chối cấp quyền truy cập tài khoản Zalo.'
+        : `Zalo trả về lỗi (${detail}).`;
+    recordPollOutcome(state, { status: 'error', error: errText });
     return renderPopupCallbackHtml({
       ok: false,
       state,
-      error:
-        rawErrorCode === 'access_denied'
-          ? 'Bạn đã từ chối cấp quyền truy cập tài khoản Zalo.'
-          : `Zalo trả về lỗi (${detail}).`,
+      error: errText,
     });
   }
 
   if (!code || !state) {
+    const errText = 'Thiếu mã xác thực (code hoặc state) từ Zalo.';
+    recordPollOutcome(state, { status: 'error', error: errText });
     return renderPopupCallbackHtml({
       ok: false,
       state,
-      error: 'Thiếu mã xác thực (code hoặc state) từ Zalo.',
+      error: errText,
     });
   }
 
   if (consumedStates.has(state)) {
+    const errText = 'Phiên xác thực Zalo này đã được sử dụng. Vui lòng thử đăng nhập lại.';
     return renderPopupCallbackHtml({
       ok: false,
       state,
-      error: 'Phiên xác thực Zalo này đã được sử dụng. Vui lòng thử đăng nhập lại.',
+      error: errText,
     });
   }
 
@@ -718,13 +878,20 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
   }
 
   if (!session && state.startsWith('z4_')) {
-    const unsealedState = unsealJsonCookie<{ v?: string; m?: string; e?: number }>(
-      state.slice(3),
-      cfg.appSecret
-    );
+    const rawStateBody = state.slice(3);
+    const unsealedState =
+      unsealCompactToken<{ v?: string; m?: string; e?: number; p?: string }>(
+        rawStateBody,
+        cfg.appSecret
+      ) ||
+      unsealJsonCookie<{ v?: string; m?: string; e?: number; p?: string }>(
+        rawStateBody,
+        cfg.appSecret
+      );
     if (unsealedState && typeof unsealedState.v === 'string' && typeof unsealedState.e === 'number') {
       session = {
         state,
+        pollToken: String(unsealedState.p || ''),
         codeVerifier: unsealedState.v,
         redirectUri: getZaloRedirectUri(req),
         mode: unsealedState.m === 'k' ? 'link' : 'login',
@@ -734,10 +901,12 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
   }
 
   if (!session || session.exp <= Date.now()) {
+    const errText = 'Phiên xác thực Zalo đã hết hạn hoặc state không hợp lệ. Vui lòng thử lại.';
+    recordPollOutcome(state, { status: 'error', error: errText });
     return renderPopupCallbackHtml({
       ok: false,
       state,
-      error: 'Phiên xác thực Zalo đã hết hạn hoặc state không hợp lệ. Vui lòng thử lại.',
+      error: errText,
     });
   }
 
@@ -778,11 +947,13 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
       !tokenJson?.access_token
     ) {
       const detail = formatZaloApiError(tokenJson, `HTTP ${tokenResp.status}`);
+      const errText = `Không thể đổi mã truy cập Zalo (${detail}).`;
+      recordPollOutcome(state, { status: 'error', mode: session.mode, error: errText });
       return renderPopupCallbackHtml({
         ok: false,
         state,
         mode: session.mode,
-        error: `Không thể đổi mã truy cập Zalo (${detail}).`,
+        error: errText,
       });
     }
 
@@ -796,11 +967,13 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
 
     if (!meRes.ok || !meRes.data?.id) {
       const gErr = formatZaloApiError(meRes.data, 'Không lấy được hồ sơ Zalo.');
+      const errText = `Không thể đọc thông tin người dùng Zalo (${gErr}).`;
+      recordPollOutcome(state, { status: 'error', mode: session.mode, error: errText });
       return renderPopupCallbackHtml({
         ok: false,
         state,
         mode: session.mode,
-        error: `Không thể đọc thông tin người dùng Zalo (${gErr}).`,
+        error: errText,
       });
     }
 
@@ -849,6 +1022,12 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
       buildCookieString(EXCHANGE_COOKIE_NAME, sealedExchangeCookie, 120, localHttp)
     );
 
+    recordPollOutcome(state, {
+      status: 'success',
+      mode: session.mode,
+      exchangeCode,
+    });
+
     return renderPopupCallbackHtml({
       ok: true,
       exchangeCode,
@@ -856,13 +1035,71 @@ export async function handleZaloOAuthCallback(req: any, res: any): Promise<strin
       mode: session.mode,
     });
   } catch (err: any) {
+    const errText = err?.message || 'Lỗi kết nối tới máy chủ Zalo.';
+    recordPollOutcome(state, { status: 'error', mode: session.mode, error: errText });
     return renderPopupCallbackHtml({
       ok: false,
       state,
       mode: session.mode,
-      error: err?.message || 'Lỗi kết nối tới máy chủ Zalo.',
+      error: errText,
     });
   }
+}
+
+export function pollZaloOAuthResult(req: any): {
+  ok: boolean;
+  status: 'pending' | 'success' | 'error';
+  mode?: ZaloAuthMode;
+  exchangeCode?: string;
+  error?: string;
+} {
+  pruneExpiredMaps();
+  const cfg = getZaloEnvConfig();
+  const state = String(req?.body?.state || req?.query?.state || '').trim();
+  const pollToken = String(req?.body?.pollToken || req?.query?.pollToken || '').trim();
+
+  if (!state || !pollToken || !cfg.configured) {
+    return { ok: true, status: 'pending' };
+  }
+
+  const record = pendingPollMap.get(state);
+  if (!record) {
+    return { ok: true, status: 'pending' };
+  }
+
+  const a = Buffer.from(record.pollToken, 'utf8');
+  const b = Buffer.from(pollToken, 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw new Error('Mã theo dõi phiên đăng nhập Zalo không hợp lệ.');
+  }
+
+  if (record.status === 'success' && record.exchangeCode) {
+    const code = record.exchangeCode;
+    pendingPollMap.delete(state);
+    return {
+      ok: true,
+      status: 'success',
+      mode: record.mode,
+      exchangeCode: code,
+    };
+  }
+
+  if (record.status === 'error') {
+    const errMsg = record.error || 'Đăng nhập Zalo không thành công.';
+    pendingPollMap.delete(state);
+    return {
+      ok: true,
+      status: 'error',
+      mode: record.mode,
+      error: errMsg,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 'pending',
+    mode: record.mode,
+  };
 }
 
 export async function completeZaloExchange(
@@ -919,10 +1156,11 @@ export async function completeZaloExchange(
     }
   }
 
+  const localHttp = isLocalHttpRequest(req);
   // Always clear exchange cookie once consumed
   appendSetCookie(
     res,
-    buildCookieString(EXCHANGE_COOKIE_NAME, '', 0, isLocalHttpRequest(req))
+    buildCookieString(EXCHANGE_COOKIE_NAME, '', 0, localHttp)
   );
 
   if (!record || record.exp <= Date.now()) {
@@ -939,13 +1177,86 @@ export async function completeZaloExchange(
     };
   }
 
-  const bridgeAuth = await ensureFirebaseBridgeAccount(record.zaloProfile, cfg.appSecret);
+  const now = Date.now();
+  const sessionToken = `zs_${sealJsonCookie(
+    {
+      p: record.zaloProfile,
+      iat: now,
+      exp: now + ZALO_SESSION_TTL_MS,
+    } satisfies SealedZaloSessionPayload,
+    cfg.appSecret
+  )}`;
+
+  const bridgeResult = await ensureFirebaseBridgeAccount(record.zaloProfile, cfg.appSecret);
+  if (bridgeResult.bridgeAuth) {
+    return {
+      ok: true,
+      mode: 'login',
+      zaloProfile: record.zaloProfile,
+      bridgeAuth: bridgeResult.bridgeAuth,
+    };
+  }
+
+  appendSetCookie(
+    res,
+    buildCookieString(
+      SESSION_COOKIE_NAME,
+      sessionToken,
+      Math.floor(ZALO_SESSION_TTL_MS / 1000),
+      localHttp
+    )
+  );
+
   return {
     ok: true,
     mode: 'login',
     zaloProfile: record.zaloProfile,
-    bridgeAuth,
+    firebaseBridgeDisabled: true,
+    firebaseBridgeReason: bridgeResult.reason || 'PASSWORD_LOGIN_DISABLED',
+    zaloSessionToken: sessionToken,
   };
+}
+
+export function getZaloSessionFromRequest(req: any): {
+  ok: boolean;
+  authenticated: boolean;
+  zaloProfile?: ZaloUserProfilePayload;
+  zaloSessionToken?: string;
+} {
+  const cfg = getZaloEnvConfig();
+  if (!cfg.configured) {
+    return { ok: true, authenticated: false };
+  }
+
+  const cookies = parseCookies(req);
+  const authHeader = String(req?.headers?.authorization || req?.headers?.Authorization || '').trim();
+  const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+  const bodyToken = String(req?.body?.zaloSessionToken || '').trim();
+  const rawToken = bodyToken || bearer || cookies[SESSION_COOKIE_NAME] || '';
+
+  if (!rawToken || !rawToken.startsWith('zs_')) {
+    return { ok: true, authenticated: false };
+  }
+
+  const unsealed = unsealJsonCookie<SealedZaloSessionPayload>(rawToken.slice(3), cfg.appSecret);
+  if (!unsealed || !unsealed.p?.zaloId || typeof unsealed.exp !== 'number' || unsealed.exp <= Date.now()) {
+    return { ok: true, authenticated: false };
+  }
+
+  return {
+    ok: true,
+    authenticated: true,
+    zaloProfile: unsealed.p,
+    zaloSessionToken: rawToken,
+  };
+}
+
+export function logoutZaloSession(req: any, res: any): { ok: boolean } {
+  appendSetCookie(
+    res,
+    buildCookieString(SESSION_COOKIE_NAME, '', 0, isLocalHttpRequest(req))
+  );
+  return { ok: true };
 }
 
 export async function resolveZaloMiniAppPhone(

@@ -53,6 +53,7 @@ export const ConcurrentLoginAlertModal: React.FC<ConcurrentLoginAlertModalProps>
     requiresTwoFactorVerification,
     pendingSmsMfaResolver,
     concurrentActiveDevices,
+    currentDeviceTrusted,
     remoteRevokedNotice,
     dismissConcurrentLoginAlert,
     revokeConcurrentDeviceSession,
@@ -141,12 +142,14 @@ export const ConcurrentLoginAlertModal: React.FC<ConcurrentLoginAlertModalProps>
 
   const displayedDevices = step === 'reset_panel' ? revokedSnapshot : concurrentActiveDevices;
 
-  const handleConfirmOwnDevices = () => {
-    dismissConcurrentLoginAlert(concurrentActiveDevices);
+  const handleConfirmOwnDevices = async () => {
+    await dismissConcurrentLoginAlert(concurrentActiveDevices);
     showToast(
       'success',
-      'Đã xác nhận phiên đăng nhập hợp lệ',
-      'Hệ thống tiếp tục duy trì phiên làm việc trên các thiết bị của bạn.'
+      currentDeviceTrusted ? 'Đã duyệt & xác nhận thiết bị hợp lệ' : 'Đã xác nhận phiên đăng nhập',
+      currentDeviceTrusted
+        ? 'Thiết bị này đã được lưu vào danh sách tin cậy và sẽ không cảnh báo lại.'
+        : 'Hệ thống tiếp tục duy trì phiên làm việc trên các thiết bị của bạn.'
     );
   };
 
@@ -326,8 +329,19 @@ export const ConcurrentLoginAlertModal: React.FC<ConcurrentLoginAlertModalProps>
                       <DevicePlatformIcon platform={dev.platform} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
-                        {dev.deviceName || 'Thiết bị không xác định'}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                          {dev.deviceName || 'Thiết bị không xác định'}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            dev.isTrusted
+                              ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
+                          }`}
+                        >
+                          {dev.isTrusted ? 'Đã duyệt' : 'Thiết bị lạ chưa duyệt'}
+                        </span>
                       </div>
                       <div className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                         <span>{dev.os || 'Hệ điều hành khác'}</span>

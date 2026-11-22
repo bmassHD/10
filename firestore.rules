@@ -122,7 +122,7 @@ service cloud.firestore {
         data.lastActiveAt is string && data.lastActiveAt.size() >= 1 && data.lastActiveAt.size() <= 64 &&
         (!('os' in data) || (data.os is string && data.os.size() <= 64)) &&
         (!('browser' in data) || (data.browser is string && data.browser.size() <= 64)) &&
-        (!('verificationMethod' in data) || data.verificationMethod in ['password', 'google', 'zalo', 'qr', 'biometric', 'sms_mfa', 'sms_otp', 'totp_2fa', 'manual']) &&
+        (!('verificationMethod' in data) || data.verificationMethod in ['password', 'google', 'facebook', 'zalo', 'qr', 'phone', 'anonymous', 'play_games', 'game_center', 'apple', 'github', 'microsoft', 'twitter', 'yahoo', 'oidc', 'saml', 'biometric', 'sms_mfa', 'sms_otp', 'totp_2fa', 'manual']) &&
         (!('biometricEnabled' in data) || data.biometricEnabled is bool) &&
         (!('firstSeenAt' in data) || (data.firstSeenAt is string && data.firstSeenAt.size() <= 64)) &&
         (!('activeSessionId' in data) || (data.activeSessionId is string && data.activeSessionId.size() <= 128)) &&
@@ -849,12 +849,26 @@ service cloud.firestore {
       allow update, delete: if false; // Immutable audit log
     }
 
-    // Backups
+    // Backups & Chunked Large Backup Subcollection
     match /backups/{backupId} {
       allow get: if isValidId(backupId) && isAdmin();
       allow list: if isAdmin();
       allow create: if isValidId(backupId) && isAdmin();
       allow update, delete: if isValidId(backupId) && isAdmin();
+
+      match /chunks/{chunkId} {
+        allow get: if isValidId(backupId) && isValidId(chunkId) && isAdmin();
+        allow list: if isValidId(backupId) && isAdmin();
+        allow create, update: if isValidId(backupId) && isValidId(chunkId) && isAdmin() &&
+          request.resource.data.keys().hasAll(['chunkIndex', 'totalChunks', 'data']) &&
+          request.resource.data.chunkIndex is int &&
+          request.resource.data.chunkIndex >= 0 &&
+          request.resource.data.totalChunks is int &&
+          request.resource.data.totalChunks >= 1 &&
+          request.resource.data.data is string &&
+          request.resource.data.data.size() <= 900000;
+        allow delete: if isValidId(backupId) && isValidId(chunkId) && isAdmin();
+      }
     }
 
     // Targeted Notifications

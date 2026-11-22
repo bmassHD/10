@@ -3,7 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
-import { UserProfile } from '../../types';
+import { AuthProviderId, SystemSettings, UserProfile } from '../../types';
 import {
   ShieldCheck,
   Lock,
@@ -23,7 +23,7 @@ import {
   ArrowLeft,
   Send,
   Ticket,
-  QrCode,
+  Wrench,
 } from 'lucide-react';
 import {
   getPendingReferralCode,
@@ -39,12 +39,22 @@ import {
   verifyUnauthenticatedPasswordResetIdentity,
   detectCurrentDeviceMeta,
 } from '../../utils/verifiedIdentity';
-import { formatFirebaseGoogleAuthError } from '../../utils/smsMfaUtils';
 import { QrLoginModal } from '../auth/QrLoginModal';
+import { OtherAuthMethodsPanel } from '../auth/OtherAuthMethodsPanel';
+import {
+  AUTH_PROVIDER_CATALOG,
+  resolveAuthProvidersMap,
+} from '../../constants/authProviders';
 import { LoggedInDevicesPanel } from '../account/LoggedInDevicesPanel';
+import {
+  getStationDepartmentOptions,
+  resolveDepartmentOptionValue,
+  isNonAdminHealthStaffAccount,
+} from '../../services/orgPersonnelSyncService';
 
 interface LoginViewProps {
   onSuccessNavigate?: (view: string) => void;
+  settings?: SystemSettings;
 }
 
 const REMEMBERED_LOGIN_KEY = 'tyt_remembered_login_v1';
@@ -102,13 +112,13 @@ async function compressImageToAvatarDataUrl(file: File): Promise<string> {
   });
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, settings }) => {
   const {
     currentUser,
     userProfile,
+    hasFacebookProvider,
     hasZaloProvider,
-    signInWithGoogle,
-    signInWithZalo,
+    signInWithProviderMethod,
     loginWithEmail,
     registerWithEmail,
     sendPasswordReset,
@@ -133,7 +143,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [showOtherAuthMethods, setShowOtherAuthMethods] = useState(false);
   const isPcClient = detectCurrentDeviceMeta().platform !== 'mobile';
+  const providersMap = resolveAuthProvidersMap(settings);
+  const emailPasswordStatus = providersMap.email_password;
 
   // Forgot password inline mode (unauthenticated)
   const [forgotMode, setForgotMode] = useState(false);
@@ -283,31 +296,34 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setSubmitting(true);
-    try {
-      await signInWithGoogle();
-      showToast('success', 'Đăng nhập Google thành công');
-      if (onSuccessNavigate) {
-        onSuccessNavigate('portal');
-      }
-    } catch (err: any) {
-      showToast('error', 'Đăng nhập Google thất bại', formatFirebaseGoogleAuthError(err));
-    } finally {
-      setSubmitting(false);
+  const handleProviderSignIn = async (providerId: AuthProviderId) => {
+    if (providersMap[providerId] === 'maintenance' || providersMap[providerId] === 'disabled') {
+      return;
     }
-  };
-
-  const handleZaloSignIn = async () => {
     setSubmitting(true);
+    setPendingReferralCode(referralCode);
+    const providerLabel =
+      AUTH_PROVIDER_CATALOG.find((item) => item.id === providerId)?.label || providerId;
     try {
-      await signInWithZalo(rememberMe);
-      showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+      const status = await signInWithProviderMethod(providerId, { rememberMe });
+      if (status === 'mfa_required') {
+        showToast(
+          'info',
+          'Bước 2/2: Xác thực OTP qua tin nhắn SMS',
+          'Vui lòng nhận và nhập mã OTP gửi tới số điện thoại đã liên kết.'
+        );
+        return;
+      }
+      if (providerId === 'zalo') {
+        showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+      } else {
+        showToast('success', `Đăng nhập ${providerLabel} thành công`);
+      }
       if (onSuccessNavigate) {
         onSuccessNavigate('portal');
       }
     } catch (err: any) {
-      showToast('error', 'Đăng nhập Zalo thất bại', err?.message || 'Vui lòng thử lại.');
+      showToast('error', `Đăng nhập ${providerLabel} thất bại`, err?.message || 'Vui lòng thử lại.');
     } finally {
       setSubmitting(false);
     }
@@ -514,6 +530,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                   ) : (
                     <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                       {userProfile?.accountType === 'employee' ? 'Cán bộ Y tế' : 'Tài khoản Người dân'}
+                    </span>
+                  )}
+                  {hasFacebookProvider && (
+                    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#1877F2]/10 text-[#1877F2] border border-[#1877F2]/20">
+                      Facebook
                     </span>
                   )}
                   {hasZaloProvider && (
@@ -862,13 +883,43 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                   <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Khoa / Phòng / Tổ công tác
                   </label>
-                  <input
-                    type="text"
-                    value={profileForm.department || ''}
-                    onChange={e => setProfileForm({ ...profileForm, department: e.target.value })}
-                    placeholder="Khoa Khám bệnh, Tổ Dược - Tiêm chủng, Y tế công cộng..."
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+                  {!isPrimaryAdmin &&
+                  isNonAdminHealthStaffAccount(userProfile?.accountType, userProfile?.role) ? (
+                    (() => {
+                      const deptOptions = getStationDepartmentOptions(
+                        settings?.orgChart,
+                        profileForm.department
+                      );
+                      const selectedDeptValue = resolveDepartmentOptionValue(
+                        profileForm.department,
+                        deptOptions
+                      );
+                      return (
+                        <select
+                          value={selectedDeptValue}
+                          onChange={e =>
+                            setProfileForm({ ...profileForm, department: e.target.value })
+                          }
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">-- Chọn Khoa / Phòng / Đơn vị --</option>
+                          {deptOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })()
+                  ) : (
+                    <input
+                      type="text"
+                      value={profileForm.department || ''}
+                      onChange={e => setProfileForm({ ...profileForm, department: e.target.value })}
+                      placeholder="Khoa Khám bệnh, Tổ Dược - Tiêm chủng, Y tế công cộng..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  )}
                 </div>
 
                 <div>
@@ -1036,104 +1087,47 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
           </div>
         ) : (
           <>
-            {/* Segmented Login / Register Switch */}
-            <div className="p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 grid grid-cols-2 gap-1 mb-4">
-              <button
-                type="button"
-                onClick={() => setAuthMode('login')}
-                className={`min-h-[40px] rounded-xl text-xs font-bold transition cursor-pointer ${
-                  authMode === 'login'
-                    ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                Đăng nhập
-              </button>
-              <button
-                type="button"
-                onClick={() => setAuthMode('register')}
-                className={`min-h-[40px] rounded-xl text-xs font-bold transition cursor-pointer ${
-                  authMode === 'register'
-                    ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                Đăng ký tài khoản
-              </button>
-            </div>
+            {emailPasswordStatus !== 'disabled' && (
+              <>
+                {emailPasswordStatus === 'maintenance' && (
+                  <div className="mb-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
+                    <Wrench className="w-4 h-4 shrink-0" />
+                    <span>Đăng nhập / Đăng ký bằng Email &amp; Mật khẩu đang tạm bảo trì. Vui lòng chọn phương thức khác bên dưới.</span>
+                  </div>
+                )}
 
-            {/* Symmetrical Google & Zalo Auth Row + PC QR Login */}
-            <div className="space-y-2.5 mb-4">
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={handleGoogleSignIn}
-                  className="min-h-[44px] py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                <div
+                  className={
+                    emailPasswordStatus === 'maintenance'
+                      ? 'opacity-50 grayscale pointer-events-none select-none'
+                      : ''
+                  }
                 >
-                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                    />
-                  </svg>
-                  <span>Google</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={handleZaloSignIn}
-                  className="min-h-[44px] py-2.5 px-3 rounded-xl bg-[#0068FF] hover:bg-[#0057D8] text-white text-xs font-semibold shadow-sm transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
-                >
-                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white text-[#0068FF] font-black text-[11px] leading-none shrink-0">
-                    Z
-                  </span>
-                  <span>Zalo</span>
-                </button>
-              </div>
-
-              {authMode === 'login' && isPcClient && (
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => setQrModalOpen(true)}
-                  className="w-full min-h-[44px] py-2.5 px-4 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
-                >
-                  <QrCode className="w-4 h-4 shrink-0" />
-                  <span>Đăng nhập bằng mã QR (Trên PC)</span>
-                </button>
-              )}
-            </div>
-
-            <QrLoginModal
-              isOpen={qrModalOpen}
-              onClose={() => setQrModalOpen(false)}
-              onSuccess={() => {
-                setQrModalOpen(false);
-                if (onSuccessNavigate) onSuccessNavigate('portal');
-              }}
-            />
-
-            <div className="relative flex py-2 items-center mb-4">
-              <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
-              <span className="flex-shrink mx-3 text-[10px] text-slate-400 uppercase font-semibold">
-                hoặc email
-              </span>
-              <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
-            </div>
+                  {/* Segmented Login / Register Switch */}
+                  <div className="p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 grid grid-cols-2 gap-1 mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('login')}
+                      className={`min-h-[40px] rounded-xl text-xs font-bold transition cursor-pointer ${
+                        authMode === 'login'
+                          ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      Đăng nhập
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('register')}
+                      className={`min-h-[40px] rounded-xl text-xs font-bold transition cursor-pointer ${
+                        authMode === 'register'
+                          ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      Đăng ký tài khoản
+                    </button>
+                  </div>
 
             {authMode === 'login' ? (
               <form onSubmit={handleAuthSubmit} className="space-y-3.5 text-xs">
@@ -1313,6 +1307,41 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                 </button>
               </form>
             )}
+                </div>
+
+                <div className="relative flex py-2 items-center mt-4 mb-3">
+                  <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
+                  <span className="flex-shrink mx-3 text-[10px] text-slate-400 uppercase font-semibold">
+                    hoặc
+                  </span>
+                  <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
+                </div>
+              </>
+            )}
+
+            <OtherAuthMethodsPanel
+              settings={settings}
+              authMode={authMode}
+              isPcClient={isPcClient}
+              loading={submitting}
+              expanded={showOtherAuthMethods || emailPasswordStatus === 'disabled'}
+              onToggleExpand={() => setShowOtherAuthMethods(v => !v)}
+              onSelectProvider={(providerId) => void handleProviderSignIn(providerId)}
+              onOpenQrModal={() => setQrModalOpen(true)}
+              size="sm"
+            />
+
+
+
+
+            <QrLoginModal
+              isOpen={qrModalOpen}
+              onClose={() => setQrModalOpen(false)}
+              onSuccess={() => {
+                setQrModalOpen(false);
+                if (onSuccessNavigate) onSuccessNavigate('portal');
+              }}
+            />
           </>
         )}
       </div>

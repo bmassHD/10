@@ -74,6 +74,7 @@ export interface UserProfile {
   identityVerifiedFromDatabase?: boolean;
   allowIdentityEditByAdmin?: boolean;
   googleLinked?: boolean;
+  facebookLinked?: boolean;
   zaloLinked?: boolean;
   zaloId?: string;
   zaloName?: string;
@@ -178,7 +179,28 @@ export interface UserVerifiedDevice {
   os?: string;
   browser?: string;
   isTrusted: boolean;
-  verificationMethod?: 'password' | 'google' | 'zalo' | 'qr' | 'biometric' | 'sms_mfa' | 'sms_otp' | 'totp_2fa' | 'manual';
+  verificationMethod?:
+    | 'password'
+    | 'google'
+    | 'facebook'
+    | 'zalo'
+    | 'qr'
+    | 'biometric'
+    | 'sms_mfa'
+    | 'sms_otp'
+    | 'totp_2fa'
+    | 'manual'
+    | 'phone'
+    | 'anonymous'
+    | 'play_games'
+    | 'game_center'
+    | 'apple'
+    | 'github'
+    | 'microsoft'
+    | 'twitter'
+    | 'yahoo'
+    | 'oidc'
+    | 'saml';
   biometricEnabled?: boolean;
   verifiedAt: string;
   firstSeenAt?: string;
@@ -548,6 +570,7 @@ export interface BackupItem {
     usersCount: number;
     feedbackCount: number;
     workSchedulesCount?: number;
+    businessTripsCount?: number;
     announcementsCount?: number;
     appointmentsCount?: number;
     tasksCount?: number;
@@ -565,6 +588,7 @@ export interface BackupItem {
     verifiedIdentifiersCount?: number;
     userDevicesCount?: number;
     bhxhServerConfigCount?: number;
+    aiServerConfigCount?: number;
     referralCodesCount?: number;
     userReferralLinksCount?: number;
     referralTrackingCount?: number;
@@ -579,7 +603,9 @@ export interface BackupItem {
   storageType?: 'cloud' | 'github';
   githubPath?: string;
   githubHtmlUrl?: string;
-  encoding?: 'json' | 'base64';
+  encoding?: 'json' | 'base64' | 'chunked';
+  isChunked?: boolean;
+  chunkCount?: number;
   isAutoBackup?: boolean;
   dataJson: string;
 }
@@ -1006,6 +1032,8 @@ export interface SystemSettings {
   tabMaintenance?: Record<string, boolean>;
   accessControl?: AccessControlConfig;
   rolePermissions?: RolePermissionsConfig;
+  sidebarColors?: SidebarColorsConfig;
+  authProvidersConfig?: AuthProvidersConfig;
   bhxhApi?: BhxhApiPublicConfig;
   aiAutomation?: {
     autoScanOnUpload?: boolean;
@@ -1026,6 +1054,17 @@ export interface SystemSettings {
   lastAutoGithubBackupError?: string;
   migrationReconciliationActive?: boolean;
   migrationBannerNote?: string;
+  businessTripConfig?: BusinessTripConfig;
+  cccdLookupEnabled?: boolean;
+  updatedAt?: string;
+}
+
+export interface BusinessTripConfig {
+  enabled?: boolean;
+  sectionTitle?: string;
+  sectionSubtitle?: string;
+  defaultFilter?: 'active' | 'upcoming' | 'all';
+  hidePastForCitizens?: boolean;
   updatedAt?: string;
 }
 
@@ -1274,4 +1313,38 @@ export interface UserGuideTopic {
   targetTab: string;
   steps: TourStep[];
 }
+
+export interface SidebarColorsConfig {
+  publicEnabled?: boolean;
+  adminEnabled?: boolean;
+  updatedAt?: string;
+}
+
+export type AuthProviderId =
+  | 'email_password'
+  | 'phone'
+  | 'anonymous'
+  | 'google'
+  | 'facebook'
+  | 'play_games'
+  | 'game_center'
+  | 'apple'
+  | 'github'
+  | 'microsoft'
+  | 'twitter'
+  | 'yahoo'
+  | 'oidc'
+  | 'saml'
+  | 'zalo'
+  | 'qr';
+
+export type AuthProviderStatus = 'enabled' | 'disabled' | 'maintenance';
+
+export type AuthProvidersStatusMap = Partial<Record<AuthProviderId, AuthProviderStatus>>;
+
+export interface AuthProvidersConfig {
+  providers: AuthProvidersStatusMap;
+  updatedAt?: string;
+}
+
 

@@ -16,6 +16,7 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: [
           'iconapp.png',
+          'zalo.png',
           'seoapp.jpg',
           'seoapp.png',
           'assets/logotram.png',

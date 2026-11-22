@@ -862,14 +862,20 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                           onClick={handleLinkZalo}
                           className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#0068FF] hover:bg-[#0057D8] text-white font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                         >
-                          <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-white text-[#0068FF] font-black text-[10px] leading-none shrink-0">
-                            Z
-                          </span>
+                          <img
+                            src="/zalo.png"
+                            alt="Zalo"
+                            className="w-4 h-4 rounded bg-white p-0.5 object-contain shrink-0"
+                          />
                           <span>{linkingZalo ? 'Đang liên kết...' : 'Liên kết Zalo'}</span>
                         </button>
                       ) : (
                         <span className="w-full sm:w-auto min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#0068FF]/10 text-[#0068FF] font-semibold inline-flex items-center justify-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          <img
+                            src="/zalo.png"
+                            alt="Zalo"
+                            className="w-4 h-4 rounded object-contain shrink-0"
+                          />
                           <span>Đã liên kết Zalo{userProfile?.zaloName ? ` (${userProfile.zaloName})` : ''}</span>
                         </span>
                       )}

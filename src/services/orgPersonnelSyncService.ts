@@ -1,6 +1,12 @@
 import { OrgChartConfig } from '../types';
+import { ORG_DEFAULT_DEPARTMENT_SPECS } from '../data/defaultOrgChart';
 
 export type OrgRoleKey = 'director' | 'deputy_director' | 'head' | 'deputy' | 'staff';
+
+export interface StationDepartmentOption {
+  value: string;
+  label: string;
+}
 
 export function normalizeCccd(value?: string | null): string {
   return (value || '').replace(/[\s.-]/g, '').trim().toUpperCase();
@@ -30,6 +36,102 @@ export function maskCccdForPublic(cccd?: string | null): string {
 
 export function stripDepartmentNumberPrefix(name?: string | null): string {
   return (name || '').replace(/^\d+\s*[.\-_:]\s*/, '').trim();
+}
+
+/**
+ * Kiểm tra tài khoản được Admin chỉ định là Nhân viên Y tế (không phải Admin / Super Admin).
+ */
+export function isNonAdminHealthStaffAccount(
+  accountType?: string | null,
+  role?: string | null
+): boolean {
+  if (accountType === 'admin' || role === 'admin' || role === 'super_admin') {
+    return false;
+  }
+  return (
+    accountType === 'employee' ||
+    role === 'staff' ||
+    role === 'doctor' ||
+    role === 'nurse' ||
+    role === 'communicator' ||
+    role === 'leadership'
+  );
+}
+
+/**
+ * Lấy danh sách Khoa / Phòng / Đơn vị thuộc nhân lực của Trạm Y tế
+ * từ Sơ đồ tổ chức (fallback sang danh sách khoa/phòng chuẩn nếu chưa khởi tạo).
+ */
+export function getStationDepartmentOptions(
+  orgChart?: OrgChartConfig | null,
+  currentValue?: string | null
+): StationDepartmentOption[] {
+  const options: StationDepartmentOption[] = [
+    { value: 'Ban Giám đốc', label: 'Ban Giám đốc' },
+  ];
+  const seenNormalized = new Set<string>([
+    normalizeTextNoDiacritics('Ban Giám đốc'),
+  ]);
+
+  const rawDepts = Array.isArray(orgChart?.departments) ? orgChart.departments : [];
+  if (rawDepts.length > 0) {
+    rawDepts.forEach((dept, idx) => {
+      const cleanName = stripDepartmentNumberPrefix(dept.name || '') || (dept.name || '').trim();
+      if (!cleanName) return;
+      const norm = normalizeTextNoDiacritics(cleanName);
+      if (seenNormalized.has(norm)) return;
+      seenNormalized.add(norm);
+      options.push({
+        value: cleanName,
+        label: `${idx + 1}. ${cleanName}`,
+      });
+    });
+  } else {
+    ORG_DEFAULT_DEPARTMENT_SPECS.forEach((spec) => {
+      const cleanName = spec.name.trim();
+      const norm = normalizeTextNoDiacritics(cleanName);
+      if (seenNormalized.has(norm)) return;
+      seenNormalized.add(norm);
+      options.push({
+        value: cleanName,
+        label: `${spec.index}. ${cleanName}`,
+      });
+    });
+  }
+
+  const trimmedCurrent = (currentValue || '').trim();
+  if (trimmedCurrent) {
+    const normCurrent = normalizeTextNoDiacritics(
+      stripDepartmentNumberPrefix(trimmedCurrent) || trimmedCurrent
+    );
+    if (!seenNormalized.has(normCurrent)) {
+      options.push({
+        value: trimmedCurrent,
+        label: `${trimmedCurrent} (Hiện tại)`,
+      });
+    }
+  }
+
+  return options;
+}
+
+export function resolveDepartmentOptionValue(
+  currentValue: string | undefined | null,
+  options: StationDepartmentOption[]
+): string {
+  const trimmed = (currentValue || '').trim();
+  if (!trimmed) return '';
+  const direct = options.find((o) => o.value === trimmed);
+  if (direct) return direct.value;
+  const normCurrent = normalizeTextNoDiacritics(
+    stripDepartmentNumberPrefix(trimmed) || trimmed
+  );
+  const byNorm = options.find(
+    (o) =>
+      normalizeTextNoDiacritics(stripDepartmentNumberPrefix(o.value) || o.value) ===
+      normCurrent
+  );
+  return byNorm ? byNorm.value : trimmed;
 }
 
 /**

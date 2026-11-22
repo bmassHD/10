@@ -7,6 +7,8 @@ import {
   saveStoredAiConfig,
   testProviderConnection,
   executeAgentRequest,
+  exportAiAgentConfigForBackup,
+  restoreAiAgentConfigFromBackup,
   AI_PROVIDERS_INFO,
   AiProviderType,
 } from '../../src/server/aiAgentService';
@@ -56,6 +58,17 @@ function getFirebaseAppletCfg() {
     }
   } catch {
     // ignore
+  }
+  const envApiKey = process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || '';
+  const envProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '';
+  const envDatabaseId =
+    process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID || '';
+  if (envApiKey || envProjectId) {
+    return {
+      apiKey: envApiKey,
+      projectId: envProjectId,
+      firestoreDatabaseId: envDatabaseId || '(default)',
+    };
   }
   return {};
 }
@@ -231,6 +244,43 @@ export default async function handler(req: any, res: any) {
       }
     }
     return res.status(405).json({ error: 'Phương thức không hợp lệ' });
+  }
+
+  if (action === 'backup-export') {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Chỉ chấp nhận phương thức GET' });
+    }
+    const roleCheck = await verifyAdminBearer(req.headers?.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({
+        error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền sao lưu cấu hình Agent AI.',
+      });
+    }
+    try {
+      const exported = exportAiAgentConfigForBackup();
+      return res.json({ ok: true, ...exported });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Không thể xuất cấu hình Agent AI.' });
+    }
+  }
+
+  if (action === 'backup-restore') {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Chỉ chấp nhận phương thức POST' });
+    }
+    const roleCheck = await verifyAdminBearer(req.headers?.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({
+        error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền khôi phục cấu hình Agent AI.',
+      });
+    }
+    try {
+      const record = req.body?.record || req.body || {};
+      restoreAiAgentConfigFromBackup(record);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || 'Không thể khôi phục cấu hình Agent AI.' });
+    }
   }
 
   if (req.method !== 'POST') {

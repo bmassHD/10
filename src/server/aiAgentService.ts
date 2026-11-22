@@ -199,6 +199,105 @@ export function getClientSafeAgentConfig() {
   };
 }
 
+export function exportAiAgentConfigForBackup(): {
+  hasConfigured: boolean;
+  record: Record<string, any> | null;
+} {
+  let fileExists = false;
+  try {
+    fileExists = fs.existsSync(CONFIG_FILE);
+  } catch {
+    fileExists = false;
+  }
+  const stored = loadStoredAiConfig();
+  const hasProviderKeys = VALID_PROVIDER_IDS.some(id => {
+    const prov = stored.providers?.[id];
+    return Boolean(prov?.apiKey && prov.apiKey.trim().length > 0);
+  });
+  const hasConfigured = Boolean(
+    fileExists ||
+      hasProviderKeys ||
+      stored.updatedAt ||
+      stored.activeProvider !== 'gemini'
+  );
+  if (!hasConfigured) {
+    return { hasConfigured: false, record: null };
+  }
+  return {
+    hasConfigured: true,
+    record: {
+      id: 'ai_agent_config',
+      activeProvider: stored.activeProvider || 'gemini',
+      fallbackOrder: stored.fallbackOrder || ['gemini', 'openai'],
+      providers: stored.providers || {},
+      updatedAt: stored.updatedAt || new Date().toISOString(),
+    },
+  };
+}
+
+export function restoreAiAgentConfigFromBackup(rawRecord: Record<string, any>): void {
+  if (!rawRecord || typeof rawRecord !== 'object') {
+    throw new Error('Dữ liệu cấu hình Agent AI sao lưu không hợp lệ.');
+  }
+  const existing = loadStoredAiConfig();
+  const activeProvider: AiProviderType =
+    rawRecord.activeProvider === 'openai'
+      ? 'openai'
+      : rawRecord.activeProvider === 'gemini'
+      ? 'gemini'
+      : existing.activeProvider || 'gemini';
+
+  const incomingFallback = Array.isArray(rawRecord.fallbackOrder)
+    ? rawRecord.fallbackOrder.filter((id: unknown): id is AiProviderType =>
+        VALID_PROVIDER_IDS.includes(id as AiProviderType)
+      )
+    : [];
+  const fallbackOrder: AiProviderType[] =
+    incomingFallback.length > 0 ? incomingFallback : existing.fallbackOrder || ['gemini', 'openai'];
+
+  const nextProviders: Partial<Record<AiProviderType, StoredAiProvider>> = {
+    ...(existing.providers || {}),
+  };
+  const rawProviders = rawRecord.providers && typeof rawRecord.providers === 'object'
+    ? rawRecord.providers
+    : {};
+
+  for (const id of VALID_PROVIDER_IDS) {
+    const inc = rawProviders[id];
+    if (!inc || typeof inc !== 'object') continue;
+    const prevProv = nextProviders[id] || {};
+    const incKey = typeof inc.apiKey === 'string' && inc.apiKey.trim() && !inc.apiKey.includes('••••')
+      ? inc.apiKey.trim()
+      : prevProv.apiKey;
+    const incModel =
+      typeof inc.model === 'string' && inc.model.trim()
+        ? id === 'gemini'
+          ? normalizeGeminiModel(inc.model)
+          : inc.model.trim()
+        : prevProv.model || AI_PROVIDERS_INFO[id].defaultModel;
+
+    nextProviders[id] = {
+      ...(prevProv || {}),
+      model: incModel,
+      ...(incKey ? { apiKey: incKey, isConfigured: true } : { isConfigured: Boolean(prevProv.isConfigured) }),
+      updatedAt:
+        typeof inc.updatedAt === 'string' && inc.updatedAt
+          ? inc.updatedAt
+          : prevProv.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  saveStoredAiConfig({
+    activeProvider,
+    fallbackOrder,
+    providers: nextProviders,
+    updatedAt:
+      typeof rawRecord.updatedAt === 'string' && rawRecord.updatedAt
+        ? rawRecord.updatedAt
+        : new Date().toISOString(),
+  });
+}
+
 export async function testProviderConnection(
   provider: AiProviderType,
   apiKey: string,

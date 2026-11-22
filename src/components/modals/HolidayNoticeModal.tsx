@@ -24,6 +24,7 @@ import {
   getVietnamTodayKey,
 } from '../../services/firebaseService';
 import { StationLogo } from '../common/StationLogo';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface HolidayNoticeModalProps {
   holidays: HolidayScheduleItem[];
@@ -51,6 +52,11 @@ export const HolidayNoticeModal: React.FC<HolidayNoticeModalProps> = ({
   onClose,
   onGoToDutySchedule,
 }) => {
+  const { isAdmin, isSuperAdmin, isPrimaryAdmin, isSimulatingRole } = useAuth();
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isSuperAdmin || isPrimaryAdmin || isAdmin);
+  const dutyTabDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.duty);
   const [dontShowToday, setDontShowToday] = useState(false);
 
   useEffect(() => {
@@ -403,14 +409,21 @@ export const HolidayNoticeModal: React.FC<HolidayNoticeModalProps> = ({
             {!isPreview && (
               <button
                 type="button"
+                disabled={dutyTabDisabled}
+                aria-disabled={dutyTabDisabled || undefined}
                 onClick={() => {
+                  if (dutyTabDisabled) return;
                   onClose(dontShowToday);
                   onGoToDutySchedule();
                 }}
-                className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                className={`px-3.5 py-2 rounded-xl font-semibold text-xs transition inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  dutyTabDisabled
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 cursor-not-allowed opacity-70'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                }`}
               >
-                <span>Xem Lịch trực 24/7</span>
-                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+                <span>{dutyTabDisabled ? 'Lịch trực đang bảo trì' : 'Xem Lịch trực 24/7'}</span>
+                {!dutyTabDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
               </button>
             )}
 

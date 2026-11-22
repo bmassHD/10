@@ -165,7 +165,7 @@ export function getAccountSecuritySyncItems(
   return [
     {
       key: 'verify',
-      title: 'Xác minh Gmail / Email',
+      title: 'Xác minh Gmail',
       subtitle: resolvedEmail
         ? prog.emailDone
           ? maskVerifiedValue(resolvedEmail, 'email')
@@ -191,7 +191,7 @@ export function getAccountSecuritySyncItems(
     },
     {
       key: 'totp_2fa',
-      title: 'Khoá 2FA (Authenticator App)',
+      title: 'Khoá 2FA',
       subtitle: isAdminAccount
         ? 'Đặc cách Admin: bỏ qua xác thực 2FA khi đăng nhập'
         : 'Google / Microsoft Authenticator OTP 6 số',
@@ -221,7 +221,7 @@ export function getAccountSecuritySyncItems(
     },
     {
       key: 'cccd',
-      title: 'Định danh CCCD / VNeID',
+      title: 'Định danh CCCD',
       subtitle: prog.citizenIdDone
         ? `Đã khóa số ${maskVerifiedValue(profile?.citizenId, 'cccd')}`
         : 'Xác minh & khóa số CCCD duy nhất trong hồ sơ',

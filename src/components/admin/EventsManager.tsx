@@ -730,13 +730,7 @@ export const EventsManager: React.FC<EventsManagerProps> = ({
 
               {/* Toggles */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={enableAutoPopup}
-                    onChange={e => setEnableAutoPopup(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Thông báo tự động đúng ngày
@@ -745,15 +739,25 @@ export const EventsManager: React.FC<EventsManagerProps> = ({
                       Tự bật hộp thoại &amp; lời chúc khi truy cập
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enableAutoPopup}
+                    aria-label="Thông báo tự động đúng ngày"
+                    onClick={() => setEnableAutoPopup(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      enableAutoPopup ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        enableAutoPopup ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={enableConfetti}
-                    onChange={e => setEnableConfetti(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Hiệu ứng bắn pháo giấy
@@ -762,15 +766,25 @@ export const EventsManager: React.FC<EventsManagerProps> = ({
                       Tự động tung pháo giấy khi hiển thị thông báo
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enableConfetti}
+                    aria-label="Hiệu ứng bắn pháo giấy"
+                    onClick={() => setEnableConfetti(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      enableConfetti ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        enableConfetti ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isAnnual}
-                    onChange={e => setIsAnnual(e.target.checked)}
-                    className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Lặp lại hằng năm (theo ngày/tháng)
@@ -779,15 +793,25 @@ export const EventsManager: React.FC<EventsManagerProps> = ({
                       Phù hợp cho ngày lễ cố định như 27/02, 01/06...
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isAnnual}
+                    aria-label="Lặp lại hằng năm"
+                    onClick={() => setIsAnnual(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      isAnnual ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        isAnnual ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isActive}
-                    onChange={e => setIsActive(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                  />
+                <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40">
                   <div className="text-xs">
                     <div className="font-bold text-slate-800 dark:text-slate-100">
                       Hiển thị công khai
@@ -796,7 +820,23 @@ export const EventsManager: React.FC<EventsManagerProps> = ({
                       Cho phép người dân xem trong tab Sự kiện
                     </div>
                   </div>
-                </label>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isActive}
+                    aria-label="Hiển thị công khai"
+                    onClick={() => setIsActive(v => !v)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      isActive ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        isActive ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200 dark:border-slate-800">

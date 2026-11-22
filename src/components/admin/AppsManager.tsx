@@ -1118,15 +1118,25 @@ export const AppsManager: React.FC<AppsManagerProps> = ({ settings }) => {
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isActive}
-                    onChange={e => setIsActive(e.target.checked)}
-                    className="w-4 h-4 rounded accent-emerald-600"
-                  />
+                <div className="inline-flex items-center gap-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isActive}
+                    aria-label="Hiển thị công khai trên tab Ứng dụng"
+                    onClick={() => setIsActive(v => !v)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      isActive ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        isActive ? 'translate-x-4.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
                   <span>Hiển thị công khai trên tab Ứng dụng</span>
-                </label>
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button

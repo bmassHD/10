@@ -280,9 +280,10 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       const res = await BackupService.exportLocalBackup(userEmail, customTitle, { excludeUsers });
       if (res.success) {
         showToast(
-          'success',
+          res.warning ? 'warning' : 'success',
           excludeUsers ? 'Đã tải JSON sao lưu hệ thống (Trừ User)' : 'Đã tải tệp sao lưu JSON về máy',
-          `Tổng ${res.totalRecords ?? 0} bản ghi (${Math.max(1, Math.round((res.sizeBytes || 0) / 1024))} KB)`
+          res.warning ||
+            `Tổng ${res.totalRecords ?? 0} bản ghi (${Math.max(1, Math.round((res.sizeBytes || 0) / 1024))} KB)`
         );
       } else {
         showToast('error', 'Xuất tệp sao lưu thất bại', res.error);
@@ -328,9 +329,10 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       const res = await BackupService.backupToGitHub(githubConfig, userEmail, customTitle);
       if (res.success) {
         showToast(
-          'success',
+          res.warning ? 'warning' : 'success',
           'Đã sao lưu lên GitHub & ghi lịch sử thành công',
-          `Đã lưu ${res.totalRecords ?? 0} bản ghi (${Math.max(1, Math.round((res.sizeBytes || 0) / 1024))} KB) tại ${res.path}`
+          res.warning ||
+            `Đã lưu ${res.totalRecords ?? 0} bản ghi (${Math.max(1, Math.round((res.sizeBytes || 0) / 1024))} KB) tại ${res.path}`
         );
         setCustomTitle('');
         void fetchBackups();
@@ -574,6 +576,16 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           return;
         }
         rawContent = fetched.content;
+      } finally {
+        setLoadingRestorePicker(false);
+      }
+    } else if (!rawContent.trim() && (backup.isChunked || backup.encoding === 'chunked')) {
+      setLoadingRestorePicker(true);
+      try {
+        rawContent = await BackupService.resolveCloudBackupJson(backup);
+      } catch (err: any) {
+        showToast('error', 'Không thể tải bản sao lưu phân mảnh', err?.message);
+        return;
       } finally {
         setLoadingRestorePicker(false);
       }
@@ -877,7 +889,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 disabled={savingAutoToggle}
                 onClick={handleToggleAutoBackup}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-60 ${
-                  autoBackupEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                  autoBackupEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                 }`}
               >
                 <span
@@ -1105,7 +1117,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-[10px] font-semibold">
-                        Cloud Firestore
+                        {b.isChunked ? `Cloud · Phân mảnh (${b.chunkCount || 0} phần)` : 'Cloud Firestore'}
                       </span>
                     )}
                     {b.isAutoBackup && (
@@ -1157,9 +1169,9 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                           </div>
                         </div>
                         <div className="p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                          <div className="text-[10px] text-slate-400 truncate">Lịch trực</div>
+                          <div className="text-[10px] text-slate-400 truncate">Trực / Công tác</div>
                           <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                            {b.stats?.workSchedulesCount ?? 0}
+                            {(b.stats?.workSchedulesCount ?? 0) + (b.stats?.businessTripsCount ?? 0)}
                           </div>
                         </div>
                         <div className="p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
@@ -1181,9 +1193,9 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                           </div>
                         </div>
                         <div className="p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
-                          <div className="text-[10px] text-slate-400 truncate">Dịch vụ</div>
+                          <div className="text-[10px] text-slate-400 truncate">Dịch vụ / ★</div>
                           <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                            {b.stats?.servicesCount ?? 0}
+                            {(b.stats?.servicesCount ?? 0) + (b.stats?.serviceRatingsCount ?? 0)}
                           </div>
                         </div>
                         <div className="p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
@@ -1218,7 +1230,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                       </div>
                       <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
                         <span>
-                          Tệp đính kèm phản ánh: {b.stats?.feedbackAttachmentsCount ?? 0} · Thiết bị tin cậy: {b.stats?.userDevicesCount ?? 0} · Khoá định danh: {b.stats?.verifiedIdentifiersCount ?? 0} · Cấu hình BHXH server: {b.stats?.bhxhServerConfigCount ?? 0} · Quản trị viên: {b.stats?.adminsCount ?? 0} · Push: {b.stats?.pushSubscriptionsCount ?? 0} · Nhật ký: {b.stats?.auditLogsCount ?? 0}
+                          Công việc: {b.stats?.tasksCount ?? 0} · Chấm công: {b.stats?.attendanceRecordsCount ?? 0} · Cửa hàng EXP: {(b.stats?.storeItemsCount ?? 0) + (b.stats?.storeOrdersCount ?? 0)} · Giới thiệu: {(b.stats?.referralCodesCount ?? 0) + (b.stats?.userReferralLinksCount ?? 0) + (b.stats?.referralTrackingCount ?? 0)} · Tệp phản ánh: {b.stats?.feedbackAttachmentsCount ?? 0} · Thiết bị: {b.stats?.userDevicesCount ?? 0} · Định danh: {b.stats?.verifiedIdentifiersCount ?? 0} · Di trú: {(b.stats?.legacyUserSnapshotsCount ?? 0) + (b.stats?.userMigrationClaimsCount ?? 0)} · BHXH server: {b.stats?.bhxhServerConfigCount ?? 0} · Agent AI server: {b.stats?.aiServerConfigCount ?? 0} · Admin: {b.stats?.adminsCount ?? 0} · Push: {b.stats?.pushSubscriptionsCount ?? 0} · Nhật ký: {b.stats?.auditLogsCount ?? 0}
                         </span>
                         <span className="font-semibold text-teal-700 dark:text-teal-400">
                           {b.collectionsIncluded?.length || BACKUP_COLLECTIONS.length} phân hệ

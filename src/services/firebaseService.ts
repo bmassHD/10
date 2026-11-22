@@ -121,6 +121,7 @@ export const emptySystemSettings: SystemSettings = {
   bannerNoticeEnabled: false,
   vaccinationBannerEnabled: true,
   vaccinationBannerNote: '',
+  cccdLookupEnabled: true,
   version: 'v3.0.0 (Bản Chính Thức)',
   highlightImages: [],
   vaccinationSchedules: [],

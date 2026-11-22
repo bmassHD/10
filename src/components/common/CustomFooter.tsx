@@ -115,7 +115,12 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
                       >
-                        Zalo
+                        <img
+                          src="/zalo.png"
+                          alt="Zalo"
+                          className="w-4 h-4 rounded object-contain shrink-0"
+                        />
+                        <span>Zalo</span>
                       </a>
                     )}
                     {social.tiktok?.trim() && (
@@ -341,9 +346,14 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={softTeam.zaloUrl.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
                       >
-                        Zalo
+                        <img
+                          src="/zalo.png"
+                          alt="Zalo"
+                          className="w-3.5 h-3.5 rounded object-contain shrink-0"
+                        />
+                        <span>Zalo</span>
                       </a>
                     )}
                     {softTeam.facebookUrl?.trim() && (

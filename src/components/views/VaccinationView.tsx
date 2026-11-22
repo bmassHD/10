@@ -129,13 +129,14 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
 }) => {
   const { isAdmin } = useAuth();
   const { showToast } = useToast();
-  const { userCoords, requestLocation } = useUserPermissions();
+  const { userCoords, locationStatus, requestLocation } = useUserPermissions();
 
   const [programFilter, setProgramFilter] = useState<'all' | VaccinationScheduleItem['programType']>('all');
   const [onlySitesWithSchedules, setOnlySitesWithSchedules] = useState(false);
   const [expandedSites, setExpandedSites] = useState<Record<string, boolean>>({});
   const [expandedSchedules, setExpandedSchedules] = useState<Record<string, boolean>>({});
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const autoRequestedGeoRef = React.useRef(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
@@ -143,10 +144,12 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!userCoords) {
+    if (userCoords || autoRequestedGeoRef.current) return;
+    if (locationStatus === 'granted' || locationStatus === 'prompt') {
+      autoRequestedGeoRef.current = true;
       void requestLocation();
     }
-  }, [userCoords, requestLocation]);
+  }, [userCoords, locationStatus, requestLocation]);
 
   const activeSchedules = useMemo(() => getActiveVaccinationSchedules(settings), [settings]);
 
@@ -530,6 +533,24 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
               )}
             </div>
           </div>
+
+          {!userCoords && (
+            <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/35 border border-blue-200 dark:border-blue-800 text-xs sm:text-sm text-blue-900 dark:text-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2">
+                <Compass className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <span>
+                  Cấp quyền Vị trí (GPS) để hệ thống tính khoảng cách và gợi ý điểm tiêm chủng gần bạn nhất.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void requestLocation()}
+                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold whitespace-nowrap self-start sm:self-auto cursor-pointer"
+              >
+                Cấp quyền Vị trí
+              </button>
+            </div>
+          )}
 
           {/* Program Filter Bar + Point Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">

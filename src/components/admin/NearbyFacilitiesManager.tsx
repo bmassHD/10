@@ -1566,45 +1566,85 @@ export const NearbyFacilitiesManager: React.FC<NearbyFacilitiesManagerProps> = (
 
               {/* Capabilities Checkboxes */}
               <div className="flex flex-wrap items-center gap-4 pt-1">
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={form.is24Hours}
-                    onChange={e => setForm(prev => ({ ...prev, is24Hours: e.target.checked }))}
-                    className="w-4 h-4 rounded text-emerald-600"
-                  />
+                <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.is24Hours}
+                    aria-label="Trực 24/7"
+                    onClick={() => setForm(prev => ({ ...prev, is24Hours: !prev.is24Hours }))}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      form.is24Hours ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        form.is24Hours ? 'translate-x-4.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
                   <span>Trực 24/7</span>
-                </label>
+                </div>
 
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={form.hasEmergency}
-                    onChange={e => setForm(prev => ({ ...prev, hasEmergency: e.target.checked }))}
-                    className="w-4 h-4 rounded text-rose-600"
-                  />
+                <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.hasEmergency}
+                    aria-label="Tiếp nhận Cấp cứu"
+                    onClick={() => setForm(prev => ({ ...prev, hasEmergency: !prev.hasEmergency }))}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      form.hasEmergency ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        form.hasEmergency ? 'translate-x-4.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
                   <span>Tiếp nhận Cấp cứu</span>
-                </label>
+                </div>
 
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={form.hasBhyt}
-                    onChange={e => setForm(prev => ({ ...prev, hasBhyt: e.target.checked }))}
-                    className="w-4 h-4 rounded text-blue-600"
-                  />
+                <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.hasBhyt}
+                    aria-label="Khám BHYT"
+                    onClick={() => setForm(prev => ({ ...prev, hasBhyt: !prev.hasBhyt }))}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      form.hasBhyt ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        form.hasBhyt ? 'translate-x-4.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
                   <span>Khám BHYT</span>
-                </label>
+                </div>
 
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={form.isActive}
-                    onChange={e => setForm(prev => ({ ...prev, isActive: e.target.checked }))}
-                    className="w-4 h-4 rounded text-emerald-600"
-                  />
+                <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.isActive}
+                    aria-label="Hiển thị công khai"
+                    onClick={() => setForm(prev => ({ ...prev, isActive: !prev.isActive }))}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      form.isActive ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        form.isActive ? 'translate-x-4.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
                   <span>Hiển thị công khai</span>
-                </label>
+                </div>
               </div>
 
               {/* Specialty & Capacity */}

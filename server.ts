@@ -13,14 +13,19 @@ import {
   saveStoredAiConfig,
   testProviderConnection,
   executeAgentRequest,
+  exportAiAgentConfigForBackup,
+  restoreAiAgentConfigFromBackup,
   AI_PROVIDERS_INFO,
   AiProviderType,
 } from './src/server/aiAgentService';
 import {
   completeZaloExchange,
   createZaloAuthorizationUrl,
+  getZaloSessionFromRequest,
   getZaloStatusPayload,
   handleZaloOAuthCallback,
+  logoutZaloSession,
+  pollZaloOAuthResult,
   resolveZaloMiniAppPhone,
 } from './src/server/zaloAuthService';
 import {
@@ -1180,6 +1185,37 @@ async function startServer() {
     }
   });
 
+  app.get('/api/ai/backup-export', async (req, res) => {
+    const roleCheck = await verifyFirebaseRole(req.headers.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({
+        error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền sao lưu cấu hình Agent AI.',
+      });
+    }
+    try {
+      const exported = exportAiAgentConfigForBackup();
+      return res.json({ ok: true, ...exported });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Không thể xuất cấu hình Agent AI.' });
+    }
+  });
+
+  app.post('/api/ai/backup-restore', async (req, res) => {
+    const roleCheck = await verifyFirebaseRole(req.headers.authorization);
+    if (!roleCheck.isAdmin) {
+      return res.status(403).json({
+        error: roleCheck.error || 'Chỉ Quản trị viên mới có quyền khôi phục cấu hình Agent AI.',
+      });
+    }
+    try {
+      const record = req.body?.record || req.body || {};
+      restoreAiAgentConfigFromBackup(record);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || 'Không thể khôi phục cấu hình Agent AI.' });
+    }
+  });
+
   app.post('/api/ai/test-provider', async (req, res) => {
     const roleCheck = await verifyFirebaseRole(req.headers.authorization);
     if (!roleCheck.isAdmin) {
@@ -2043,6 +2079,28 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
         error: err?.message || 'Không thể hoàn tất đăng nhập Zalo.',
       });
     }
+  });
+
+  app.all('/api/auth/zalo/poll', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(pollZaloOAuthResult(req));
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể kiểm tra trạng thái đăng nhập Zalo.',
+      });
+    }
+  });
+
+  app.all('/api/auth/zalo/session', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(getZaloSessionFromRequest(req));
+  });
+
+  app.post('/api/auth/zalo/logout', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(logoutZaloSession(req, res));
   });
 
   app.post('/api/auth/zalo/phone', async (req, res) => {

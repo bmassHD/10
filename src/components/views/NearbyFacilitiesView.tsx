@@ -1132,7 +1132,7 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
         </div>
       </div>
 
-      {geoError && (
+      {geoError ? (
         <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs sm:text-sm text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -1148,7 +1148,25 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             </button>
           </div>
         </div>
-      )}
+      ) : origin?.source !== 'gps' && !isLocating ? (
+        <div className="p-4 rounded-2xl bg-blue-50 dark:bg-blue-950/35 border border-blue-200 dark:border-blue-800 text-xs sm:text-sm text-blue-900 dark:text-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <LocateFixed className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+            <span>
+              Tính năng Cơ sở Y tế lân cận cần quyền Vị trí (GPS) để xác định cơ sở gần bạn nhất và tính thời gian di chuyển.
+            </span>
+          </div>
+          <div className="w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => requestGeoLocation(true)}
+              className="w-full sm:w-auto min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center justify-center whitespace-nowrap cursor-pointer"
+            >
+              Cấp quyền Vị trí
+            </button>
+          </div>
+        </div>
+      ) : null}
 
 
 

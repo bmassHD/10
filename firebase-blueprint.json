@@ -47,6 +47,7 @@
         "identityVerifiedFromDatabase": { "type": "boolean" },
         "allowIdentityEditByAdmin": { "type": "boolean" },
         "googleLinked": { "type": "boolean" },
+        "facebookLinked": { "type": "boolean" },
         "zaloLinked": { "type": "boolean" },
         "zaloId": { "type": "string", "maxLength": 128 },
         "zaloName": { "type": "string", "maxLength": 128 },
@@ -104,7 +105,7 @@
         "os": { "type": "string", "maxLength": 64 },
         "browser": { "type": "string", "maxLength": 64 },
         "isTrusted": { "type": "boolean" },
-        "verificationMethod": { "type": "string", "enum": ["password", "google", "zalo", "qr", "biometric", "sms_mfa", "sms_otp", "totp_2fa", "manual"] },
+        "verificationMethod": { "type": "string", "enum": ["password", "google", "facebook", "zalo", "qr", "phone", "anonymous", "play_games", "game_center", "apple", "github", "microsoft", "twitter", "yahoo", "oidc", "saml", "biometric", "sms_mfa", "sms_otp", "totp_2fa", "manual"] },
         "biometricEnabled": { "type": "boolean" },
         "verifiedAt": { "type": "string", "maxLength": 64 },
         "firstSeenAt": { "type": "string", "maxLength": 64 },
@@ -449,8 +450,11 @@
         "socialLinks": { "type": "object", "description": "Social channel links (Facebook, Zalo, TikTok, YouTube)" },
         "maintenanceMode": { "type": "boolean" },
         "maintenanceMessage": { "type": "string", "maxLength": 1000 },
+        "cccdLookupEnabled": { "type": "boolean", "description": "Enable or disable automatic citizen CCCD database lookup" },
         "hiddenTabs": { "type": "array", "description": "Sidebar tab IDs hidden from public visitors" },
         "tabMaintenance": { "type": "object", "description": "Per-tab maintenance toggle map" },
+        "sidebarColors": { "type": "object", "description": "Independent public and admin sidebar group color toggles" },
+        "authProvidersConfig": { "type": "object", "description": "Per-provider enable, disable, or maintenance status configuration" },
         "editorialBoard": { "type": "string", "maxLength": 256 },
         "responsiblePerson": { "type": "string", "maxLength": 256 },
         "copyrightText": { "type": "string", "maxLength": 512 },
@@ -489,11 +493,53 @@
         "storageType": { "type": "string", "enum": ["cloud", "github"] },
         "githubPath": { "type": "string", "maxLength": 512 },
         "githubHtmlUrl": { "type": "string", "maxLength": 1024 },
-        "encoding": { "type": "string", "enum": ["json", "base64"] },
+        "encoding": { "type": "string", "enum": ["json", "base64", "chunked"] },
+        "isChunked": { "type": "boolean" },
+        "chunkCount": { "type": "number" },
         "isAutoBackup": { "type": "boolean" },
         "dataJson": { "type": "string" }
       },
       "required": ["title", "version", "createdAt", "createdBy", "dataJson"]
+    },
+    "BackupChunk": {
+      "title": "BackupChunk",
+      "description": "Ordered serialized chunk belonging to a large Cloud Firestore BackupItem",
+      "type": "object",
+      "properties": {
+        "chunkIndex": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "data": { "type": "string" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["chunkIndex", "totalChunks", "data"]
+    },
+    "BusinessTrip": {
+      "title": "BusinessTrip",
+      "description": "Staff business trips, training, conferences, and off-site duty assignments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "purpose": { "type": "string", "maxLength": 1000 },
+        "destination": { "type": "string", "maxLength": 256 },
+        "startDate": { "type": "string", "maxLength": 32 },
+        "endDate": { "type": "string", "maxLength": 32 },
+        "startTime": { "type": "string", "maxLength": 16 },
+        "endTime": { "type": "string", "maxLength": 16 },
+        "participants": { "type": "array" },
+        "participantNames": { "type": "array" },
+        "department": { "type": "string", "maxLength": 128 },
+        "leaderName": { "type": "string", "maxLength": 128 },
+        "vehicleOrTransport": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["upcoming", "ongoing", "completed", "cancelled"] },
+        "isPublic": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByName": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "destination", "startDate", "endDate", "status", "createdAt", "updatedAt"]
     },
     "TargetedNotification": {
       "title": "TargetedNotification",
@@ -784,6 +830,10 @@
       "schema": { "$ref": "#/entities/WorkSchedule" },
       "description": "Duty roster and schedules"
     },
+    "/businessTrips/{tripId}": {
+      "schema": { "$ref": "#/entities/BusinessTrip" },
+      "description": "Staff business trips, conferences, and off-site missions"
+    },
     "/documents/{documentId}": {
       "schema": { "$ref": "#/entities/DocumentItem" },
       "description": "Official documents and legal guidelines"
@@ -799,6 +849,10 @@
     "/backups/{backupId}": {
       "schema": { "$ref": "#/entities/BackupItem" },
       "description": "System database backups"
+    },
+    "/backups/{backupId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/BackupChunk" },
+      "description": "Chunked payload parts for large Cloud Firestore backups"
     },
     "/targetedNotifications/{notificationId}": {
       "schema": { "$ref": "#/entities/TargetedNotification" },

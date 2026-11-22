@@ -25,6 +25,7 @@ interface HomeNewsCarouselProps {
   loadingRss: boolean;
   onOpenAllNews: (initialTab?: 'api' | 'station') => void;
   onSelectPost: (post: Post) => void;
+  allNewsDisabled?: boolean;
 }
 
 interface NewsSlide {
@@ -54,6 +55,7 @@ interface CarouselRowProps {
   autoScrollOffsetMs?: number;
   onOpenAll: () => void;
   onSelectPost: (post: Post) => void;
+  allDisabled?: boolean;
 }
 
 const CarouselRow: React.FC<CarouselRowProps> = ({
@@ -66,6 +68,7 @@ const CarouselRow: React.FC<CarouselRowProps> = ({
   autoScrollOffsetMs = 0,
   onOpenAll,
   onSelectPost,
+  allDisabled = false,
 }) => {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -190,11 +193,21 @@ const CarouselRow: React.FC<CarouselRowProps> = ({
 
           <button
             type="button"
-            onClick={onOpenAll}
-            className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-xs sm:text-sm font-semibold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+            disabled={allDisabled}
+            aria-disabled={allDisabled || undefined}
+            title={allDisabled ? 'Phân hệ Tin tức đang bảo trì' : undefined}
+            onClick={() => {
+              if (allDisabled) return;
+              onOpenAll();
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
+              allDisabled
+                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 opacity-60 cursor-not-allowed'
+                : 'bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 cursor-pointer'
+            }`}
           >
-            <span>Tất cả</span>
-            <ArrowRight className="w-4 h-4 shrink-0" />
+            <span>{allDisabled ? 'Bảo trì' : 'Tất cả'}</span>
+            {!allDisabled && <ArrowRight className="w-4 h-4 shrink-0" />}
           </button>
         </div>
       </div>
@@ -420,6 +433,7 @@ export const HomeNewsCarousel: React.FC<HomeNewsCarouselProps> = ({
   loadingRss,
   onOpenAllNews,
   onSelectPost,
+  allNewsDisabled = false,
 }) => {
   const apiSlides: NewsSlide[] = useMemo(
     () =>
@@ -478,6 +492,7 @@ export const HomeNewsCarousel: React.FC<HomeNewsCarouselProps> = ({
         autoScrollOffsetMs={0}
         onOpenAll={() => onOpenAllNews('api')}
         onSelectPost={onSelectPost}
+        allDisabled={allNewsDisabled}
       />
 
       {/* Row 2: Station Internal Posts */}
@@ -491,6 +506,7 @@ export const HomeNewsCarousel: React.FC<HomeNewsCarouselProps> = ({
         autoScrollOffsetMs={1800}
         onOpenAll={() => onOpenAllNews('station')}
         onSelectPost={onSelectPost}
+        allDisabled={allNewsDisabled}
       />
     </div>
   );

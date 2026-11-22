@@ -1256,30 +1256,50 @@ export const RichPostEditorModal: React.FC<RichPostEditorModalProps> = ({
                                 Tùy chọn hiển thị bài viết Facebook đã nhúng:
                               </span>
                               <div className="flex flex-wrap items-center gap-4">
-                                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-100 cursor-pointer select-none">
-                                  <input
-                                    type="checkbox"
-                                    checked={fbShowImage}
-                                    onChange={e => {
-                                      const checked = e.target.checked;
-                                      setFbShowImage(checked);
-                                      if (!checked && fbShowText && !fbPostText.trim() && !content.trim() && !fetchingFbMeta) {
+                                <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-100 select-none">
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={fbShowImage}
+                                    aria-label="Hiện ảnh"
+                                    onClick={() => {
+                                      const next = !fbShowImage;
+                                      setFbShowImage(next);
+                                      if (!next && fbShowText && !fbPostText.trim() && !content.trim() && !fetchingFbMeta) {
                                         handleSyncFacebookMetadata();
                                       }
                                     }}
-                                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                  />
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      fbShowImage ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        fbShowImage ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
                                   <span>Hiện ảnh</span>
-                                </label>
-                                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-100 cursor-pointer select-none">
-                                  <input
-                                    type="checkbox"
-                                    checked={fbShowText}
-                                    onChange={e => setFbShowText(e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                  />
+                                </div>
+                                <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-100 select-none">
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={fbShowText}
+                                    aria-label="Hiện nội dung"
+                                    onClick={() => setFbShowText(v => !v)}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      fbShowText ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        fbShowText ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
                                   <span>Hiện nội dung</span>
-                                </label>
+                                </div>
                               </div>
                             </div>
 

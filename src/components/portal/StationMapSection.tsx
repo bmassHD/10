@@ -157,7 +157,7 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
     requestGeoLocation(true);
   }, [userLocation, requestGeoLocation]);
 
-  // Automatically acquire GPS once per session (and always auto-update if already granted)
+  // Acquire GPS silently when already granted; only prompt automatically on dedicated map view (!embedded)
   useEffect(() => {
     let cancelled = false;
 
@@ -179,13 +179,18 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
             return;
           }
           if (status.state === 'denied') {
-            setGeoError('Quyền định vị đang tắt trong cài đặt trình duyệt.');
+            if (!embedded) {
+              setGeoError('Quyền định vị đang tắt trong cài đặt trình duyệt.');
+            }
             return;
           }
         } catch {
           // Permissions API not supported for geolocation -> fall through
         }
       }
+
+      // Never trigger browser geolocation prompt automatically from homepage embedded map
+      if (embedded) return;
 
       if (!alreadyPrompted && !cancelled) {
         requestGeoLocation(false);
@@ -196,7 +201,7 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [requestGeoLocation]);
+  }, [requestGeoLocation, embedded]);
 
   // Refresh GPS automatically on pull-to-refresh event from AppShell
   useEffect(() => {
@@ -427,10 +432,10 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
           )}
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
             {isLocating
-              ? 'Đang tự động xác định vị trí...'
+              ? 'Đang xác định vị trí GPS...'
               : userLocation
-              ? 'Đã định vị tự động · Vuốt xuống để cập nhật'
-              : 'Vuốt xuống để cập nhật vị trí GPS'}
+              ? 'Đã định vị GPS · Vuốt xuống để cập nhật'
+              : 'Bấm "Xem vị trí của tôi" để tính khoảng cách & chỉ đường'}
           </p>
         </div>
 
@@ -464,13 +469,38 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
         </div>
       </div>
 
-      {/* Geolocation notice if blocked */}
-      {geoError && (
-        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs sm:text-sm text-rose-800 dark:text-rose-300 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-          <span>{geoError}</span>
+      {/* Geolocation notice / prompt */}
+      {geoError ? (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs sm:text-sm text-rose-800 dark:text-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{geoError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => requestGeoLocation(true)}
+            className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold whitespace-nowrap self-start sm:self-auto cursor-pointer"
+          >
+            Cấp quyền Vị trí
+          </button>
         </div>
-      )}
+      ) : !embedded && !userLocation && !isLocating ? (
+        <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/35 border border-blue-200 dark:border-blue-800 text-xs sm:text-sm text-blue-900 dark:text-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <LocateFixed className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+            <span>
+              Yêu cầu quyền Vị trí (GPS) để xác định điểm y tế gần bạn nhất và chỉ đường chính xác.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => requestGeoLocation(true)}
+            className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold whitespace-nowrap self-start sm:self-auto cursor-pointer"
+          >
+            Cấp quyền Vị trí
+          </button>
+        </div>
+      ) : null}
 
       {/* Nearest location banner */}
       {nearestLocation && (

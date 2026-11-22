@@ -312,15 +312,22 @@ export const GeminiAiAutomationManager: React.FC<GeminiAiAutomationManagerProps>
                   Khi chọn tệp PDF, Word, Excel hoặc Ảnh trong mục Văn bản &amp; Biểu mẫu, AI tự động trích xuất Số hiệu, Trích yếu, Ngày ban hành, Cơ quan và Tóm tắt.
                 </p>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                <input
-                  type="checkbox"
-                  checked={autoScanOnUpload}
-                  onChange={e => void handleToggleAutomation('autoScanOnUpload', e.target.checked)}
-                  className="sr-only peer"
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoScanOnUpload}
+                aria-label="Tự động đọc và quét văn bản ngay khi tải lên"
+                onClick={() => void handleToggleAutomation('autoScanOnUpload', !autoScanOnUpload)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                  autoScanOnUpload ? 'bg-emerald-600' : 'bg-rose-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                    autoScanOnUpload ? 'translate-x-6' : 'translate-x-1'
+                  }`}
                 />
-                <div className="w-10 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600" />
-              </label>
+              </button>
             </div>
 
             {/* Switch 2 */}
@@ -334,15 +341,22 @@ export const GeminiAiAutomationManager: React.FC<GeminiAiAutomationManagerProps>
                   Tóm tắt ngắn gọn 1–2 câu để hiển thị trong hộp thoại &quot;Xem chi tiết&quot;, giữ bảng danh mục 1 dòng gọn gàng không xuống dòng.
                 </p>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                <input
-                  type="checkbox"
-                  checked={autoExtractSummary}
-                  onChange={e => void handleToggleAutomation('autoExtractSummary', e.target.checked)}
-                  className="sr-only peer"
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoExtractSummary}
+                aria-label="Tự động tạo tóm tắt nội dung văn bản hành chính"
+                onClick={() => void handleToggleAutomation('autoExtractSummary', !autoExtractSummary)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                  autoExtractSummary ? 'bg-emerald-600' : 'bg-rose-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                    autoExtractSummary ? 'translate-x-6' : 'translate-x-1'
+                  }`}
                 />
-                <div className="w-10 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600" />
-              </label>
+              </button>
             </div>
 
             {/* Switch 3 */}
@@ -356,15 +370,22 @@ export const GeminiAiAutomationManager: React.FC<GeminiAiAutomationManagerProps>
                   Phân tích câu hỏi của công dân để định hướng nhanh đến đúng phân hệ (Tiêm chủng, BHYT, Lịch trực 24/7, Bác sĩ cho mọi nhà).
                 </p>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                <input
-                  type="checkbox"
-                  checked={autoSuggestNeeds}
-                  onChange={e => void handleToggleAutomation('autoSuggestNeeds', e.target.checked)}
-                  className="sr-only peer"
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoSuggestNeeds}
+                aria-label="Trợ lý AI gợi ý nhu cầu công dân thông minh"
+                onClick={() => void handleToggleAutomation('autoSuggestNeeds', !autoSuggestNeeds)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                  autoSuggestNeeds ? 'bg-emerald-600' : 'bg-rose-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                    autoSuggestNeeds ? 'translate-x-6' : 'translate-x-1'
+                  }`}
                 />
-                <div className="w-10 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600" />
-              </label>
+              </button>
             </div>
           </div>
         </div>

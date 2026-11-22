@@ -77,6 +77,8 @@ export const LoggedInDevicesPanel: React.FC<LoggedInDevicesPanelProps> = ({
     currentUser,
     verifiedDevices,
     currentDeviceId,
+    currentDeviceTrusted,
+    approveTrustedDevice,
     revokeConcurrentDeviceSession,
     renameVerifiedDevice,
     removeVerifiedDevice,
@@ -188,6 +190,15 @@ export const LoggedInDevicesPanel: React.FC<LoggedInDevicesPanelProps> = ({
       showToast('error', 'Không thể xóa', err?.message);
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  const handleApproveDevice = async (dev: UserVerifiedDevice) => {
+    try {
+      await approveTrustedDevice(dev.deviceId);
+      showToast('success', `Đã duyệt thiết bị ${dev.deviceName}`, 'Thiết bị này sẽ không gây cảnh báo đăng nhập lại.');
+    } catch (err: any) {
+      showToast('error', 'Không thể duyệt thiết bị', err?.message);
     }
   };
 
@@ -320,6 +331,16 @@ export const LoggedInDevicesPanel: React.FC<LoggedInDevicesPanelProps> = ({
                         >
                           {isActiveSession ? 'Hoạt động' : 'Đã kết thúc'}
                         </span>
+                        <span
+                          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 ${
+                            dev.isTrusted
+                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                              : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                          }`}
+                        >
+                          <ShieldCheck className="w-2.5 h-2.5" />
+                          <span>{dev.isTrusted ? 'Đã duyệt' : 'Chưa duyệt'}</span>
+                        </span>
                       </div>
 
                       <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-x-2 gap-y-0.5 flex-wrap">
@@ -343,6 +364,17 @@ export const LoggedInDevicesPanel: React.FC<LoggedInDevicesPanelProps> = ({
 
                   {/* Right: Actions */}
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {!isCurrent && !dev.isTrusted && currentDeviceTrusted && (
+                      <button
+                        type="button"
+                        onClick={() => void handleApproveDevice(dev)}
+                        className="min-h-[36px] px-2.5 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1 transition cursor-pointer"
+                        title="Duyệt thiết bị này vào danh sách tin cậy"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden sm:inline">Duyệt</span>
+                      </button>
+                    )}
                     {isActiveSession && (
                       <button
                         type="button"

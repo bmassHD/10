@@ -66,6 +66,8 @@ import {
   Award,
   Star,
   ArrowLeft,
+  Palette,
+  Briefcase,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -96,7 +98,18 @@ import {
   ServiceRatingCategory,
   LegacyUserSnapshot,
   UserMigrationClaim,
+  AuthProviderId,
+  AuthProviderStatus,
+  AuthProvidersStatusMap,
+  SidebarColorsConfig,
+  BusinessTripConfig,
 } from '../../types';
+import {
+  AUTH_PROVIDER_CATEGORIES,
+  AUTH_PROVIDER_CATALOG,
+  resolveAuthProvidersMap,
+} from '../../constants/authProviders';
+import { AuthProviderIcon } from '../auth/OtherAuthMethodsPanel';
 import {
   updateSystemSettings,
   updateFeedbackResponse,
@@ -145,7 +158,7 @@ import {
 } from '../../services/systemNotificationService';
 import { downloadVaccinationIcs } from '../../utils/calendarUtils';
 import { doc, updateDoc, setDoc, deleteDoc, deleteField, collection, onSnapshot, query, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase/config';
+import { db, firebaseConfig } from '../../firebase/config';
 import { useAuth, PRIMARY_ADMIN_EMAIL, isBootstrapAdminEmail } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { GitHubFileManager } from '../admin/GitHubFileManager';
@@ -160,6 +173,7 @@ import { OrganizationAccountsManager } from '../admin/OrganizationAccountsManage
 import { FirebaseConfigReadonlyCard } from '../admin/FirebaseConfigReadonlyCard';
 import { AppsManager } from '../admin/AppsManager';
 import { AdminDashboardOverview } from '../admin/AdminDashboardOverview';
+import { BusinessTripView } from './BusinessTripView';
 import { buildAdminNavGroups, AdminSubTab as AdminShellSubTab } from '../admin/AdminShell';
 import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 import { StationLogo } from '../common/StationLogo';
@@ -190,7 +204,12 @@ import {
   describeBhxhTuyen,
   getNormalizedBhxhHistoryKcb,
 } from '../../services/bhxhService';
-import { normalizeCccd } from '../../services/orgPersonnelSyncService';
+import {
+  normalizeCccd,
+  getStationDepartmentOptions,
+  resolveDepartmentOptionValue,
+  isNonAdminHealthStaffAccount,
+} from '../../services/orgPersonnelSyncService';
 import {
   normalizeAndValidatePhone,
   buildPhoneLockId,
@@ -236,6 +255,7 @@ const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'dashboard',
   'vaccination_setup',
   'work_holiday_setup',
+  'business_trip_setup',
   'events_setup',
   'notifications',
   'station_setup',
@@ -477,6 +497,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
   // Maintenance & Sidebar Tab Visibility state
   const [maintenanceMode, setMaintenanceMode] = useState<boolean>(!!settings.maintenanceMode);
+  const [cccdLookupEnabled, setCccdLookupEnabled] = useState<boolean>(
+    settings.cccdLookupEnabled !== false
+  );
   const [maintenanceMessage, setMaintenanceMessage] = useState<string>(
     settings.maintenanceMessage ||
       'Hệ thống Cổng thông tin điện tử Trạm Y tế đang được bảo trì, nâng cấp định kỳ. Quý người dân cần hỗ trợ y tế khẩn cấp vui lòng liên hệ trực tiếp số Cấp cứu 24/7 bên dưới.'
@@ -495,6 +518,36 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [tabMaintenance, setTabMaintenance] = useState<Record<string, boolean>>(
     settings.tabMaintenance || {}
   );
+  const [publicSidebarColored, setPublicSidebarColored] = useState<boolean>(
+    Boolean(settings.sidebarColors?.publicEnabled)
+  );
+  const [adminSidebarColored, setAdminSidebarColored] = useState<boolean>(
+    Boolean(settings.sidebarColors?.adminEnabled)
+  );
+  const [authProvidersMap, setAuthProvidersMap] = useState<AuthProvidersStatusMap>(() =>
+    resolveAuthProvidersMap(settings)
+  );
+  const firebaseAuthProvidersUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers`;
+
+  // Business Trip config state
+  const [tripConfigEnabled, setTripConfigEnabled] = useState<boolean>(
+    settings.businessTripConfig?.enabled !== false
+  );
+  const [tripSectionTitle, setTripSectionTitle] = useState<string>(
+    settings.businessTripConfig?.sectionTitle || 'Lịch Công Tác'
+  );
+  const [tripSectionSubtitle, setTripSectionSubtitle] = useState<string>(
+    settings.businessTripConfig?.sectionSubtitle ||
+      'Theo dõi lịch công tác, tập huấn, hội nghị và nhiệm vụ ngoại viện của cán bộ nhân viên Trạm Y tế.'
+  );
+  const [tripDefaultFilter, setTripDefaultFilter] = useState<'active' | 'upcoming' | 'all'>(
+    settings.businessTripConfig?.defaultFilter || 'active'
+  );
+  const [tripHidePastForCitizens, setTripHidePastForCitizens] = useState<boolean>(
+    Boolean(settings.businessTripConfig?.hidePastForCitizens)
+  );
+  const [savingTripConfig, setSavingTripConfig] = useState<boolean>(false);
+
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsConfig>(() =>
     resolveRolePermissions(settings)
   );
@@ -670,11 +723,23 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     setSoftTeamHours(settings.softwareTeamContact?.supportHours || '');
     setSoftTeamNote(settings.softwareTeamContact?.note || '');
     setMaintenanceMode(!!settings.maintenanceMode);
+    setCccdLookupEnabled(settings.cccdLookupEnabled !== false);
     if (settings.maintenanceMessage) {
       setMaintenanceMessage(settings.maintenanceMessage);
     }
     setHiddenTabs(settings.hiddenTabs || []);
     setTabMaintenance(settings.tabMaintenance || {});
+    setPublicSidebarColored(Boolean(settings.sidebarColors?.publicEnabled));
+    setAdminSidebarColored(Boolean(settings.sidebarColors?.adminEnabled));
+    setAuthProvidersMap(resolveAuthProvidersMap(settings));
+    setTripConfigEnabled(settings.businessTripConfig?.enabled !== false);
+    setTripSectionTitle(settings.businessTripConfig?.sectionTitle || 'Lịch Công Tác');
+    setTripSectionSubtitle(
+      settings.businessTripConfig?.sectionSubtitle ||
+        'Theo dõi lịch công tác, tập huấn, hội nghị và nhiệm vụ ngoại viện của cán bộ nhân viên Trạm Y tế.'
+    );
+    setTripDefaultFilter(settings.businessTripConfig?.defaultFilter || 'active');
+    setTripHidePastForCitizens(Boolean(settings.businessTripConfig?.hidePastForCitizens));
     setRolePermissions(resolveRolePermissions(settings));
     if (settings.accessControl) {
       setAccessRules(settings.accessControl.rules || {});
@@ -1472,15 +1537,69 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
   };
 
+  const handleToggleSoftwareTeamImmediate = async () => {
+    const prevEnabled = softTeamEnabled;
+    const nextEnabled = !prevEnabled;
+    setSoftTeamEnabled(nextEnabled);
+    try {
+      const cleanPayload = {
+        enabled: nextEnabled,
+        teamName: softTeamName.trim().slice(0, 200),
+        roleLabel: softTeamRole.trim().slice(0, 200),
+        personName: softTeamPerson.trim().slice(0, 200),
+        phone: softTeamPhone.trim().slice(0, 64),
+        email: softTeamEmail.trim().slice(0, 256),
+        zaloUrl: softTeamZalo.trim().slice(0, 512),
+        facebookUrl: softTeamFacebook.trim().slice(0, 512),
+        websiteUrl: softTeamWebsite.trim().slice(0, 512),
+        supportHours: softTeamHours.trim().slice(0, 200),
+        note: softTeamNote.trim().slice(0, 500),
+      };
+      await updateSystemSettings({
+        softwareTeamContact: cleanPayload,
+        updatedAt: new Date().toISOString(),
+      });
+      await logAuditEvent(
+        nextEnabled ? 'Bật hiển thị Liên hệ Đội ngũ Phần mềm' : 'Ẩn Liên hệ Đội ngũ Phần mềm',
+        'Footer',
+        `Hiển thị công khai: ${nextEnabled ? 'BẬT' : 'TẮT'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        'success',
+        nextEnabled
+          ? 'Đã BẬT hiển thị Liên hệ Đội ngũ Phần mềm'
+          : 'Đã ẨN Liên hệ Đội ngũ Phần mềm'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setSoftTeamEnabled(prevEnabled);
+      showToast('error', 'Cập nhật trạng thái Đội ngũ Phần mềm thất bại', err?.message);
+    }
+  };
+
   const handleSaveSystemControl = async () => {
     setSavingSystemControl(true);
     try {
+      const now = new Date().toISOString();
       await updateSystemSettings({
         maintenanceMode,
         maintenanceMessage: maintenanceMessage.trim(),
         hiddenTabs,
         tabMaintenance,
-        updatedAt: new Date().toISOString(),
+        sidebarColors: {
+          publicEnabled: publicSidebarColored,
+          adminEnabled: adminSidebarColored,
+          updatedAt: now,
+        },
+        authProvidersConfig: {
+          providers: authProvidersMap,
+          updatedAt: now,
+        },
+        updatedAt: now,
       });
       await logAuditEvent(
         'Cập nhật Bảo trì & Hiển thị Tab',
@@ -1573,6 +1692,40 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
   };
 
+  const handleToggleAccessExemptAdminsImmediate = async () => {
+    const prevVal = accessExemptAdmins;
+    const nextVal = !prevVal;
+    setAccessExemptAdmins(nextVal);
+    try {
+      await updateSystemSettings({
+        accessControl: {
+          rules: accessRules,
+          customMessage: accessCustomMessage.trim(),
+          exemptAdmins: nextVal,
+          updatedAt: new Date().toISOString(),
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      await logAuditEvent(
+        nextVal ? 'Bật miễn trừ Quản trị viên khi chặn thiết bị' : 'Tắt miễn trừ Quản trị viên khi chặn thiết bị',
+        'Kiểm soát truy cập',
+        `Miễn trừ Admin: ${nextVal ? 'BẬT' : 'TẮT'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        nextVal ? 'success' : 'warning',
+        nextVal ? 'Đã BẬT miễn trừ Quản trị viên' : 'Đã TẮT miễn trừ Quản trị viên'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setAccessExemptAdmins(prevVal);
+      showToast('error', 'Cập nhật miễn trừ Quản trị viên thất bại', err?.message);
+    }
+  };
+
   const handleSaveBhxhConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
@@ -1661,6 +1814,113 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       onRefreshData();
     } catch (err: any) {
       showToast('error', 'Lưu cấu hình API BHXH thất bại', err?.message);
+    } finally {
+      setSavingBhxhConfig(false);
+    }
+  };
+
+  const handleToggleBhxhSettingImmediate = async (
+    field: 'enabled' | 'autoLookupFacilityName' | 'showHistoryKcb'
+  ) => {
+    if (!isAdmin) {
+      showToast('warning', 'Chỉ Quản trị viên mới có quyền cấu hình API BHXH');
+      return;
+    }
+    if (bhxhLoadingConfig) {
+      showToast('info', 'Đang đồng bộ cấu hình BHXH từ máy chủ, vui lòng đợi...');
+      return;
+    }
+    const cleanBaseUrl = bhxhBaseUrl.trim() || 'https://egw.baohiemxahoi.gov.vn';
+    const cleanUsername = bhxhUsername.trim();
+    const cleanMaCskcb = bhxhDefaultMaCskcb.trim().toUpperCase();
+    const cleanHoTenCb = bhxhDefaultHoTenCb.trim();
+    const cleanCccdCb = bhxhDefaultCccdCb.replace(/\s+/g, '').trim();
+
+    if (cleanCccdCb && !/^\d{12}$/.test(cleanCccdCb)) {
+      showToast('error', 'Số CCCD cán bộ tra cứu (cccdCb) phải gồm đúng 12 chữ số.');
+      return;
+    }
+
+    const prevState = {
+      enabled: bhxhEnabled,
+      autoLookupFacilityName: bhxhAutoLookupFacility,
+      showHistoryKcb: bhxhShowHistoryKcb,
+    };
+    const nextValue = !prevState[field];
+    const nextState = {
+      ...prevState,
+      [field]: nextValue,
+    };
+
+    if (field === 'enabled') setBhxhEnabled(nextValue);
+    if (field === 'autoLookupFacilityName') setBhxhAutoLookupFacility(nextValue);
+    if (field === 'showHistoryKcb') setBhxhShowHistoryKcb(nextValue);
+
+    setSavingBhxhConfig(true);
+    try {
+      const res = await saveBhxhAdminConfig({
+        enabled: nextState.enabled,
+        baseUrl: cleanBaseUrl,
+        lookupEndpoint: bhxhLookupEndpoint,
+        username: cleanUsername,
+        defaultMaCskcb: cleanMaCskcb,
+        defaultHoTenCb: cleanHoTenCb,
+        defaultCccdCb: cleanCccdCb,
+        autoLookupFacilityName: nextState.autoLookupFacilityName,
+        showHistoryKcb: nextState.showHistoryKcb,
+      });
+
+      const cfg = res.config;
+      const maskedUser = cfg.username
+        ? cfg.username.length > 4
+          ? `${cfg.username.slice(0, 2)}***${cfg.username.slice(-2)}`
+          : `${cfg.username.slice(0, 1)}***`
+        : '';
+      const nowIso = new Date().toISOString();
+
+      await updateSystemSettings({
+        bhxhApi: {
+          enabled: cfg.enabled,
+          baseUrl: cfg.baseUrl,
+          lookupEndpoint: cfg.lookupEndpoint,
+          defaultMaCskcb: cfg.defaultMaCskcb,
+          usernameMasked: maskedUser,
+          hasCredentials: Boolean(cfg.username && cfg.hasPassword),
+          hasOfficerInfo: Boolean(cfg.defaultHoTenCb && /^\d{12}$/.test(cfg.defaultCccdCb || '')),
+          autoLookupFacilityName: cfg.autoLookupFacilityName,
+          showHistoryKcb: cfg.showHistoryKcb,
+          updatedAt: nowIso,
+        },
+        updatedAt: nowIso,
+      });
+
+      const fieldLabel =
+        field === 'enabled'
+          ? 'Tra cứu API BHXH'
+          : field === 'autoLookupFacilityName'
+          ? 'Tự động lấy tên CSKCB ban đầu'
+          : 'Hiển thị lịch sử KCB';
+
+      await logAuditEvent(
+        `${nextValue ? 'Bật' : 'Tắt'} ${fieldLabel} (BHXH)`,
+        'API BHXH',
+        `${fieldLabel}: ${nextValue ? 'BẬT' : 'TẮT'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+
+      showToast(
+        nextValue ? 'success' : 'info',
+        nextValue ? `Đã BẬT ${fieldLabel}` : `Đã TẮT ${fieldLabel}`
+      );
+      onRefreshData();
+    } catch (err: any) {
+      if (field === 'enabled') setBhxhEnabled(prevState.enabled);
+      if (field === 'autoLookupFacilityName') setBhxhAutoLookupFacility(prevState.autoLookupFacilityName);
+      if (field === 'showHistoryKcb') setBhxhShowHistoryKcb(prevState.showHistoryKcb);
+      showToast('error', 'Cập nhật cấu hình API BHXH thất bại', err?.message);
     } finally {
       setSavingBhxhConfig(false);
     }
@@ -1862,6 +2122,38 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
   };
 
+  const handleToggleCccdLookupImmediate = async (nextValue: boolean) => {
+    const prevValue = cccdLookupEnabled;
+    setCccdLookupEnabled(nextValue);
+    try {
+      await updateSystemSettings({
+        cccdLookupEnabled: nextValue,
+        updatedAt: new Date().toISOString(),
+      });
+      await logAuditEvent(
+        nextValue
+          ? 'Bật Tra cứu CCCD tự động (Kho dữ liệu dân cư)'
+          : 'Tắt Tra cứu CCCD tự động (Chế độ nhập thủ công bảo mật)',
+        'Bảo mật & Hệ thống',
+        `Tra cứu CCCD: ${nextValue ? 'BẬT' : 'TẮT (Điền thủ công, khóa tự động quét)'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        nextValue ? 'success' : 'warning',
+        nextValue
+          ? 'Đã BẬT tính năng Tra cứu CCCD'
+          : 'Đã TẮT Tra cứu CCCD — Chuyển sang điền thủ công bảo mật'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setCccdLookupEnabled(prevValue);
+      showToast('error', 'Cập nhật cấu hình Tra cứu CCCD thất bại', err?.message);
+    }
+  };
+
   const handleSaveWifiRestriction = async (enabled: boolean, ipsText: string, msg: string) => {
     const prevEnabled = wifiRestrictionEnabled;
     setWifiRestrictionEnabled(enabled);
@@ -1955,6 +2247,186 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     } catch (err: any) {
       setTabMaintenance(prevMap);
       showToast('error', 'Cập nhật bảo trì phân hệ thất bại', err?.message);
+    }
+  };
+
+  const handleToggleSidebarColorImmediate = async (target: 'public' | 'admin') => {
+    const prevPublic = publicSidebarColored;
+    const prevAdmin = adminSidebarColored;
+    const nextPublic = target === 'public' ? !prevPublic : prevPublic;
+    const nextAdmin = target === 'admin' ? !prevAdmin : prevAdmin;
+    setPublicSidebarColored(nextPublic);
+    setAdminSidebarColored(nextAdmin);
+    const now = new Date().toISOString();
+    const nextConfig: SidebarColorsConfig = {
+      publicEnabled: nextPublic,
+      adminEnabled: nextAdmin,
+      updatedAt: now,
+    };
+    try {
+      await updateSystemSettings({
+        sidebarColors: nextConfig,
+        updatedAt: now,
+      });
+      const label = target === 'public' ? 'Sidebar Cổng thông tin' : 'Sidebar Trang Quản trị (Admin)';
+      const isEnabled = target === 'public' ? nextPublic : nextAdmin;
+      await logAuditEvent(
+        'Cập nhật Màu sắc Sidebar',
+        'Hệ thống',
+        `${label}: ${isEnabled ? 'BẬT màu phân nhóm' : 'TẮT (về mặc định)'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        'success',
+        `${label}: ${isEnabled ? 'Đã bật màu sắc phân nhóm' : 'Đã tắt về màu mặc định'}`
+      );
+    } catch (err: any) {
+      setPublicSidebarColored(prevPublic);
+      setAdminSidebarColored(prevAdmin);
+      showToast('error', 'Cập nhật màu sắc Sidebar thất bại', err?.message);
+    }
+  };
+
+  const handleSetAuthProviderStatusImmediate = async (
+    providerId: AuthProviderId,
+    nextStatus: AuthProviderStatus
+  ) => {
+    const prevMap = authProvidersMap;
+    if (prevMap[providerId] === nextStatus) return;
+    const nextMap: AuthProvidersStatusMap = {
+      ...prevMap,
+      [providerId]: nextStatus,
+    };
+    setAuthProvidersMap(nextMap);
+    const now = new Date().toISOString();
+    const providerLabel =
+      AUTH_PROVIDER_CATALOG.find(item => item.id === providerId)?.label || providerId;
+    const statusLabel =
+      nextStatus === 'enabled' ? 'BẬT' : nextStatus === 'maintenance' ? 'BẢO TRÌ' : 'TẮT (ẨN)';
+    try {
+      await updateSystemSettings({
+        authProvidersConfig: {
+          providers: nextMap,
+          updatedAt: now,
+        },
+        updatedAt: now,
+      });
+      await logAuditEvent(
+        'Cập nhật Phương thức Đăng nhập',
+        'Hệ thống',
+        `${providerLabel} (${providerId}) → ${statusLabel}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      if (nextStatus === 'enabled' && providerId !== 'qr') {
+        showToast(
+          'success',
+          `${providerLabel}: Đã chuyển sang ${statusLabel}`,
+          `Lưu ý: Hãy truy cập ${firebaseAuthProvidersUrl} để bật nhà cung cấp này trên Firebase Console.`
+        );
+      } else {
+        showToast('success', `${providerLabel}: Đã chuyển sang ${statusLabel}`);
+      }
+    } catch (err: any) {
+      setAuthProvidersMap(prevMap);
+      showToast('error', 'Cập nhật phương thức đăng nhập thất bại', err?.message);
+    }
+  };
+
+  const handleSaveBusinessTripConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!isAdmin) return;
+    setSavingTripConfig(true);
+    const now = new Date().toISOString();
+    const payload: BusinessTripConfig = {
+      enabled: tripConfigEnabled,
+      sectionTitle: tripSectionTitle.trim() || 'Lịch Công Tác',
+      sectionSubtitle: tripSectionSubtitle.trim(),
+      defaultFilter: tripDefaultFilter,
+      hidePastForCitizens: tripHidePastForCitizens,
+      updatedAt: now,
+    };
+    try {
+      await updateSystemSettings({
+        businessTripConfig: payload,
+        updatedAt: now,
+      });
+      await logAuditEvent(
+        'Cấu hình Lịch Công Tác',
+        'Lịch công tác',
+        `Trạng thái: ${tripConfigEnabled ? 'BẬT' : 'TẮT'} · Bộ lọc: ${tripDefaultFilter} · Ẩn lịch cũ: ${
+          tripHidePastForCitizens ? 'Có' : 'Không'
+        }`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast('success', 'Đã lưu cấu hình Lịch công tác');
+      onRefreshData();
+    } catch (err: any) {
+      showToast('error', 'Lưu cấu hình Lịch công tác thất bại', err?.message);
+    } finally {
+      setSavingTripConfig(false);
+    }
+  };
+
+  const handleToggleBusinessTripFieldImmediate = async (
+    field: 'enabled' | 'hidePastForCitizens'
+  ) => {
+    if (!isAdmin) return;
+    const prevEnabled = tripConfigEnabled;
+    const prevHidePast = tripHidePastForCitizens;
+    const nextEnabled = field === 'enabled' ? !prevEnabled : prevEnabled;
+    const nextHidePast = field === 'hidePastForCitizens' ? !prevHidePast : prevHidePast;
+
+    if (field === 'enabled') setTripConfigEnabled(nextEnabled);
+    if (field === 'hidePastForCitizens') setTripHidePastForCitizens(nextHidePast);
+
+    const now = new Date().toISOString();
+    const payload: BusinessTripConfig = {
+      enabled: nextEnabled,
+      sectionTitle: tripSectionTitle.trim() || 'Lịch Công Tác',
+      sectionSubtitle: tripSectionSubtitle.trim(),
+      defaultFilter: tripDefaultFilter,
+      hidePastForCitizens: nextHidePast,
+      updatedAt: now,
+    };
+
+    try {
+      await updateSystemSettings({
+        businessTripConfig: payload,
+        updatedAt: now,
+      });
+      await logAuditEvent(
+        'Cập nhật nhanh Lịch Công Tác',
+        'Lịch công tác',
+        `Trạng thái: ${nextEnabled ? 'BẬT' : 'TẮT'} · Ẩn lịch cũ: ${nextHidePast ? 'Có' : 'Không'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        'success',
+        field === 'enabled'
+          ? nextEnabled
+            ? 'Đã BẬT hiển thị mục Lịch công tác'
+            : 'Đã TẮT hiển thị mục Lịch công tác'
+          : nextHidePast
+          ? 'Đã BẬT ẩn lịch công tác cũ với người dân'
+          : 'Đã TẮT ẩn lịch công tác cũ với người dân'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setTripConfigEnabled(prevEnabled);
+      setTripHidePastForCitizens(prevHidePast);
+      showToast('error', 'Cập nhật cấu hình Lịch công tác thất bại', err?.message);
     }
   };
 
@@ -2295,6 +2767,69 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
   };
 
+  const handleToggleStartupNoticeImmediate = async (
+    field: 'bannerNoticeEnabled' | 'popupEnabled'
+  ) => {
+    if (!isAdmin) {
+      showToast('warning', 'Chỉ Quản trị viên mới có quyền cấu hình Thông báo bình thường');
+      return;
+    }
+    const prevBanner = bannerNoticeEnabled;
+    const prevPopup = popupEnabled;
+    const nextBanner = field === 'bannerNoticeEnabled' ? !prevBanner : prevBanner;
+    const nextPopup = field === 'popupEnabled' ? !prevPopup : prevPopup;
+
+    if (field === 'bannerNoticeEnabled') setBannerNoticeEnabled(nextBanner);
+    if (field === 'popupEnabled') setPopupEnabled(nextPopup);
+
+    try {
+      const nowIso = new Date().toISOString();
+      const startupPopupPayload: StartupPopupConfig = {
+        enabled: nextPopup,
+        noticeType: popupNoticeType,
+        title: popupTitle.trim() || 'Thông báo từ Trạm Y Tế',
+        message: popupMessage.trim(),
+        includeTopVaccination: false,
+        ctaView: popupCtaView,
+        ctaLabel: popupCtaLabel.trim(),
+        frequency: popupFrequency,
+        updatedAt: nowIso,
+      };
+      await updateSystemSettings({
+        bannerNotice: bannerNotice.trim(),
+        bannerNoticeEnabled: nextBanner,
+        startupPopup: startupPopupPayload,
+        updatedAt: nowIso,
+      });
+      await logAuditEvent(
+        field === 'bannerNoticeEnabled'
+          ? `${nextBanner ? 'Bật' : 'Tắt'} Banner thông báo bình thường`
+          : `${nextPopup ? 'Bật' : 'Tắt'} Pop-up thông báo bình thường`,
+        'Tiêm chủng & Thông báo',
+        `Banner: ${nextBanner ? 'BẬT' : 'TẮT'} • Pop-up: ${nextPopup ? 'BẬT' : 'TẮT'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        'success',
+        field === 'bannerNoticeEnabled'
+          ? nextBanner
+            ? 'Đã BẬT thanh thông báo đầu trang'
+            : 'Đã TẮT thanh thông báo đầu trang'
+          : nextPopup
+          ? 'Đã BẬT Pop-up thông báo bình thường'
+          : 'Đã TẮT Pop-up thông báo bình thường'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setBannerNoticeEnabled(prevBanner);
+      setPopupEnabled(prevPopup);
+      showToast('error', 'Cập nhật thông báo bình thường thất bại', err?.message);
+    }
+  };
+
   const handleSaveVaccinationPopup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
@@ -2333,6 +2868,66 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       showToast('error', 'Lưu thông báo tiêm chủng thất bại', err?.message);
     } finally {
       setSavingVacPopup(false);
+    }
+  };
+
+  const handleToggleVaccinationNoticeImmediate = async (
+    field: 'vacBannerEnabled' | 'vacPopupEnabled'
+  ) => {
+    if (!isAdmin) {
+      showToast('warning', 'Chỉ Quản trị viên mới có quyền cấu hình Thông báo Tiêm chủng');
+      return;
+    }
+    const prevVacBanner = vacBannerEnabled;
+    const prevVacPopup = vacPopupEnabled;
+    const nextVacBanner = field === 'vacBannerEnabled' ? !prevVacBanner : prevVacBanner;
+    const nextVacPopup = field === 'vacPopupEnabled' ? !prevVacPopup : prevVacPopup;
+
+    if (field === 'vacBannerEnabled') setVacBannerEnabled(nextVacBanner);
+    if (field === 'vacPopupEnabled') setVacPopupEnabled(nextVacPopup);
+
+    try {
+      const nowIso = new Date().toISOString();
+      const vaccinationPopupPayload: VaccinationStartupPopupConfig = {
+        enabled: nextVacPopup,
+        title: vacPopupTitle.trim() || 'Thông Báo Tiêm Chủng',
+        message: vacPopupMessage.trim(),
+        ctaLabel: vacPopupCtaLabel.trim() || 'Xem lịch tiêm chủng',
+        frequency: vacPopupFrequency,
+        updatedAt: nowIso,
+      };
+      await updateSystemSettings({
+        vaccinationBannerEnabled: nextVacBanner,
+        vaccinationBannerNote: vacBannerNote.trim(),
+        vaccinationPopup: vaccinationPopupPayload,
+        updatedAt: nowIso,
+      });
+      await logAuditEvent(
+        field === 'vacBannerEnabled'
+          ? `${nextVacBanner ? 'Bật' : 'Tắt'} thanh đếm ngược Tiêm chủng đầu trang`
+          : `${nextVacPopup ? 'Bật' : 'Tắt'} Pop-up Tiêm chủng khi mở trang`,
+        'Tiêm chủng & Thông báo',
+        `Banner tiêm chủng: ${nextVacBanner ? 'BẬT' : 'TẮT'} • Pop-up tiêm chủng: ${nextVacPopup ? 'BẬT' : 'TẮT'}`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast(
+        'success',
+        field === 'vacBannerEnabled'
+          ? nextVacBanner
+            ? 'Đã BẬT thanh đếm ngược Tiêm chủng đầu trang'
+            : 'Đã TẮT thanh đếm ngược Tiêm chủng đầu trang'
+          : nextVacPopup
+          ? 'Đã BẬT Pop-up Tiêm chủng khi mở trang'
+          : 'Đã TẮT Pop-up Tiêm chủng khi mở trang'
+      );
+      onRefreshData();
+    } catch (err: any) {
+      setVacBannerEnabled(prevVacBanner);
+      setVacPopupEnabled(prevVacPopup);
+      showToast('error', 'Cập nhật thông báo tiêm chủng thất bại', err?.message);
     }
   };
 
@@ -3283,6 +3878,141 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         />
       )}
 
+      {/* Subtab: Business Trip Configuration & Schedule Management */}
+      {subTab === 'business_trip_setup' && (
+        <div className="space-y-6">
+          <form
+            onSubmit={handleSaveBusinessTripConfig}
+            className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 text-xs"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="space-y-0.5">
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Briefcase className="w-5 h-5 text-emerald-600" />
+                  <span>Cấu hình hiển thị Lịch công tác (Trang công khai)</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Điều chỉnh tiêu đề, bộ lọc mặc định và bật/tắt mục Lịch công tác trên thanh menu cổng thông tin.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <span
+                  className={`text-xs font-bold ${
+                    tripConfigEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {tripConfigEnabled ? 'Đang bật' : 'Đang tắt'}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={tripConfigEnabled}
+                  aria-label="Bật hoặc tắt hiển thị Lịch công tác"
+                  onClick={() => void handleToggleBusinessTripFieldImmediate('enabled')}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    tripConfigEnabled ? 'bg-emerald-600' : 'bg-rose-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                      tripConfigEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Tiêu đề mục Lịch công tác
+                </label>
+                <input
+                  type="text"
+                  value={tripSectionTitle}
+                  onChange={e => setTripSectionTitle(e.target.value)}
+                  placeholder="Lịch Công Tác"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Bộ lọc mặc định khi mở trang
+                </label>
+                <select
+                  value={tripDefaultFilter}
+                  onChange={e => setTripDefaultFilter(e.target.value as 'active' | 'upcoming' | 'all')}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
+                >
+                  <option value="active">Đang công tác</option>
+                  <option value="upcoming">Sắp đi công tác</option>
+                  <option value="all">Tất cả lịch</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-800 dark:text-slate-100">
+                    Ẩn lịch cũ với người dân
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Chỉ hiện chuyến đang/sắp diễn ra
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={tripHidePastForCitizens}
+                  aria-label="Ẩn lịch công tác đã kết thúc đối với người dân"
+                  onClick={() => void handleToggleBusinessTripFieldImmediate('hidePastForCitizens')}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    tripHidePastForCitizens ? 'bg-emerald-600' : 'bg-rose-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                      tripHidePastForCitizens ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Mô tả phụ hiển thị đầu trang
+              </label>
+              <input
+                type="text"
+                value={tripSectionSubtitle}
+                onChange={e => setTripSectionSubtitle(e.target.value)}
+                placeholder="Theo dõi lịch công tác, tập huấn, hội nghị và nhiệm vụ ngoại viện của cán bộ nhân viên Trạm Y tế."
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="submit"
+                disabled={savingTripConfig}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 transition shadow-xs"
+              >
+                {savingTripConfig ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>Lưu cấu hình công tác</span>
+              </button>
+            </div>
+          </form>
+
+          <BusinessTripView userProfiles={users} settings={settings} />
+        </div>
+      )}
+
       {/* Subtab 0: Vaccination Schedule Setup (Tin Tức Quan Trọng Hàng Đầu) */}
       {subTab === 'vaccination_setup' && (
         <div className="space-y-6">
@@ -3509,29 +4239,49 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     {/* Inline Controls Bar */}
                     <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
                       <div className="flex flex-wrap items-center gap-4">
-                        <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
-                          <input
-                            type="checkbox"
+                        <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={!!item.isPinned}
+                            aria-label="Ghim đầu trang"
                             disabled={savingVaccination}
-                            checked={!!item.isPinned}
-                            onChange={() => handleTogglePinVaccination(item.id)}
-                            className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
-                          />
+                            onClick={() => handleTogglePinVaccination(item.id)}
+                            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
+                              item.isPinned ? 'bg-emerald-600' : 'bg-rose-600'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                item.isPinned ? 'translate-x-4.5' : 'translate-x-0.5'
+                              }`}
+                            />
+                          </button>
                           <Pin className="w-3.5 h-3.5 text-rose-600" />
                           <span>Ghim đầu trang</span>
-                        </label>
+                        </div>
 
-                        <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
-                          <input
-                            type="checkbox"
+                        <div className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={item.isActive !== false}
+                            aria-label={isHidden ? 'Đang ẩn' : 'Đang công khai'}
                             disabled={savingVaccination}
-                            checked={item.isActive !== false}
-                            onChange={() => handleToggleActiveVaccination(item.id)}
-                            className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                          />
-                          {isHidden ? <EyeOff className="w-3.5 h-3.5 text-slate-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-600" />}
+                            onClick={() => handleToggleActiveVaccination(item.id)}
+                            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
+                              item.isActive !== false ? 'bg-emerald-600' : 'bg-rose-600'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                item.isActive !== false ? 'translate-x-4.5' : 'translate-x-0.5'
+                              }`}
+                            />
+                          </button>
+                          {isHidden ? <EyeOff className="w-3.5 h-3.5 text-rose-500" /> : <Eye className="w-3.5 h-3.5 text-emerald-600" />}
                           <span>{isHidden ? 'Đang ẩn' : 'Đang công khai'}</span>
-                        </label>
+                        </div>
                       </div>
 
                       <button
@@ -3633,9 +4383,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     role="switch"
                     aria-checked={bannerNoticeEnabled}
                     aria-label="Bật hoặc tắt thanh thông báo đầu trang bình thường"
-                    onClick={() => setBannerNoticeEnabled(v => !v)}
+                    onClick={() => void handleToggleStartupNoticeImmediate('bannerNoticeEnabled')}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      bannerNoticeEnabled ? 'bg-amber-600' : 'bg-slate-300 dark:bg-slate-700'
+                      bannerNoticeEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -3671,9 +4421,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     role="switch"
                     aria-checked={popupEnabled}
                     aria-label="Bật hoặc tắt hộp thoại Pop-up thông báo bình thường"
-                    onClick={() => setPopupEnabled(v => !v)}
+                    onClick={() => void handleToggleStartupNoticeImmediate('popupEnabled')}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      popupEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                      popupEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -3855,9 +4605,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     role="switch"
                     aria-checked={vacBannerEnabled}
                     aria-label="Bật hoặc tắt thanh đếm ngược Tiêm chủng đầu trang"
-                    onClick={() => setVacBannerEnabled(v => !v)}
+                    onClick={() => void handleToggleVaccinationNoticeImmediate('vacBannerEnabled')}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      vacBannerEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                      vacBannerEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -3893,9 +4643,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     role="switch"
                     aria-checked={vacPopupEnabled}
                     aria-label="Bật hoặc tắt hộp thoại Pop-up Tiêm chủng khi mở trang"
-                    onClick={() => setVacPopupEnabled(v => !v)}
+                    onClick={() => void handleToggleVaccinationNoticeImmediate('vacPopupEnabled')}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      vacPopupEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                      vacPopupEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -5039,17 +5789,27 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 </p>
               </div>
 
-              <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 cursor-pointer shrink-0">
-                <input
-                  type="checkbox"
-                  checked={softTeamEnabled}
-                  onChange={e => setSoftTeamEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                />
+              <div className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={softTeamEnabled}
+                  aria-label="Bật hoặc tắt hiển thị liên hệ Đội ngũ Phần mềm"
+                  onClick={() => void handleToggleSoftwareTeamImmediate()}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    softTeamEnabled ? 'bg-emerald-600' : 'bg-rose-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                      softTeamEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
                 <span className="font-semibold text-slate-700 dark:text-slate-200">
                   {softTeamEnabled ? 'Đang hiển thị công khai' : 'Đang ẩn'}
                 </span>
-              </label>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5814,22 +6574,38 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                             : 'Tài khoản chưa khóa CCCD. Bật để chủ động cho phép chỉnh sửa toàn bộ ngay cả khi xác minh.'}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setEditingUser({
-                            ...editingUser,
-                            allowIdentityEditByAdmin: !editingUser.allowIdentityEditByAdmin,
-                          })
-                        }
-                        className={`px-3 py-1.5 rounded-xl text-[11px] font-bold shrink-0 transition cursor-pointer border ${
-                          editingUser.allowIdentityEditByAdmin
-                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600'
-                            : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
-                        }`}
-                      >
-                        {editingUser.allowIdentityEditByAdmin ? 'Đang MỞ (Bấm để Khóa)' : 'Đang KHÓA (Bấm để Mở)'}
-                      </button>
+                      <div className="inline-flex items-center gap-2 shrink-0">
+                        <span
+                          className={`text-[11px] font-bold ${
+                            editingUser.allowIdentityEditByAdmin
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-rose-600 dark:text-rose-400'
+                          }`}
+                        >
+                          {editingUser.allowIdentityEditByAdmin ? 'Đang MỞ' : 'Đang KHÓA'}
+                        </span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!!editingUser.allowIdentityEditByAdmin}
+                          aria-label="Cho phép người dùng tự chỉnh sửa thông tin định danh"
+                          onClick={() =>
+                            setEditingUser({
+                              ...editingUser,
+                              allowIdentityEditByAdmin: !editingUser.allowIdentityEditByAdmin,
+                            })
+                          }
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                            editingUser.allowIdentityEditByAdmin ? 'bg-emerald-600' : 'bg-rose-600'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                              editingUser.allowIdentityEditByAdmin ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -5873,13 +6649,47 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       Khoa / Phòng / Đơn vị phụ trách
                     </label>
-                    <input
-                      type="text"
-                      value={editingUser.department || ''}
-                      onChange={e => setEditingUser({ ...editingUser, department: e.target.value })}
-                      placeholder="Khoa Khám bệnh, Tổ Tiêm chủng..."
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
+                    {isNonAdminHealthStaffAccount(editingUser.accountType, editingUser.role) ? (
+                      (() => {
+                        const deptOptions = getStationDepartmentOptions(
+                          settings.orgChart,
+                          editingUser.department
+                        );
+                        const selectedDeptValue = resolveDepartmentOptionValue(
+                          editingUser.department,
+                          deptOptions
+                        );
+                        return (
+                          <>
+                            <select
+                              value={selectedDeptValue}
+                              onChange={e =>
+                                setEditingUser({ ...editingUser, department: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                            >
+                              <option value="">-- Chọn Khoa / Phòng / Đơn vị thuộc Trạm --</option>
+                              {deptOptions.map(opt => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1">
+                              Chọn trực tiếp từ danh sách Khoa / Phòng thuộc nhân lực của Trạm Y tế.
+                            </p>
+                          </>
+                        );
+                      })()
+                    ) : (
+                      <input
+                        type="text"
+                        value={editingUser.department || ''}
+                        onChange={e => setEditingUser({ ...editingUser, department: e.target.value })}
+                        placeholder="Khoa Khám bệnh, Tổ Tiêm chủng..."
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -6513,12 +7323,44 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   </div>
                   <div>
                     <label className="block font-semibold mb-1">Khoa / Phòng</label>
-                    <input
-                      type="text"
-                      value={claimEditValues.department}
-                      onChange={e => setClaimEditValues(p => ({ ...p, department: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    />
+                    {isNonAdminHealthStaffAccount(
+                      claimEditValues.accountType,
+                      claimEditValues.role
+                    ) ? (
+                      (() => {
+                        const deptOptions = getStationDepartmentOptions(
+                          settings.orgChart,
+                          claimEditValues.department
+                        );
+                        const selectedDeptValue = resolveDepartmentOptionValue(
+                          claimEditValues.department,
+                          deptOptions
+                        );
+                        return (
+                          <select
+                            value={selectedDeptValue}
+                            onChange={e =>
+                              setClaimEditValues(p => ({ ...p, department: e.target.value }))
+                            }
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                          >
+                            <option value="">-- Chọn Khoa / Phòng / Đơn vị thuộc Trạm --</option>
+                            {deptOptions.map(opt => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      })()
+                    ) : (
+                      <input
+                        type="text"
+                        value={claimEditValues.department}
+                        onChange={e => setClaimEditValues(p => ({ ...p, department: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      />
+                    )}
                   </div>
                   <div>
                     <label className="block font-semibold mb-1">Chức vụ</label>
@@ -7620,11 +8462,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   <span
                     className={`text-[11px] font-bold ${
                       maintenanceMode
-                        ? 'text-amber-700 dark:text-amber-300'
-                        : 'text-slate-600 dark:text-slate-400'
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-rose-600 dark:text-rose-400'
                     }`}
                   >
-                    {maintenanceMode ? 'Bảo trì' : 'Hoạt động'}
+                    {maintenanceMode ? 'Đang bật bảo trì' : 'Đang tắt'}
                   </span>
                   <button
                     type="button"
@@ -7633,7 +8475,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     aria-label="Bật hoặc tắt chế độ bảo trì toàn bộ Cổng thông tin"
                     onClick={() => void handleToggleMaintenanceImmediate(!maintenanceMode)}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      maintenanceMode ? 'bg-amber-600' : 'bg-slate-300 dark:bg-slate-700'
+                      maintenanceMode ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -7659,6 +8501,49 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </div>
             </div>
 
+            {/* Citizen CCCD Lookup Security Toggle */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/70 space-y-2.5 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-bold text-sky-950 dark:text-sky-200 text-sm flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                    <span>Tra cứu CCCD (Bảo mật dữ liệu dân cư)</span>
+                  </div>
+                  <p className="text-[11px] text-sky-900/80 dark:text-sky-300/80 leading-relaxed">
+                    Khi <strong>Bật</strong>, người dùng nhập 10 hoặc 12 số CCCD sẽ tự động quét/tra cứu đối chiếu từ kho dữ liệu dân cư. Khi <strong>Tắt</strong>, hệ thống khóa hoàn toàn API tra cứu &amp; không tự động quét — người dùng tự điền thông tin thủ công để đảm bảo an toàn bảo mật tệp dữ liệu người dân.
+                  </p>
+                </div>
+
+                <div className="inline-flex items-center gap-2.5 shrink-0 select-none">
+                  <span
+                    className={`text-[11px] font-bold ${
+                      cccdLookupEnabled
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {cccdLookupEnabled ? 'Đang bật tra cứu' : 'Đã tắt (Điền thủ công)'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={cccdLookupEnabled}
+                    aria-label="Bật hoặc tắt tính năng tra cứu CCCD từ dữ liệu dân cư"
+                    onClick={() => void handleToggleCccdLookupImmediate(!cccdLookupEnabled)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      cccdLookupEnabled ? 'bg-emerald-600' : 'bg-rose-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        cccdLookupEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* WiFi IP Restriction Configuration */}
             <div className="p-4 sm:p-5 rounded-2xl bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800/70 space-y-3 text-xs">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -7675,8 +8560,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   <span
                     className={`text-[11px] font-bold ${
                       wifiRestrictionEnabled
-                        ? 'text-teal-700 dark:text-teal-300'
-                        : 'text-slate-600 dark:text-slate-400'
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-rose-600 dark:text-rose-400'
                     }`}
                   >
                     {wifiRestrictionEnabled ? 'Đang bật' : 'Đã tắt'}
@@ -7687,7 +8572,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     aria-checked={wifiRestrictionEnabled}
                     onClick={() => void handleSaveWifiRestriction(!wifiRestrictionEnabled, wifiAllowedIpsText, wifiRestrictionMessage)}
                     className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      wifiRestrictionEnabled ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'
+                      wifiRestrictionEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -7827,7 +8712,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                         aria-label={`Vô hiệu hóa truy cập ${item.shortLabel}`}
                         onClick={() => void handleToggleAccessRuleImmediate(item.key, item.shortLabel)}
                         className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                          isDisabledAccess ? 'bg-rose-600' : 'bg-slate-300 dark:bg-slate-700'
+                          isDisabledAccess ? 'bg-emerald-600' : 'bg-rose-600'
                         }`}
                       >
                         <span
@@ -7900,9 +8785,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                         type="button"
                         role="switch"
                         aria-checked={accessExemptAdmins}
-                        onClick={() => setAccessExemptAdmins(v => !v)}
+                        onClick={() => void handleToggleAccessExemptAdminsImmediate()}
                         className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                          accessExemptAdmins ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                          accessExemptAdmins ? 'bg-emerald-600' : 'bg-rose-600'
                         }`}
                       >
                         <span
@@ -8116,23 +9001,33 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                             .map(flag => {
                               const checked = Boolean(currentPolicy[flag.key]);
                               return (
-                                <label
+                                <div
                                   key={flag.key}
-                                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer text-xs"
+                                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 text-xs"
                                 >
                                   <span className="font-semibold text-slate-700 dark:text-slate-200">{flag.label}</span>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={checked}
+                                    aria-label={flag.label}
+                                    onClick={() =>
                                       updateEditablePolicy(
                                         prev => ({ ...prev, [flag.key]: !checked }),
                                         `${activeRoleConfigTab} · ${flag.label}: ${!checked ? 'Bật' : 'Tắt'}`
                                       )
                                     }
-                                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-                                  />
-                                </label>
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      checked ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        checked ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
                               );
                             })}
                         </div>
@@ -8146,29 +9041,39 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                               Chỉ định chức năng / site bắt buộc Khách phải đăng nhập mới sử dụng được:
                             </div>
                             <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
-                              Các tab được tick sẽ hiển thị nhãn “Đăng nhập” trên Sidebar; khi Khách bấm vào sẽ yêu cầu đăng nhập tài khoản trước khi sử dụng.
+                              Các tab được bật công tắc sẽ hiển thị nhãn “Đăng nhập” trên Sidebar; khi Khách bấm vào sẽ yêu cầu đăng nhập tài khoản trước khi sử dụng.
                             </p>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                             {CONTROLLABLE_SIDEBAR_TABS.filter(t => t.id !== 'portal').map(tab => {
                               const required = Boolean(currentPolicy.requireLoginForTabs?.includes(tab.id));
                               return (
-                                <label
+                                <div
                                   key={`req_${tab.id}`}
-                                  className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                  className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs transition ${
                                     required
                                       ? 'bg-amber-100/80 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 text-amber-950 dark:text-amber-200 font-bold'
                                       : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                                   }`}
                                 >
                                   <span className="truncate">{tab.label}</span>
-                                  <input
-                                    type="checkbox"
-                                    checked={required}
-                                    onChange={() => toggleArrayField('requireLoginForTabs', tab.id, tab.label)}
-                                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 shrink-0"
-                                  />
-                                </label>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={required}
+                                    aria-label={`Yêu cầu đăng nhập cho ${tab.label}`}
+                                    onClick={() => toggleArrayField('requireLoginForTabs', tab.id, tab.label)}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      required ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        required ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
                               );
                             })}
                           </div>
@@ -8184,22 +9089,32 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           {CONTROLLABLE_SIDEBAR_TABS.filter(t => t.id !== 'portal').map(tab => {
                             const blocked = Boolean(currentPolicy.blockedTabs?.includes(tab.id));
                             return (
-                              <label
+                              <div
                                 key={`blk_${tab.id}`}
-                                className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs transition ${
                                   blocked
                                     ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 font-bold'
                                     : 'bg-slate-50/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                                 }`}
                               >
                                 <span className="truncate">{tab.label}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={blocked}
-                                  onChange={() => toggleArrayField('blockedTabs', tab.id, tab.label)}
-                                  className="w-4 h-4 rounded text-rose-600 focus:ring-rose-500 shrink-0"
-                                />
-                              </label>
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={blocked}
+                                  aria-label={`Ẩn hoặc chặn ${tab.label}`}
+                                  onClick={() => toggleArrayField('blockedTabs', tab.id, tab.label)}
+                                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                    blocked ? 'bg-emerald-600' : 'bg-rose-600'
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                      blocked ? 'translate-x-4.5' : 'translate-x-0.5'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -8209,6 +9124,321 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 </div>
               );
             })()}
+
+            {/* Sidebar Color Configuration (Public vs Admin independent) */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Palette className="w-4 h-4 text-emerald-600" />
+                    <span>Cấu hình Màu sắc Sidebar (Riêng biệt Thông thường &amp; Admin)</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Khi mở, mỗi nhóm tab lớn trên thanh Sidebar sẽ hiển thị gam màu riêng biệt; khi tắt, giao diện trở về màu mặc định ban đầu.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div
+                  className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition ${
+                    publicSidebarColored
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="font-bold text-slate-900 dark:text-white">
+                      Sidebar Cổng Thông Tin (Thông thường)
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {publicSidebarColored
+                        ? 'Đang bật màu sắc phân biệt theo từng nhóm tab.'
+                        : 'Đang tắt — sử dụng giao diện màu mặc định ban đầu.'}
+                    </p>
+                    <div className="flex items-center gap-1 pt-0.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" title="Tổng quan" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-sky-500" title="Lịch & Tin" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-teal-500" title="Bản đồ" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-violet-500" title="Công dân" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500" title="Truyền thông" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500" title="Hệ thống" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${
+                        publicSidebarColored
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                      }`}
+                    >
+                      {publicSidebarColored ? 'Mở màu' : 'Mặc định'}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={publicSidebarColored}
+                      aria-label="Bật hoặc tắt màu sắc Sidebar Cổng thông tin"
+                      onClick={() => void handleToggleSidebarColorImmediate('public')}
+                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                        publicSidebarColored ? 'bg-emerald-600' : 'bg-rose-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                          publicSidebarColored ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition ${
+                    adminSidebarColored
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="font-bold text-slate-900 dark:text-white">
+                      Sidebar Trang Quản Trị (Admin)
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {adminSidebarColored
+                        ? 'Đang bật màu sắc phân biệt cho từng nhóm quản trị.'
+                        : 'Đang tắt — sử dụng giao diện màu mặc định ban đầu.'}
+                    </p>
+                    <div className="flex items-center gap-1 pt-0.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" title="Tổng quan" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-sky-500" title="Vận hành" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500" title="Lịch công tác" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-teal-500" title="Nhân sự" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-violet-500" title="Công dân" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" title="Sao lưu" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500" title="Hệ thống" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${
+                        adminSidebarColored
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                      }`}
+                    >
+                      {adminSidebarColored ? 'Mở màu' : 'Mặc định'}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={adminSidebarColored}
+                      aria-label="Bật hoặc tắt màu sắc Sidebar Admin"
+                      onClick={() => void handleToggleSidebarColorImmediate('admin')}
+                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                        adminSidebarColored ? 'bg-emerald-600' : 'bg-rose-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                          adminSidebarColored ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Authentication Providers Enable / Disable / Maintenance Matrix */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-4">
+              {(() => {
+                const values = Object.values(authProvidersMap);
+                const enabledCount = values.filter(v => v === 'enabled').length;
+                const maintCount = values.filter(v => v === 'maintenance').length;
+                const disabledCount = values.filter(v => v === 'disabled').length;
+                return (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                        <KeyRound className="w-4 h-4 text-emerald-600" />
+                        <span>Cấu hình Nhà cung cấp &amp; Phương thức Đăng nhập ({AUTH_PROVIDER_CATALOG.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Bật để hiển thị trên cổng đăng nhập; Tắt để ẩn hoàn toàn; Bảo trì để vẫn hiển thị nhưng làm mờ và khóa không cho bấm.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold shrink-0">
+                      <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                        Bật: {enabledCount}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                        Bảo trì: {maintCount}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                        Tắt: {disabledCount}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="font-bold text-amber-950 dark:text-amber-200">
+                      Nhắc nhở quan trọng khi Bật nhà cung cấp đăng nhập
+                    </div>
+                    <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                      Khi bật các phương thức (Google, Facebook, Phone, Email/Mật khẩu, GitHub, Microsoft...), vui lòng truy cập <strong>Firebase Authentication → Phương thức đăng nhập (Sign-in method)</strong> để bật kích hoạt tương ứng trên Firebase Console.
+                    </p>
+                    <div className="font-mono text-[10px] text-amber-700 dark:text-amber-400 truncate">
+                      {firebaseAuthProvidersUrl}
+                    </div>
+                  </div>
+                </div>
+                <a
+                  href={firebaseAuthProvidersUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] inline-flex items-center gap-1.5 shrink-0 transition shadow-xs whitespace-nowrap"
+                >
+                  <span>Mở Firebase Sign-in Providers</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+
+              <div className="space-y-4">
+                {AUTH_PROVIDER_CATEGORIES.map(category => {
+                  const items = AUTH_PROVIDER_CATALOG.filter(i => i.category === category.id);
+                  return (
+                    <div key={category.id} className="space-y-2">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2 px-1">
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                          {category.title} ({items.length})
+                        </span>
+                        <span className="text-[11px] text-slate-400">{category.subtitle}</span>
+                      </div>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 text-xs">
+                        {items.map(item => {
+                          const status = authProvidersMap[item.id];
+                          const isEnabled = status !== 'disabled';
+                          const isMaintenance = status === 'maintenance';
+                          return (
+                            <div
+                              key={item.id}
+                              className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                                status === 'enabled'
+                                  ? 'bg-white dark:bg-slate-900 border-emerald-200/80 dark:border-emerald-800/60 shadow-xs'
+                                  : status === 'maintenance'
+                                  ? 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-300/80 dark:border-amber-800/70'
+                                  : 'bg-slate-100/80 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 opacity-80'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0">
+                                  <AuthProviderIcon providerId={item.id} />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-900 dark:text-white truncate">
+                                      {item.label}
+                                    </span>
+                                    {status === 'enabled' ? (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                                        Hoạt động
+                                      </span>
+                                    ) : status === 'maintenance' ? (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
+                                        Bảo trì
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
+                                        Đã tắt (Ẩn)
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                    {item.description}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                                {/* Công tắc Bật/Tắt chính */}
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-slate-100/80 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                                  <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                                    {isEnabled ? (
+                                      <span className="text-emerald-700 dark:text-emerald-400">Bật</span>
+                                    ) : (
+                                      <span className="text-rose-600 dark:text-rose-400">Tắt</span>
+                                    )}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={isEnabled}
+                                    aria-label={`Bật hoặc tắt phương thức ${item.label}`}
+                                    onClick={() => {
+                                      const next = isEnabled ? 'disabled' : (isMaintenance ? 'maintenance' : 'enabled');
+                                      void handleSetAuthProviderStatusImmediate(item.id, next);
+                                    }}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      isEnabled ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+
+                                {/* Công tắc Bảo trì hoạt động riêng */}
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-slate-100/80 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                                  <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                                    Bảo trì:
+                                  </span>
+                                  <span className="text-[11px] font-bold">
+                                    {isMaintenance ? (
+                                      <span className="text-emerald-700 dark:text-emerald-400">Bật</span>
+                                    ) : (
+                                      <span className="text-rose-600 dark:text-rose-400">Tắt</span>
+                                    )}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={isMaintenance}
+                                    aria-label={`Bật hoặc tắt chế độ bảo trì cho ${item.label}`}
+                                    onClick={() => {
+                                      const next = isMaintenance ? 'enabled' : 'maintenance';
+                                      void handleSetAuthProviderStatusImmediate(item.id, next);
+                                    }}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                      isMaintenance ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                        isMaintenance ? 'translate-x-4.5' : 'translate-x-0.5'
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Per-Tab Visibility & Maintenance Table */}
             <div className="space-y-3">
@@ -8243,32 +9473,58 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           </td>
                           <td className="py-3 px-3 text-[11px] text-slate-500">{tab.group}</td>
                           <td className="py-3 px-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleHiddenTabImmediate(tab.id, tab.label)}
-                              className={`px-3 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1.5 border transition cursor-pointer ${
-                                isHidden
-                                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700'
-                                  : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                              }`}
-                            >
-                              {isHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                              <span>{isHidden ? 'Đang ẩn' : 'Đang hiện'}</span>
-                            </button>
+                            <div className="inline-flex items-center gap-2 justify-center">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={!isHidden}
+                                aria-label={`Hiển thị tab ${tab.label}`}
+                                onClick={() => void handleToggleHiddenTabImmediate(tab.id, tab.label)}
+                                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                  !isHidden ? 'bg-emerald-600' : 'bg-rose-600'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                    !isHidden ? 'translate-x-4.5' : 'translate-x-0.5'
+                                  }`}
+                                />
+                              </button>
+                              <span
+                                className={`text-[11px] font-semibold ${
+                                  !isHidden ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-600 dark:text-rose-400'
+                                }`}
+                              >
+                                {isHidden ? 'Đang ẩn' : 'Đang hiện'}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleTabMaintenanceImmediate(tab.id, tab.label)}
-                              className={`px-3 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1.5 border transition cursor-pointer ${
-                                isMaint
-                                  ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700'
-                                  : 'bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                              }`}
-                            >
-                              <Wrench className="w-3.5 h-3.5" />
-                              <span>{isMaint ? 'Đang bảo trì' : 'Bình thường'}</span>
-                            </button>
+                            <div className="inline-flex items-center gap-2 justify-center">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isMaint}
+                                aria-label={`Bảo trì lẻ tab ${tab.label}`}
+                                onClick={() => void handleToggleTabMaintenanceImmediate(tab.id, tab.label)}
+                                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                                  isMaint ? 'bg-emerald-600' : 'bg-rose-600'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                    isMaint ? 'translate-x-4.5' : 'translate-x-0.5'
+                                  }`}
+                                />
+                              </button>
+                              <span
+                                className={`text-[11px] font-semibold ${
+                                  isMaint ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-600 dark:text-rose-400'
+                                }`}
+                              >
+                                {isMaint ? 'Đang bật' : 'Đang tắt'}
+                              </span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -8309,17 +9565,22 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   <ExternalLink className="w-3 h-3 opacity-60" />
                 </a>
 
-                <label className="inline-flex items-center gap-2 cursor-pointer select-none pl-1">
-                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <div className="inline-flex items-center gap-2 select-none pl-1">
+                  <span
+                    className={`text-xs font-bold ${
+                      bhxhEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
                     {bhxhEnabled ? 'Đang bật tra cứu' : 'Đang tắt'}
                   </span>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={bhxhEnabled}
-                    onClick={() => setBhxhEnabled(v => !v)}
-                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                      bhxhEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                    disabled={bhxhLoadingConfig || savingBhxhConfig}
+                    onClick={() => void handleToggleBhxhSettingImmediate('enabled')}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-60 ${
+                      bhxhEnabled ? 'bg-emerald-600' : 'bg-rose-600'
                     }`}
                   >
                     <span
@@ -8328,7 +9589,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                       }`}
                     />
                   </button>
-                </label>
+                </div>
               </div>
             </div>
 
@@ -8529,29 +9790,51 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
                 <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
                   <div className="flex flex-wrap items-center gap-4 text-xs">
-                    <label className="inline-flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={bhxhAutoLookupFacility}
-                        onChange={e => setBhxhAutoLookupFacility(e.target.checked)}
-                        className="w-4 h-4 rounded text-emerald-600 border-slate-300"
-                      />
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={bhxhAutoLookupFacility}
+                        aria-label="Tự động lấy tên CSKCB ban đầu"
+                        disabled={bhxhLoadingConfig || savingBhxhConfig}
+                        onClick={() => void handleToggleBhxhSettingImmediate('autoLookupFacilityName')}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-60 ${
+                          bhxhAutoLookupFacility ? 'bg-emerald-600' : 'bg-rose-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                            bhxhAutoLookupFacility ? 'translate-x-4.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
                       <span className="font-medium text-slate-700 dark:text-slate-300">
                         Tự động lấy tên CSKCB ban đầu
                       </span>
-                    </label>
+                    </div>
 
-                    <label className="inline-flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={bhxhShowHistoryKcb}
-                        onChange={e => setBhxhShowHistoryKcb(e.target.checked)}
-                        className="w-4 h-4 rounded text-emerald-600 border-slate-300"
-                      />
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={bhxhShowHistoryKcb}
+                        aria-label="Hiển thị lịch sử KCB"
+                        disabled={bhxhLoadingConfig || savingBhxhConfig}
+                        onClick={() => void handleToggleBhxhSettingImmediate('showHistoryKcb')}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-60 ${
+                          bhxhShowHistoryKcb ? 'bg-emerald-600' : 'bg-rose-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                            bhxhShowHistoryKcb ? 'translate-x-4.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
                       <span className="font-medium text-slate-700 dark:text-slate-300">
                         Hiển thị lịch sử KCB
                       </span>
-                    </label>
+                    </div>
                   </div>
 
                   <button
@@ -8958,17 +10241,27 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 />
               </div>
 
-              <label className="flex items-center gap-2 cursor-pointer pt-1">
-                <input
-                  type="checkbox"
-                  checked={newLocIsPrimary}
-                  onChange={e => setNewLocIsPrimary(e.target.checked)}
-                  className="w-4 h-4 text-emerald-600 rounded border-slate-300"
-                />
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={newLocIsPrimary}
+                  aria-label="Đặt làm Trụ sở chính của Trạm Y tế"
+                  onClick={() => setNewLocIsPrimary(v => !v)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    newLocIsPrimary ? 'bg-emerald-600' : 'bg-rose-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                      newLocIsPrimary ? 'translate-x-4.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
                   Đặt làm Trụ sở chính của Trạm Y tế
                 </span>
-              </label>
+              </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
@@ -9214,17 +10507,27 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 />
               </div>
 
-              <label className="flex items-center gap-2 cursor-pointer pt-1">
-                <input
-                  type="checkbox"
-                  checked={newLocIsPrimary}
-                  onChange={e => setNewLocIsPrimary(e.target.checked)}
-                  className="w-4 h-4 text-emerald-600 rounded border-slate-300"
-                />
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={newLocIsPrimary}
+                  aria-label="Đặt làm Trụ sở chính của Trạm Y tế"
+                  onClick={() => setNewLocIsPrimary(v => !v)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    newLocIsPrimary ? 'bg-emerald-600' : 'bg-rose-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                      newLocIsPrimary ? 'translate-x-4.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
                   Đặt làm Trụ sở chính của Trạm Y tế
                 </span>
-              </label>
+              </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
@@ -9518,29 +10821,49 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-5 pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={vacIsPinned}
-                      onChange={e => setVacIsPinned(e.target.checked)}
-                      className="w-4 h-4 text-emerald-600 rounded border-slate-300"
-                    />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={vacIsPinned}
+                      aria-label="Ghim ưu tiên hàng đầu"
+                      onClick={() => setVacIsPinned(v => !v)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                        vacIsPinned ? 'bg-emerald-600' : 'bg-rose-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                          vacIsPinned ? 'translate-x-4.5' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
                     <span className="font-semibold text-slate-700 dark:text-slate-300">
                       Ghim ưu tiên hàng đầu
                     </span>
-                  </label>
+                  </div>
 
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={vacIsActive}
-                      onChange={e => setVacIsActive(e.target.checked)}
-                      className="w-4 h-4 text-emerald-600 rounded border-slate-300"
-                    />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={vacIsActive}
+                      aria-label="Hiển thị công khai"
+                      onClick={() => setVacIsActive(v => !v)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                        vacIsActive ? 'bg-emerald-600' : 'bg-rose-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                          vacIsActive ? 'translate-x-4.5' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
                     <span className="font-semibold text-slate-700 dark:text-slate-300">
                       Hiển thị công khai
                     </span>
-                  </label>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">

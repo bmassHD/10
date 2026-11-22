@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   MapPin,
   Bell,
@@ -52,19 +52,8 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
   const touchStartYRef = useRef<number | null>(null);
   const mouseStartYRef = useRef<number | null>(null);
   const pullDistanceRef = useRef<number>(0);
-  const autoRequestedRef = useRef<boolean>(false);
 
   const locationGranted = locationStatus === 'granted';
-
-  useEffect(() => {
-    if (autoRequestedRef.current) return;
-    if (!locationGranted) {
-      autoRequestedRef.current = true;
-      if (locationStatus === 'prompt') {
-        void onRequestAll();
-      }
-    }
-  }, [locationGranted, locationStatus, onRequestAll]);
 
   const executeRequestAll = (fromSwipeDown: boolean) => {
     if (isRequesting) return;
@@ -77,7 +66,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
         if (!res.locationGranted) {
           const prefix = fromSwipeDown ? 'Đã kiểm tra lại sau khi vuốt xuống: ' : '';
           setRetryFeedback(
-            `${prefix}Chưa được cấp quyền Vị trí`
+            `${prefix}Chưa được cấp quyền Vị trí. Nếu đã chặn trước đó, hãy mở cài đặt trình duyệt (biểu tượng 🔒) để Cho phép, sau đó vuốt xuống lại.`
           );
         }
       })

@@ -39,7 +39,13 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
   setCurrentView,
   openAdminSetupModal,
 }) => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin, isPrimaryAdmin, isSimulatingRole } = useAuth();
+  const canBypassTabMaintenance = isSimulatingRole
+    ? Boolean(isSuperAdmin || isAdmin)
+    : Boolean(isSuperAdmin || isPrimaryAdmin || isAdmin);
+  const isDutyMaintDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.duty);
+  const isMapMaintDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.map);
+  const isNewsMaintDisabled = !canBypassTabMaintenance && Boolean(settings.tabMaintenance?.news);
 
   const [posts, setPosts] = useState<Post[]>([]);
   const [rssItems, setRssItems] = useState<ExternalApiNewsItem[]>([]);
@@ -127,21 +133,41 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setCurrentView('duty')}
-                      className="px-3.5 py-2.5 rounded-xl bg-white text-emerald-900 hover:bg-emerald-50 font-bold text-sm transition inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      disabled={isDutyMaintDisabled}
+                      aria-disabled={isDutyMaintDisabled || undefined}
+                      title={isDutyMaintDisabled ? 'Lịch trực 24/7 đang bảo trì' : undefined}
+                      onClick={() => {
+                        if (isDutyMaintDisabled) return;
+                        setCurrentView('duty');
+                      }}
+                      className={`px-3.5 py-2.5 rounded-xl bg-white text-emerald-900 font-bold text-sm transition inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                        isDutyMaintDisabled
+                          ? 'opacity-55 cursor-not-allowed'
+                          : 'hover:bg-emerald-50 cursor-pointer'
+                      }`}
                     >
                       <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
-                      <span>Lịch trực 24/7</span>
+                      <span>{isDutyMaintDisabled ? 'Lịch trực (Bảo trì)' : 'Lịch trực 24/7'}</span>
                     </button>
                   )}
 
                   <button
                     type="button"
-                    onClick={() => setCurrentView('map')}
-                    className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/25 text-white font-semibold text-sm transition inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    disabled={isMapMaintDisabled}
+                    aria-disabled={isMapMaintDisabled || undefined}
+                    title={isMapMaintDisabled ? 'Bản đồ y tế đang bảo trì' : undefined}
+                    onClick={() => {
+                      if (isMapMaintDisabled) return;
+                      setCurrentView('map');
+                    }}
+                    className={`px-3.5 py-2.5 rounded-xl bg-white/10 border border-white/25 text-white font-semibold text-sm transition inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                      isMapMaintDisabled
+                        ? 'opacity-50 cursor-not-allowed'
+                        : 'hover:bg-white/20 cursor-pointer'
+                    }`}
                   >
                     <MapPin className="w-4 h-4 text-emerald-300 shrink-0" />
-                    <span>Bản đồ y tế</span>
+                    <span>{isMapMaintDisabled ? 'Bản đồ (Bảo trì)' : 'Bản đồ y tế'}</span>
                   </button>
                 </div>
               </div>
@@ -203,6 +229,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
           loadingRss={loadingRss}
           onOpenAllNews={tab => setCurrentView('news', tab ? `tab=${tab}` : undefined)}
           onSelectPost={handleOpenPost}
+          allNewsDisabled={isNewsMaintDisabled}
         />
       </RevealOnScroll>
 
@@ -394,14 +421,21 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
             <div className="flex justify-center sm:justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
+                disabled={isNewsMaintDisabled}
+                aria-disabled={isNewsMaintDisabled || undefined}
                 onClick={() => {
+                  if (isNewsMaintDisabled) return;
                   setReadingPost(null);
                   setCurrentView('news', 'tab=station');
                 }}
-                className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className={`w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                  isNewsMaintDisabled
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 cursor-not-allowed opacity-70'
+                    : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                }`}
               >
-                <span>Mở bảng tin</span>
-                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+                <span>{isNewsMaintDisabled ? 'Bảng tin đang bảo trì' : 'Mở bảng tin'}</span>
+                {!isNewsMaintDisabled && <ArrowRight className="w-3.5 h-3.5 shrink-0" />}
               </button>
             </div>
           </div>

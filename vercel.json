@@ -6,6 +6,9 @@
     "api/citizen-lookup.ts": {
       "includeFiles": "src/data/data.json"
     },
+    "api/ai/[action].ts": {
+      "includeFiles": "firebase-applet-config.json"
+    },
     "api/auth/zalo/[action].ts": {
       "includeFiles": "firebase-applet-config.json"
     },
