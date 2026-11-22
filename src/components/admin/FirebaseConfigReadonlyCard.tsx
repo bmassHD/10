@@ -23,6 +23,8 @@ import {
   RefreshCw,
   Sparkles,
   HardDriveDownload,
+  ClipboardPaste,
+  Wand2,
 } from 'lucide-react';
 import firebaseConfig from '../../../firebase-applet-config.json';
 import { useToast } from '../../contexts/ToastContext';
@@ -86,6 +88,108 @@ const CONFIG_FIELDS: ConfigFieldItem[] = [
   },
 ];
 
+interface ParsedSandboxFields {
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  firestoreDatabaseId?: string;
+}
+
+const KNOWN_SANDBOX_FIELD_LABELS: Array<{ key: keyof ParsedSandboxFields; label: string }> = [
+  { key: 'projectId', label: 'Project ID' },
+  { key: 'firestoreDatabaseId', label: 'Database ID' },
+  { key: 'apiKey', label: 'API Key' },
+  { key: 'authDomain', label: 'Auth Domain' },
+  { key: 'storageBucket', label: 'Storage Bucket' },
+  { key: 'messagingSenderId', label: 'Messaging Sender ID' },
+  { key: 'appId', label: 'App ID' },
+];
+
+export function parseFirebaseConfigSnippet(rawText: string): {
+  fields: ParsedSandboxFields;
+  matchedCount: number;
+  matchedLabels: string[];
+} {
+  const fields: ParsedSandboxFields = {};
+  const trimmed = (rawText || '').trim();
+  if (!trimmed) {
+    return { fields, matchedCount: 0, matchedLabels: [] };
+  }
+
+  // Extract object block if present (e.g. `const firebaseConfig = { ... };`)
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  const candidateBlock =
+    firstBrace !== -1 && lastBrace > firstBrace
+      ? trimmed.slice(firstBrace, lastBrace + 1)
+      : trimmed;
+
+  // 1. Try strict JSON parse first
+  try {
+    const jsonObj = JSON.parse(candidateBlock);
+    if (jsonObj && typeof jsonObj === 'object' && !Array.isArray(jsonObj)) {
+      if (typeof jsonObj.apiKey === 'string') fields.apiKey = jsonObj.apiKey.trim();
+      if (typeof jsonObj.authDomain === 'string') fields.authDomain = jsonObj.authDomain.trim();
+      if (typeof jsonObj.projectId === 'string') fields.projectId = jsonObj.projectId.trim();
+      if (typeof jsonObj.storageBucket === 'string') fields.storageBucket = jsonObj.storageBucket.trim();
+      if (jsonObj.messagingSenderId !== undefined && jsonObj.messagingSenderId !== null) {
+        fields.messagingSenderId = String(jsonObj.messagingSenderId).trim();
+      }
+      if (typeof jsonObj.appId === 'string') fields.appId = jsonObj.appId.trim();
+      const rawDbId = jsonObj.firestoreDatabaseId ?? jsonObj.databaseId;
+      if (typeof rawDbId === 'string' && rawDbId.trim()) {
+        fields.firestoreDatabaseId = rawDbId.trim();
+      }
+    }
+  } catch {
+    // 2. Fallback: JS object literal parser (handles single quotes, unquoted keys, comments, trailing commas)
+    const stripped = candidateBlock
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+    const stringPropRegex =
+      /(?:["'`]?)(apiKey|authDomain|projectId|storageBucket|messagingSenderId|appId|firestoreDatabaseId|databaseId)(?:["'`]?)\s*:\s*(["'`])((?:\\.|(?!\2)[\s\S])*)\2/g;
+
+    let match: RegExpExecArray | null;
+    while ((match = stringPropRegex.exec(stripped)) !== null) {
+      const key = match[1];
+      const val = match[3].trim();
+      if (key === 'apiKey') fields.apiKey = val;
+      else if (key === 'authDomain') fields.authDomain = val;
+      else if (key === 'projectId') fields.projectId = val;
+      else if (key === 'storageBucket') fields.storageBucket = val;
+      else if (key === 'messagingSenderId') fields.messagingSenderId = val;
+      else if (key === 'appId') fields.appId = val;
+      else if ((key === 'firestoreDatabaseId' || key === 'databaseId') && val) {
+        fields.firestoreDatabaseId = val;
+      }
+    }
+
+    if (!fields.messagingSenderId) {
+      const numericSenderMatch = stripped.match(
+        /(?:["'`]?)messagingSenderId(?:["'`]?)\s*:\s*(\d+)/
+      );
+      if (numericSenderMatch) {
+        fields.messagingSenderId = numericSenderMatch[1].trim();
+      }
+    }
+  }
+
+  const matchedLabels = KNOWN_SANDBOX_FIELD_LABELS.filter(item => {
+    const val = fields[item.key];
+    return typeof val === 'string' && val.length > 0;
+  }).map(item => item.label);
+
+  return {
+    fields,
+    matchedCount: matchedLabels.length,
+    matchedLabels,
+  };
+}
+
 export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProps> = ({
   settings,
   onRefresh,
@@ -117,6 +221,11 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [syncingData, setSyncingData] = useState(false);
   const [syncProgress, setSyncProgress] = useState<string | null>(null);
+  const [sandboxConfigSnippet, setSandboxConfigSnippet] = useState<string>('');
+  const [snippetParseNotice, setSnippetParseNotice] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (settings?.sandboxFirebase) {
@@ -279,6 +388,67 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
     });
   };
 
+  const applyParsedFirebaseSnippet = (rawText: string, options?: { notifyToast?: boolean }): boolean => {
+    const { fields, matchedCount, matchedLabels } = parseFirebaseConfigSnippet(rawText);
+    if (matchedCount === 0) {
+      setSnippetParseNotice({
+        ok: false,
+        message:
+          'Chưa nhận diện được thông số firebaseConfig hợp lệ. Hãy dán đoạn const firebaseConfig = { apiKey: "...", projectId: "...", ... };',
+      });
+      return false;
+    }
+
+    if (fields.projectId !== undefined) setSandboxProjectId(fields.projectId);
+    if (fields.firestoreDatabaseId !== undefined) {
+      setSandboxDatabaseId(fields.firestoreDatabaseId);
+    } else if (!sandboxDatabaseId.trim()) {
+      setSandboxDatabaseId('(default)');
+    }
+    if (fields.apiKey !== undefined) setSandboxApiKey(fields.apiKey);
+    if (fields.authDomain !== undefined) setSandboxAuthDomain(fields.authDomain);
+    if (fields.storageBucket !== undefined) setSandboxStorageBucket(fields.storageBucket);
+    if (fields.messagingSenderId !== undefined) {
+      setSandboxMessagingSenderId(fields.messagingSenderId);
+    }
+    if (fields.appId !== undefined) setSandboxAppId(fields.appId);
+
+    const msg = `Đã tự động phân tách & điền ${matchedCount} thông số: ${matchedLabels.join(', ')}.`;
+    setSnippetParseNotice({ ok: true, message: msg });
+    if (options?.notifyToast !== false) {
+      showToast('success', 'Đã tự động điền cấu hình Sandbox', msg);
+    }
+    return true;
+  };
+
+  const handleSnippetInputChange = (nextText: string) => {
+    setSandboxConfigSnippet(nextText);
+    if (!nextText.trim()) {
+      setSnippetParseNotice(null);
+      return;
+    }
+    applyParsedFirebaseSnippet(nextText, { notifyToast: false });
+  };
+
+  const handleSnippetPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = e.clipboardData?.getData('text') || '';
+    if (!pasted.trim()) return;
+    e.preventDefault();
+    setSandboxConfigSnippet(pasted);
+    applyParsedFirebaseSnippet(pasted, { notifyToast: true });
+  };
+
+  const handleIndividualFieldPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData?.getData('text') || '';
+    if (!pasted || (!pasted.includes('{') && !pasted.includes(':'))) return;
+    const { matchedCount } = parseFirebaseConfigSnippet(pasted);
+    if (matchedCount >= 2) {
+      e.preventDefault();
+      setSandboxConfigSnippet(pasted);
+      applyParsedFirebaseSnippet(pasted, { notifyToast: true });
+    }
+  };
+
   const handleTestSandbox = async () => {
     if (!sandboxProjectId.trim()) {
       showToast('warning', 'Vui lòng nhập Sandbox Project ID trước khi kiểm tra');
@@ -365,6 +535,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
         'admins',
         'tasks',
         'rescueSignals',
+        'epidemicCases',
         'siteStats',
         'onlinePresence',
         'pushSubscriptions',
@@ -557,8 +728,67 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
           </div>
         )}
 
+        {/* Quick Auto-Parse Box for Pasting const firebaseConfig = { ... } */}
+        <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/35 border border-indigo-200 dark:border-indigo-800/70 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-extrabold text-indigo-950 dark:text-indigo-200">
+              <ClipboardPaste className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <span>Dán nhanh cấu hình <code className="font-mono bg-white/80 dark:bg-slate-900 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-700">const firebaseConfig = &#123; ... &#125;</code></span>
+            </div>
+            <div className="flex items-center gap-2">
+              {sandboxConfigSnippet.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSandboxConfigSnippet('');
+                    setSnippetParseNotice(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+                >
+                  Xóa ô dán
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={!sandboxConfigSnippet.trim()}
+                onClick={() => applyParsedFirebaseSnippet(sandboxConfigSnippet, { notifyToast: true })}
+                className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              >
+                <Wand2 className="w-3 h-3" />
+                <span>Tách &amp; điền tự động</span>
+              </button>
+            </div>
+          </div>
+
+          <textarea
+            rows={4}
+            value={sandboxConfigSnippet}
+            onChange={e => handleSnippetInputChange(e.target.value)}
+            onPaste={handleSnippetPaste}
+            placeholder={`Dán đoạn mã từ Firebase Console vào đây (hệ thống tự động phân tách & điền ngay):\nconst firebaseConfig = {\n  apiKey: "...",\n  authDomain: "...",\n  projectId: "...",\n  storageBucket: "...",\n  messagingSenderId: "...",\n  appId: "..."\n};`}
+            className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-[11px] font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+
+          {snippetParseNotice && (
+            <div
+              className={`px-3 py-2 rounded-xl border text-[11px] font-semibold flex items-center gap-2 ${
+                snippetParseNotice.ok
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                  : 'bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
+              }`}
+            >
+              {snippetParseNotice.ok ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              )}
+              <span>{snippetParseNotice.message}</span>
+            </div>
+          )}
+        </div>
+
         {/* Sandbox Input Fields */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
           <div className="space-y-1">
             <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
               Sandbox Project ID
@@ -567,6 +797,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
               type="text"
               value={sandboxProjectId}
               onChange={e => setSandboxProjectId(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="vd: my-sandbox-project-id"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -580,6 +811,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
               type="text"
               value={sandboxDatabaseId}
               onChange={e => setSandboxDatabaseId(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="vd: (default)"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -593,6 +825,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
               type="text"
               value={sandboxApiKey}
               onChange={e => setSandboxApiKey(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="AIzaSy..."
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -606,6 +839,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
               type="text"
               value={sandboxAuthDomain}
               onChange={e => setSandboxAuthDomain(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="project.firebaseapp.com"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -619,6 +853,7 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
               type="text"
               value={sandboxStorageBucket}
               onChange={e => setSandboxStorageBucket(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="project.appspot.com"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -626,12 +861,27 @@ export const FirebaseConfigReadonlyCard: React.FC<FirebaseConfigReadonlyCardProp
 
           <div className="space-y-1">
             <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
+              Sandbox Messaging Sender ID
+            </label>
+            <input
+              type="text"
+              value={sandboxMessagingSenderId}
+              onChange={e => setSandboxMessagingSenderId(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
+              placeholder="vd: 123456789012"
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1 md:col-span-2 lg:col-span-3">
+            <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
               Sandbox App ID
             </label>
             <input
               type="text"
               value={sandboxAppId}
               onChange={e => setSandboxAppId(e.target.value)}
+              onPaste={handleIndividualFieldPaste}
               placeholder="1:123456:web:..."
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />

@@ -51,6 +51,7 @@ import { GithubBackupReminderModal } from './components/modals/GithubBackupRemin
 import { FullScreenLoadingOverlay } from './components/common/FullScreenLoadingOverlay';
 import { FirstSessionSplashOverlay } from './components/common/FirstSessionSplashOverlay';
 import { ConfettiEffect } from './components/common/ConfettiEffect';
+import { SosEmergencyBorderOverlay } from './components/common/SosEmergencyBorderOverlay';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { PasswordResetActionModal } from './components/auth/PasswordResetActionModal';
 
@@ -1854,6 +1855,7 @@ function MainApp() {
                 locations={settings.mapLocations}
                 stationName={settings.stationName}
                 defaultAddress={settings.address}
+                epidemicMapButtonVisible={settings.epidemicMapButtonVisible !== false}
               />
             </div>
           )}
@@ -2136,6 +2138,7 @@ export default function App() {
     <ErrorBoundary>
       <AuthProvider>
         <ToastProvider>
+          <SosEmergencyBorderOverlay />
           <MainApp />
         </ToastProvider>
       </AuthProvider>

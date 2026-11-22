@@ -202,7 +202,7 @@ export function buildAdminNavGroups(counts?: {
           label: 'Bản đồ',
           shortLabel: 'Bản đồ',
           icon: MapPin,
-          keywords: ['bản đồ', 'tọa độ', 'gps', 'điểm trạm', 'trụ sở chính'],
+          keywords: ['bản đồ', 'tọa độ', 'gps', 'điểm trạm', 'trụ sở chính', 'dịch bệnh', 'sốt xuất huyết', 'khoanh vùng', 'ca bệnh'],
         },
         {
           id: 'nearby_facilities',
@@ -290,6 +290,9 @@ export function buildAdminNavGroups(counts?: {
             'cccd',
             'bảo mật dữ liệu',
             'dữ liệu dân cư',
+            'bản đồ dịch bệnh',
+            'dịch bệnh',
+            'sốt xuất huyết',
           ],
         },
       ],

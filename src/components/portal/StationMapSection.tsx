@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   MapPin,
   ExternalLink,
@@ -12,19 +12,53 @@ import {
   User,
   LocateFixed,
   Loader2,
+  Radar,
+  Plus,
+  Edit3,
+  Trash2,
+  MousePointerClick,
+  X,
+  Calendar,
 } from 'lucide-react';
 import L from 'leaflet';
-import { MapLocation } from '../../types';
+import {
+  EpidemicCase,
+  EpidemicDiseaseType,
+  MapLocation,
+} from '../../types';
+import {
+  EPIDEMIC_DISEASE_OPTIONS,
+  EPIDEMIC_STATUS_META,
+  getEpidemicDiseaseConfig,
+} from '../../constants/epidemicDiseases';
+import {
+  deleteEpidemicCase,
+  logAuditEvent,
+  subscribeEpidemicCases,
+} from '../../services/firebaseService';
+import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
+import { EpidemicCaseModal } from './EpidemicCaseModal';
 
 interface StationMapSectionProps {
   locations?: MapLocation[];
   stationName?: string;
   defaultAddress?: string;
   embedded?: boolean;
+  epidemicMapButtonVisible?: boolean;
 }
 
 const GEO_SESSION_COORDS_KEY = 'tyt_geo_coords';
 const GEO_SESSION_PROMPTED_KEY = 'tyt_geo_prompted';
+
+function escapeHtml(raw: string): string {
+  return String(raw || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Haversine formula to compute distance in kilometers between two GPS coordinates
 export function calculateHaversineDistance(
@@ -69,13 +103,22 @@ function readCachedSessionCoords(): { lat: number; lng: number } | null {
 
 export const StationMapSection: React.FC<StationMapSectionProps> = ({
   locations = [],
+  defaultAddress = '',
   embedded = false,
+  epidemicMapButtonVisible = true,
 }) => {
-  const activeLocations = [...locations].sort((a, b) => {
-    if (a.isPrimary && !b.isPrimary) return -1;
-    if (!a.isPrimary && b.isPrimary) return 1;
-    return 0;
-  });
+  const { isStaff, isAdmin, currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
+
+  const activeLocations = useMemo(
+    () =>
+      [...locations].sort((a, b) => {
+        if (a.isPrimary && !b.isPrimary) return -1;
+        if (!a.isPrimary && b.isPrimary) return 1;
+        return 0;
+      }),
+    [locations]
+  );
 
   const [selectedLocation, setSelectedLocation] = useState<MapLocation | null>(
     activeLocations.find(l => l.isPrimary) || activeLocations[0] || null
@@ -91,13 +134,80 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
   const [geoError, setGeoError] = useState<string | null>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
 
+  // Epidemic Map overlay state
+  const [showEpidemicMap, setShowEpidemicMap] = useState<boolean>(false);
+  const [selectedDiseaseFilter, setSelectedDiseaseFilter] = useState<EpidemicDiseaseType | 'all'>(
+    'sot_xuat_huyet'
+  );
+  const [epidemicCases, setEpidemicCases] = useState<EpidemicCase[]>([]);
+  const [selectedEpidemicCaseId, setSelectedEpidemicCaseId] = useState<string | null>(null);
+  const [deletingCaseId, setDeletingCaseId] = useState<string | null>(null);
+
+  // Mark / Edit Epidemic Case modal & map-pick mode (for Super Admin, Admin, Cán bộ Y tế)
+  const [epidemicModalOpen, setEpidemicModalOpen] = useState<boolean>(false);
+  const [editingEpidemicCase, setEditingEpidemicCase] = useState<EpidemicCase | null>(null);
+  const [modalDraftState, setModalDraftState] = useState<Partial<EpidemicCase> | null>(null);
+  const [pickedMapCoords, setPickedMapCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isPickingMapPoint, setIsPickingMapPoint] = useState<boolean>(false);
+
   // Leaflet map refs
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const epidemicLayerRef = useRef<L.LayerGroup | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
   const shouldFocusUserOnNextGpsRef = useRef<boolean>(false);
+  const isPickingMapPointRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isPickingMapPointRef.current = isPickingMapPoint;
+  }, [isPickingMapPoint]);
+
+  // If Admin hides the epidemic map button for all users, force-hide overlay & reset pick mode
+  useEffect(() => {
+    if (!epidemicMapButtonVisible) {
+      setShowEpidemicMap(false);
+      setIsPickingMapPoint(false);
+      setEpidemicModalOpen(false);
+    }
+  }, [epidemicMapButtonVisible]);
+
+  // Subscribe to epidemic cases when button is visible
+  useEffect(() => {
+    if (!epidemicMapButtonVisible) {
+      setEpidemicCases([]);
+      return;
+    }
+    const unsub = subscribeEpidemicCases(
+      items => {
+        setEpidemicCases(items);
+      },
+      err => {
+        console.warn('Subscribe epidemicCases failed:', err);
+      }
+    );
+    return () => unsub();
+  }, [epidemicMapButtonVisible]);
+
+  const filteredEpidemicCases = useMemo(() => {
+    if (!epidemicMapButtonVisible || !showEpidemicMap) return [];
+    if (selectedDiseaseFilter === 'all') return epidemicCases;
+    return epidemicCases.filter(c => c.diseaseType === selectedDiseaseFilter);
+  }, [epidemicMapButtonVisible, showEpidemicMap, selectedDiseaseFilter, epidemicCases]);
+
+  const epidemicSummary = useMemo(() => {
+    const base =
+      selectedDiseaseFilter === 'all'
+        ? epidemicCases
+        : epidemicCases.filter(c => c.diseaseType === selectedDiseaseFilter);
+    return {
+      total: base.length,
+      active: base.filter(c => c.status === 'active').length,
+      monitoring: base.filter(c => c.status === 'monitoring').length,
+      resolved: base.filter(c => c.status === 'resolved').length,
+    };
+  }, [epidemicCases, selectedDiseaseFilter]);
 
   // Request user geolocation & persist for current session
   const requestGeoLocation = useCallback((recenterMap = false) => {
@@ -227,6 +337,7 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
         mapInstanceRef.current = null;
         tileLayerRef.current = null;
         markersLayerRef.current = null;
+        epidemicLayerRef.current = null;
       }
     };
   }, []);
@@ -267,13 +378,21 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
       ? [...locationsWithDistance].sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))[0]
       : null;
 
+  const canRenderMap =
+    activeLocations.length > 0 ||
+    Boolean(userLocation) ||
+    (epidemicMapButtonVisible && showEpidemicMap);
+
   // Initialize and update Leaflet map
   useEffect(() => {
     if (!mapContainerRef.current) return;
-    if (activeLocations.length === 0 && !userLocation) return;
+    if (!canRenderMap) return;
 
+    const firstEpidemic = filteredEpidemicCases[0];
     const initialCenter: [number, number] = selectedLocation
       ? [selectedLocation.lat, selectedLocation.lng]
+      : firstEpidemic
+      ? [firstEpidemic.lat, firstEpidemic.lng]
       : userLocation
       ? [userLocation.lat, userLocation.lng]
       : [10.7516, 106.7024];
@@ -294,10 +413,23 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
 
       const tileLayer = L.tileLayer(initialTileUrl, { maxZoom: 19 }).addTo(map);
       const markersLayer = L.layerGroup().addTo(map);
+      const epidemicLayer = L.layerGroup().addTo(map);
+
+      map.on('click', (ev: L.LeafletMouseEvent) => {
+        if (isPickingMapPointRef.current) {
+          setIsPickingMapPoint(false);
+          setPickedMapCoords({
+            lat: Number(ev.latlng.lat.toFixed(6)),
+            lng: Number(ev.latlng.lng.toFixed(6)),
+          });
+          setEpidemicModalOpen(true);
+        }
+      });
 
       mapInstanceRef.current = map;
       tileLayerRef.current = tileLayer;
       markersLayerRef.current = markersLayer;
+      epidemicLayerRef.current = epidemicLayer;
     } else if (tileLayerRef.current) {
       const newUrl =
         mapTileType === 'satellite'
@@ -308,9 +440,16 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
 
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
-    if (!map || !markersLayer) return;
+    const epidemicLayer = epidemicLayerRef.current;
+    if (!map || !markersLayer || !epidemicLayer) return;
 
     markersLayer.clearLayers();
+    epidemicLayer.clearLayers();
+
+    // Update cursor in pick mode
+    if (mapContainerRef.current) {
+      mapContainerRef.current.style.cursor = isPickingMapPoint ? 'crosshair' : '';
+    }
 
     const createStationIcon = (isPrimary: boolean, isSelected: boolean) =>
       L.divIcon({
@@ -346,10 +485,10 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
 
       marker.bindPopup(`
         <div style="font-family: inherit; font-size: 12px; line-height: 1.4; min-width: 180px;">
-          <strong style="color: #065f46; font-size: 13px;">${loc.name}</strong><br/>
-          <span style="color: #4b5563;">${loc.address}</span><br/>
-          ${loc.phone ? `<span style="color: #dc2626; font-weight: 600;">ĐT: ${loc.phone}</span><br/>` : ''}
-          ${loc.workingHours ? `<span style="color: #6b7280; font-size: 11px;">${loc.workingHours}</span>` : ''}
+          <strong style="color: #065f46; font-size: 13px;">${escapeHtml(loc.name)}</strong><br/>
+          <span style="color: #4b5563;">${escapeHtml(loc.address)}</span><br/>
+          ${loc.phone ? `<span style="color: #dc2626; font-weight: 600;">ĐT: ${escapeHtml(loc.phone)}</span><br/>` : ''}
+          ${loc.workingHours ? `<span style="color: #6b7280; font-size: 11px;">${escapeHtml(loc.workingHours)}</span>` : ''}
         </div>
       `);
 
@@ -359,6 +498,94 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
 
       markersLayer.addLayer(marker);
     });
+
+    // Render Epidemic Cases & Containment Circles
+    if (epidemicMapButtonVisible && showEpidemicMap) {
+      filteredEpidemicCases.forEach(c => {
+        const diseaseCfg = getEpidemicDiseaseConfig(c.diseaseType);
+        const statusMeta = EPIDEMIC_STATUS_META[c.status] || EPIDEMIC_STATUS_META.active;
+        const isSelected = selectedEpidemicCaseId === c.id;
+
+        const circle = L.circle([c.lat, c.lng], {
+          radius: c.radiusMeters,
+          color: statusMeta.circleColor,
+          fillColor: statusMeta.circleFillColor,
+          fillOpacity: c.status === 'resolved' ? 0.1 : isSelected ? 0.32 : 0.2,
+          weight: isSelected ? 3 : 2,
+          dashArray:
+            c.status === 'monitoring'
+              ? '6 4'
+              : c.status === 'resolved'
+              ? '3 5'
+              : undefined,
+        });
+
+        const popupHtml = `
+          <div style="font-family: inherit; font-size: 12px; line-height: 1.45; min-width: 210px; max-width: 270px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+              <span style="background:${statusMeta.circleColor};color:white;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;">
+                ${escapeHtml(diseaseCfg.label)}
+              </span>
+              <span style="color:#64748b;font-size:11px;font-weight:600;">
+                ${escapeHtml(statusMeta.label)}
+              </span>
+            </div>
+            ${c.caseLabel ? `<strong style="color:#0f172a;font-size:13px;display:block;margin-bottom:2px;">${escapeHtml(c.caseLabel)}</strong>` : ''}
+            <div style="color:#be123c;font-weight:700;margin-bottom:4px;">
+              Khoanh vùng: ${Number(c.radiusMeters).toLocaleString('vi-VN')} m
+            </div>
+            <div style="color:#334155;margin-bottom:4px;">
+              <strong>Địa chỉ:</strong> ${escapeHtml(c.fullAddress)}
+            </div>
+            <div style="color:#64748b;font-size:11px;">
+              Ngày ghi nhận: ${escapeHtml(c.recordedDate)}
+            </div>
+            ${c.notes ? `<div style="color:#475569;font-size:11px;margin-top:4px;padding-top:4px;border-top:1px solid #e2e8f0;">${escapeHtml(c.notes)}</div>` : ''}
+          </div>
+        `;
+
+        circle.bindPopup(popupHtml);
+        circle.on('click', () => {
+          setSelectedEpidemicCaseId(c.id);
+        });
+        epidemicLayer.addLayer(circle);
+
+        const pinIcon = L.divIcon({
+          className: 'custom-epidemic-pin',
+          html: `
+            <div style="
+              background: ${statusMeta.circleColor};
+              color: white;
+              border-radius: 9999px;
+              min-width: ${isSelected ? '34px' : '28px'};
+              height: ${isSelected ? '34px' : '28px'};
+              padding: 0 6px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+              border: 2.5px solid white;
+              font-weight: 800;
+              font-size: 10px;
+              letter-spacing: -0.02em;
+              cursor: pointer;
+              white-space: nowrap;
+            ">
+              ${escapeHtml(diseaseCfg.shortLabel)}
+            </div>
+          `,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+        });
+
+        const epiMarker = L.marker([c.lat, c.lng], { icon: pinIcon });
+        epiMarker.bindPopup(popupHtml);
+        epiMarker.on('click', () => {
+          setSelectedEpidemicCaseId(c.id);
+        });
+        epidemicLayer.addLayer(epiMarker);
+      });
+    }
 
     if (userLocation) {
       const userIcon = L.divIcon({
@@ -397,7 +624,90 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
     } else {
       userMarkerRef.current = null;
     }
-  }, [activeLocations, selectedLocation, userLocation, mapTileType]);
+  }, [
+    canRenderMap,
+    activeLocations,
+    selectedLocation,
+    userLocation,
+    mapTileType,
+    epidemicMapButtonVisible,
+    showEpidemicMap,
+    filteredEpidemicCases,
+    selectedEpidemicCaseId,
+    isPickingMapPoint,
+  ]);
+
+  // Fit bounds cleanly when user ticks "Xem bản đồ dịch bệnh"
+  const handleToggleEpidemicMap = (checked: boolean) => {
+    setShowEpidemicMap(checked);
+    if (!checked) {
+      setIsPickingMapPoint(false);
+      return;
+    }
+    if (mapInstanceRef.current && epidemicCases.length > 0) {
+      const targetList =
+        selectedDiseaseFilter === 'all'
+          ? epidemicCases
+          : epidemicCases.filter(c => c.diseaseType === selectedDiseaseFilter);
+      if (targetList.length > 0) {
+        const first = targetList[0];
+        const bounds = L.latLng(first.lat, first.lng).toBounds(Math.max(400, first.radiusMeters * 2.5));
+        targetList.slice(1).forEach(item => {
+          bounds.extend(L.latLng(item.lat, item.lng).toBounds(Math.max(400, item.radiusMeters * 2.5)));
+        });
+        mapInstanceRef.current.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
+      }
+    }
+  };
+
+  const focusEpidemicCaseOnMap = (c: EpidemicCase) => {
+    setSelectedEpidemicCaseId(c.id);
+    if (mapInstanceRef.current) {
+      const bounds = L.latLng(c.lat, c.lng).toBounds(Math.max(300, c.radiusMeters * 2.6));
+      mapInstanceRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
+    }
+  };
+
+  const handleOpenAddEpidemicCase = () => {
+    setEditingEpidemicCase(null);
+    setModalDraftState(null);
+    setPickedMapCoords(null);
+    setIsPickingMapPoint(false);
+    setShowEpidemicMap(true);
+    setEpidemicModalOpen(true);
+  };
+
+  const handleOpenEditEpidemicCase = (c: EpidemicCase) => {
+    setEditingEpidemicCase(c);
+    setModalDraftState(null);
+    setPickedMapCoords(null);
+    setIsPickingMapPoint(false);
+    setEpidemicModalOpen(true);
+  };
+
+  const handleDeleteEpidemicCase = async (c: EpidemicCase) => {
+    setDeletingCaseId(c.id);
+    try {
+      await deleteEpidemicCase(c.id);
+      await logAuditEvent(
+        'Xóa điểm dịch bệnh trên bản đồ',
+        'Bản đồ dịch bệnh',
+        `Xóa ${getEpidemicDiseaseConfig(c.diseaseType).label} (${c.radiusMeters}m) tại ${c.fullAddress}`,
+        {
+          uid: currentUser?.uid || 'staff',
+          name: userProfile?.displayName || currentUser?.email || 'Cán bộ Y tế',
+        }
+      );
+      if (selectedEpidemicCaseId === c.id) {
+        setSelectedEpidemicCaseId(null);
+      }
+      showToast('success', 'Đã xóa điểm khoanh vùng dịch bệnh');
+    } catch (err: any) {
+      showToast('error', 'Không thể xóa điểm dịch bệnh', err?.message);
+    } finally {
+      setDeletingCaseId(null);
+    }
+  };
 
   const getGoogleMapsDirUrl = (loc: MapLocation) => {
     if (userLocation) {
@@ -439,35 +749,165 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
           </p>
         </div>
 
-        {/* Strictly Symmetrical 2-Button Toggle */}
-        <div className="grid grid-cols-2 w-full sm:w-64 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs sm:text-sm font-semibold shrink-0">
-          <button
-            type="button"
-            onClick={() => setMapTileType('satellite')}
-            className={`px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              mapTileType === 'satellite'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Layers className="w-4 h-4 shrink-0" />
-            <span>Vệ tinh</span>
-          </button>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 shrink-0">
+          {/* Admin-controlled checkbox: "Xem bản đồ dịch bệnh" */}
+          {epidemicMapButtonVisible && (
+            <label
+              className={`min-h-[40px] px-3.5 py-2 rounded-xl border text-xs sm:text-sm font-bold inline-flex items-center gap-2.5 transition cursor-pointer select-none whitespace-nowrap ${
+                showEpidemicMap
+                  ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-400 dark:border-rose-700 text-rose-800 dark:text-rose-200 shadow-xs'
+                  : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-rose-300 dark:hover:border-rose-700'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={showEpidemicMap}
+                onChange={e => handleToggleEpidemicMap(e.target.checked)}
+                className="w-4 h-4 rounded accent-rose-600 cursor-pointer shrink-0"
+              />
+              <Radar
+                className={`w-4 h-4 shrink-0 ${
+                  showEpidemicMap ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'
+                }`}
+              />
+              <span>Xem bản đồ dịch bệnh</span>
+              {epidemicCases.length > 0 && (
+                <span
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold tabular-nums ${
+                    showEpidemicMap
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  {epidemicCases.length}
+                </span>
+              )}
+            </label>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setMapTileType('streets')}
-            className={`px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              mapTileType === 'streets'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <MapIcon className="w-4 h-4 shrink-0" />
-            <span>Giao thông</span>
-          </button>
+          {/* Strictly Symmetrical 2-Button Toggle */}
+          <div className="grid grid-cols-2 w-full sm:w-64 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs sm:text-sm font-semibold shrink-0">
+            <button
+              type="button"
+              onClick={() => setMapTileType('satellite')}
+              className={`px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                mapTileType === 'satellite'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Layers className="w-4 h-4 shrink-0" />
+              <span>Vệ tinh</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMapTileType('streets')}
+              className={`px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                mapTileType === 'streets'
+                  ? 'bg-emerald-700 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <MapIcon className="w-4 h-4 shrink-0" />
+              <span>Giao thông</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Epidemic Map Filter & Staff Action Bar */}
+      {epidemicMapButtonVisible && showEpidemicMap && (
+        <div className="p-4 rounded-2xl bg-rose-50/75 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/80 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-rose-900 dark:text-rose-200 whitespace-nowrap">
+                  Loại dịch bệnh:
+                </span>
+                <select
+                  value={selectedDiseaseFilter}
+                  onChange={e =>
+                    setSelectedDiseaseFilter(e.target.value as EpidemicDiseaseType | 'all')
+                  }
+                  aria-label="Chọn loại dịch bệnh hiển thị trên bản đồ"
+                  className="px-3 py-1.5 rounded-xl border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 text-xs font-bold text-rose-800 dark:text-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                >
+                  {EPIDEMIC_DISEASE_OPTIONS.map(opt => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                  <option value="all">Tất cả dịch bệnh đang theo dõi</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                <span className="px-2.5 py-1 rounded-lg bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200 tabular-nums">
+                  Đang khoanh vùng: {epidemicSummary.active}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 tabular-nums">
+                  Theo dõi: {epidemicSummary.monitoring}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 tabular-nums">
+                  Đã xử lý: {epidemicSummary.resolved}
+                </span>
+              </div>
+            </div>
+
+            {isStaff && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleOpenAddEpidemicCase}
+                  className="min-h-[38px] px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Đánh dấu ca bệnh tại nhà</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPickingMapPoint(prev => !prev)}
+                  className={`min-h-[38px] px-3 py-2 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                    isPickingMapPoint
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-amber-500 dark:text-slate-950 dark:border-amber-500'
+                      : 'bg-white dark:bg-slate-900 border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-300 hover:bg-rose-100/60'
+                  }`}
+                >
+                  {isPickingMapPoint ? (
+                    <>
+                      <X className="w-3.5 h-3.5 shrink-0" />
+                      <span>Hủy chấm bản đồ</span>
+                    </>
+                  ) : (
+                    <>
+                      <MousePointerClick className="w-3.5 h-3.5 shrink-0" />
+                      <span>Chấm trên bản đồ</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {isPickingMapPoint && (
+            <div className="p-2.5 rounded-xl bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700 text-xs font-bold text-amber-950 dark:text-amber-200 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <MousePointerClick className="w-4 h-4 text-amber-700 dark:text-amber-300 shrink-0" />
+                Chế độ chọn điểm đang bật: Hãy bấm trực tiếp vào vị trí nhà Ca bệnh trên bản đồ bên dưới để tự động lấy địa chỉ &amp; khoanh vùng.
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsPickingMapPoint(false)}
+                className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[11px] font-bold cursor-pointer shrink-0"
+              >
+                Hủy
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Geolocation notice / prompt */}
       {geoError ? (
@@ -546,7 +986,7 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
       )}
 
       {/* Map Canvas & Station List */}
-      {activeLocations.length === 0 ? (
+      {!canRenderMap ? (
         <div className="p-10 text-center rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 space-y-2.5">
           <div className="w-11 h-11 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
             <Building2 className="w-5 h-5" />
@@ -565,8 +1005,11 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
             <div ref={mapContainerRef} className="w-full h-full" />
 
             <div className="absolute top-3 inset-x-3 z-[1000] flex items-center justify-between gap-2 pointer-events-none">
-              <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[52%]">
+              <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[56%]">
                 {mapTileType === 'satellite' ? 'Vệ tinh' : 'Giao thông'} · {activeLocations.length} điểm
+                {epidemicMapButtonVisible && showEpidemicMap
+                  ? ` · ${filteredEpidemicCases.length} vùng dịch`
+                  : ''}
               </div>
 
               <button
@@ -586,107 +1029,261 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
             </div>
           </div>
 
-          {/* Location Selector Cards */}
+          {/* Right Column: Epidemic Cases List when active, otherwise Station Selector Cards */}
           <div className="space-y-3 overflow-y-auto max-h-[440px] pr-0.5">
-            {sortedLocations.map(loc => {
-              const isSelected = selectedLocation && loc.id === selectedLocation.id;
+            {epidemicMapButtonVisible && showEpidemicMap ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
+                    <Radar className="w-3.5 h-3.5" />
+                    <span>Vùng dịch trên bản đồ ({filteredEpidemicCases.length})</span>
+                  </h3>
+                </div>
 
-              return (
-                <div
-                  key={loc.id}
-                  onClick={() => {
-                    setSelectedLocation(loc);
-                    if (mapInstanceRef.current) {
-                      mapInstanceRef.current.setView([loc.lat, loc.lng], 15, { animate: true });
-                    }
-                  }}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
-                    isSelected
-                      ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-500 shadow-xs'
-                      : 'bg-slate-50/70 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
-                          loc.isPrimary ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+                {filteredEpidemicCases.length === 0 ? (
+                  <div className="p-6 text-center rounded-2xl border border-dashed border-rose-200 dark:border-rose-900 bg-rose-50/40 dark:bg-rose-950/20 space-y-2">
+                    <Radar className="w-7 h-7 text-rose-400 mx-auto" />
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      Chưa ghi nhận điểm dịch bệnh nào
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {isStaff
+                        ? 'Cán bộ Y tế / Admin có thể bấm "Đánh dấu ca bệnh tại nhà" để khoanh vùng trực tiếp lên bản đồ.'
+                        : 'Hiện tại địa bàn chưa có điểm khoanh vùng dịch bệnh đang công bố.'}
+                    </p>
+                  </div>
+                ) : (
+                  filteredEpidemicCases.map(c => {
+                    const diseaseCfg = getEpidemicDiseaseConfig(c.diseaseType);
+                    const statusMeta = EPIDEMIC_STATUS_META[c.status] || EPIDEMIC_STATUS_META.active;
+                    const isSelected = selectedEpidemicCaseId === c.id;
+                    const canDelete = isAdmin || (isStaff && currentUser?.uid === c.reportedByUid);
+
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => focusEpidemicCaseOnMap(c)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
+                          isSelected
+                            ? 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-500 shadow-xs'
+                            : 'bg-slate-50/70 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-700'
                         }`}
                       >
-                        ✚
-                      </span>
-                      <h3 className="font-bold text-sm text-slate-900 dark:text-white leading-tight truncate">
-                        {loc.name}
-                      </h3>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${diseaseCfg.badgeBgClass} ${diseaseCfg.badgeTextClass}`}
+                            >
+                              {diseaseCfg.label}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${statusMeta.badgeClass}`}
+                            >
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                          <span className="text-xs font-extrabold text-rose-700 dark:text-rose-300 tabular-nums shrink-0">
+                            R = {c.radiusMeters.toLocaleString('vi-VN')} m
+                          </span>
+                        </div>
+
+                        {c.caseLabel && (
+                          <div className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white leading-snug">
+                            {c.caseLabel}
+                          </div>
+                        )}
+
+                        <p className="text-xs text-slate-700 dark:text-slate-300 flex items-start gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                          <span>{c.fullAddress}</span>
+                        </p>
+
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                          <span className="inline-flex items-center gap-1 tabular-nums">
+                            <Calendar className="w-3 h-3" />
+                            <span>{c.recordedDate}</span>
+                          </span>
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${c.lat},${c.lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                          >
+                            <span>Google Maps</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+
+                        {c.notes && (
+                          <p className="text-[11px] text-slate-600 dark:text-slate-400 italic bg-white/70 dark:bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-200/70 dark:border-slate-700/60">
+                            {c.notes}
+                          </p>
+                        )}
+
+                        {isStaff && (
+                          <div
+                            className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70 flex items-center justify-end gap-2"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditEpidemicCase(c)}
+                              className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-emerald-500 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>Sửa</span>
+                            </button>
+                            {canDelete && (
+                              <button
+                                type="button"
+                                disabled={deletingCaseId === c.id}
+                                onClick={() => void handleDeleteEpidemicCase(c)}
+                                className="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>{deletingCaseId === c.id ? 'Đang xóa...' : 'Xóa'}</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              sortedLocations.map(loc => {
+                const isSelected = selectedLocation && loc.id === selectedLocation.id;
+
+                return (
+                  <div
+                    key={loc.id}
+                    onClick={() => {
+                      setSelectedLocation(loc);
+                      if (mapInstanceRef.current) {
+                        mapInstanceRef.current.setView([loc.lat, loc.lng], 15, { animate: true });
+                      }
+                    }}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
+                      isSelected
+                        ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-500 shadow-xs'
+                        : 'bg-slate-50/70 dark:bg-slate-800/50 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                            loc.isPrimary ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+                          }`}
+                        >
+                          ✚
+                        </span>
+                        <h3 className="font-bold text-sm text-slate-900 dark:text-white leading-tight truncate">
+                          {loc.name}
+                        </h3>
+                      </div>
+
+                      {loc.isPrimary && (
+                        <span className="text-[11px] font-bold text-rose-700 dark:text-rose-300 whitespace-nowrap shrink-0">
+                          Điểm chính
+                        </span>
+                      )}
                     </div>
 
-                    {loc.isPrimary && (
-                      <span className="text-[11px] font-bold text-rose-700 dark:text-rose-300 whitespace-nowrap shrink-0">
-                        Điểm chính
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="space-y-1 text-slate-600 dark:text-slate-400 text-xs pl-8">
-                    <p className="flex items-start gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">{loc.address}</span>
-                    </p>
-                    {loc.headName && (
-                      <p className="flex items-center gap-1.5 font-medium text-slate-800 dark:text-slate-200 truncate">
-                        <User className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                        <span className="truncate">{loc.headName}</span>
+                    <div className="space-y-1 text-slate-600 dark:text-slate-400 text-xs pl-8">
+                      <p className="flex items-start gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{loc.address}</span>
                       </p>
-                    )}
-                    {loc.phone && (
-                      <p className="flex items-center gap-1.5 tabular-nums">
-                        <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>{loc.phone}</span>
-                      </p>
-                    )}
-                    {loc.workingHours && (
-                      <p className="flex items-center gap-1.5 truncate">
-                        <Clock className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                        <span className="truncate">{loc.workingHours}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  {loc.distanceKm !== null && (
-                    <div className="pl-8 text-xs font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                      {loc.distanceKm.toFixed(1)} km · ~{loc.driveMinutes} phút
+                      {loc.headName && (
+                        <p className="flex items-center gap-1.5 font-medium text-slate-800 dark:text-slate-200 truncate">
+                          <User className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span className="truncate">{loc.headName}</span>
+                        </p>
+                      )}
+                      {loc.phone && (
+                        <p className="flex items-center gap-1.5 tabular-nums">
+                          <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>{loc.phone}</span>
+                        </p>
+                      )}
+                      {loc.workingHours && (
+                        <p className="flex items-center gap-1.5 truncate">
+                          <Clock className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                          <span className="truncate">{loc.workingHours}</span>
+                        </p>
+                      )}
                     </div>
-                  )}
 
-                  <div className="pl-8 pt-2 flex items-center gap-3 border-t border-slate-100 dark:border-slate-800 text-xs">
-                    <a
-                      href={getGoogleMapsDirUrl(loc)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={e => e.stopPropagation()}
-                      className="font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 whitespace-nowrap"
-                    >
-                      <span>Google Maps</span>
-                      <ExternalLink className="w-3 h-3 shrink-0" />
-                    </a>
-                    <span className="text-slate-300 dark:text-slate-700">·</span>
-                    <a
-                      href={getAppleMapsDirUrl(loc)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={e => e.stopPropagation()}
-                      className="font-semibold text-slate-600 dark:text-slate-300 hover:underline inline-flex items-center gap-1 whitespace-nowrap"
-                    >
-                      <span>Apple Maps</span>
-                      <ExternalLink className="w-3 h-3 shrink-0" />
-                    </a>
+                    {loc.distanceKm !== null && (
+                      <div className="pl-8 text-xs font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                        {loc.distanceKm.toFixed(1)} km · ~{loc.driveMinutes} phút
+                      </div>
+                    )}
+
+                    <div className="pl-8 pt-2 flex items-center gap-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+                      <a
+                        href={getGoogleMapsDirUrl(loc)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>Google Maps</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                      <span className="text-slate-300 dark:text-slate-700">·</span>
+                      <a
+                        href={getAppleMapsDirUrl(loc)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="font-semibold text-slate-600 dark:text-slate-300 hover:underline inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <span>Apple Maps</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       )}
+
+      {/* Modal for Super Admin / Admin / Cán bộ Y tế to mark or edit epidemic cases */}
+      <EpidemicCaseModal
+        isOpen={epidemicModalOpen}
+        initialCase={editingEpidemicCase}
+        draftState={modalDraftState}
+        pickedCoords={pickedMapCoords}
+        stationDefaultAddress={defaultAddress}
+        allowMapPick
+        onRequestMapPick={draft => {
+          setModalDraftState(draft);
+          setEpidemicModalOpen(false);
+          setShowEpidemicMap(true);
+          setIsPickingMapPoint(true);
+          showToast(
+            'info',
+            'Chọn vị trí trên bản đồ',
+            'Bấm vào vị trí nhà Ca bệnh trên bản đồ để tự động lấy địa chỉ.'
+          );
+        }}
+        onClose={() => {
+          setEpidemicModalOpen(false);
+          setEditingEpidemicCase(null);
+          setModalDraftState(null);
+          setPickedMapCoords(null);
+        }}
+        onSaved={saved => {
+          setShowEpidemicMap(true);
+          focusEpidemicCaseOnMap(saved);
+        }}
+      />
     </div>
   );
 };

@@ -451,6 +451,7 @@
         "maintenanceMode": { "type": "boolean" },
         "maintenanceMessage": { "type": "string", "maxLength": 1000 },
         "cccdLookupEnabled": { "type": "boolean", "description": "Enable or disable automatic citizen CCCD database lookup" },
+        "epidemicMapButtonVisible": { "type": "boolean", "description": "Admin toggle to show or hide the Xem ban do dich benh toggle for all users on the map" },
         "hiddenTabs": { "type": "array", "description": "Sidebar tab IDs hidden from public visitors" },
         "tabMaintenance": { "type": "object", "description": "Per-tab maintenance toggle map" },
         "sidebarColors": { "type": "object", "description": "Independent public and admin sidebar group color toggles" },
@@ -653,6 +654,16 @@
         "senderGender": { "type": "string", "enum": ["Nam", "Nữ", "Khác"] },
         "senderAddress": { "type": "string", "maxLength": 512 },
         "senderVerified": { "type": "boolean" },
+        "isForRelative": { "type": "boolean" },
+        "relativeRelation": { "type": "string", "maxLength": 64 },
+        "usedReporterInfoAsSubstitute": { "type": "boolean" },
+        "incidentAddress": { "type": "string", "maxLength": 512 },
+        "reporterName": { "type": "string", "maxLength": 128 },
+        "reporterPhone": { "type": "string", "maxLength": 32 },
+        "reporterCitizenIdMasked": { "type": "string", "maxLength": 32 },
+        "reporterAddress": { "type": "string", "maxLength": 512 },
+        "reporterVerified": { "type": "boolean" },
+        "isCustomLocation": { "type": "boolean" },
         "category": { "type": "string", "enum": ["medical_emergency", "traffic_accident", "disaster_flood", "fire_rescue", "other"] },
         "note": { "type": "string", "maxLength": 1000 },
         "lat": { "type": "number" },
@@ -779,6 +790,34 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "uid", "email", "displayName", "claimType", "status", "createdAt", "updatedAt"]
+    },
+    "EpidemicCase": {
+      "title": "EpidemicCase",
+      "description": "Epidemic outbreak case geolocation and containment perimeter radius (e.g., Dengue / Sot xuat huyet)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "diseaseType": { "type": "string", "enum": ["sot_xuat_huyet"] },
+        "caseLabel": { "type": "string", "maxLength": 128 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "specificAddress": { "type": "string", "maxLength": 256 },
+        "wardCode": { "type": "string", "maxLength": 32 },
+        "wardName": { "type": "string", "maxLength": 128 },
+        "provinceCode": { "type": "string", "maxLength": 32 },
+        "provinceName": { "type": "string", "maxLength": 128 },
+        "fullAddress": { "type": "string", "maxLength": 512 },
+        "radiusMeters": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "monitoring", "resolved"] },
+        "recordedDate": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "reportedByUid": { "type": "string", "maxLength": 128 },
+        "reportedByName": { "type": "string", "maxLength": 128 },
+        "reportedByRole": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "diseaseType", "lat", "lng", "wardName", "provinceName", "fullAddress", "radiusMeters", "status", "recordedDate", "reportedByUid", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -917,6 +956,10 @@
     "/userMigrationClaims/{claimId}": {
       "schema": { "$ref": "#/entities/UserMigrationClaim" },
       "description": "User confirmation and Admin adjustment requests after Firebase migration"
+    },
+    "/epidemicCases/{caseId}": {
+      "schema": { "$ref": "#/entities/EpidemicCase" },
+      "description": "Epidemic case locations and containment zone radii managed by medical staff and admins"
     }
   }
 }

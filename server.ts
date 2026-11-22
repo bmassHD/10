@@ -1710,6 +1710,7 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
         bhxhLookup: '/api/bhxh/lookup',
         bhxhCskcb: '/api/bhxh/cskcb',
         mapsResolve: '/api/maps/resolve-urls',
+        mapsReverseGeocode: '/api/maps/reverse-geocode',
         facebookPreview: '/api/facebook-preview',
         pushSubscribe: '/api/push/subscribe',
         zaloStatus: '/api/auth/zalo/status',
@@ -1992,6 +1993,19 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
       return res.json({ results });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || 'Failed to resolve URLs' });
+    }
+  });
+
+  // Reverse-geocode GPS coordinates to Vietnam address parts for epidemic case mapping
+  app.all('/api/maps/reverse-geocode', async (req, res) => {
+    try {
+      const { default: reverseGeocodeHandler } = await import('./api/maps/reverse-geocode');
+      return reverseGeocodeHandler(req, res);
+    } catch (err: any) {
+      return res.status(500).json({
+        ok: false,
+        error: err?.message || 'Lỗi truy vấn địa chỉ từ tọa độ GPS',
+      });
     }
   });
 

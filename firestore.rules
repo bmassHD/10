@@ -1113,6 +1113,9 @@ service cloud.firestore {
         data.keys().hasOnly([
           'phone', 'extraPhone', 'senderName', 'senderAvatarUrl',
           'senderCitizenIdMasked', 'senderDob', 'senderGender', 'senderAddress', 'senderVerified',
+          'isForRelative', 'relativeRelation', 'usedReporterInfoAsSubstitute', 'incidentAddress',
+          'reporterName', 'reporterPhone', 'reporterCitizenIdMasked', 'reporterAddress',
+          'reporterVerified', 'isCustomLocation',
           'category', 'note', 'lat', 'lng', 'accuracy',
           'status', 'deviceId', 'uid', 'responderName', 'responderPhone', 'responderNote',
           'outcome', 'referredToFacility', 'resolvedAt',
@@ -1134,6 +1137,16 @@ service cloud.firestore {
         (!('senderGender' in data) || data.senderGender in ['Nam', 'Nữ', 'Khác']) &&
         (!('senderAddress' in data) || (data.senderAddress is string && data.senderAddress.size() <= 512)) &&
         (!('senderVerified' in data) || data.senderVerified is bool) &&
+        (!('isForRelative' in data) || data.isForRelative is bool) &&
+        (!('relativeRelation' in data) || (data.relativeRelation is string && data.relativeRelation.size() <= 64)) &&
+        (!('usedReporterInfoAsSubstitute' in data) || data.usedReporterInfoAsSubstitute is bool) &&
+        (!('incidentAddress' in data) || (data.incidentAddress is string && data.incidentAddress.size() <= 512)) &&
+        (!('reporterName' in data) || (data.reporterName is string && data.reporterName.size() <= 128)) &&
+        (!('reporterPhone' in data) || (data.reporterPhone is string && data.reporterPhone.size() <= 32)) &&
+        (!('reporterCitizenIdMasked' in data) || (data.reporterCitizenIdMasked is string && data.reporterCitizenIdMasked.size() <= 32)) &&
+        (!('reporterAddress' in data) || (data.reporterAddress is string && data.reporterAddress.size() <= 512)) &&
+        (!('reporterVerified' in data) || data.reporterVerified is bool) &&
+        (!('isCustomLocation' in data) || data.isCustomLocation is bool) &&
         (!('note' in data) || (data.note is string && data.note.size() <= 1000)) &&
         (!('accuracy' in data) || data.accuracy is number) &&
         (!('uid' in data) || (data.uid is string && data.uid.size() <= 128)) &&
@@ -1160,7 +1173,7 @@ service cloud.firestore {
             request.resource.data.deviceId == resource.data.deviceId && (
               isStaff() || (
                 resource.data.status in ['active', 'responding'] &&
-                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lat', 'lng', 'accuracy', 'status', 'note', 'outcome', 'resolvedAt', 'updatedAt'])
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lat', 'lng', 'accuracy', 'incidentAddress', 'status', 'note', 'outcome', 'resolvedAt', 'updatedAt'])
               )
             )
           )
@@ -1349,6 +1362,56 @@ service cloud.firestore {
         )
       );
       allow delete: if isValidId(claimId) && isAdmin();
+    }
+
+    function isValidEpidemicCase(data, caseId) {
+      return data.keys().hasAll([
+          'id', 'diseaseType', 'lat', 'lng', 'specificAddress',
+          'wardName', 'provinceName', 'fullAddress', 'radiusMeters',
+          'status', 'recordedDate', 'reportedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'diseaseType', 'caseLabel', 'lat', 'lng',
+          'specificAddress', 'wardCode', 'wardName', 'provinceCode', 'provinceName', 'fullAddress',
+          'radiusMeters', 'status', 'recordedDate', 'notes',
+          'reportedByUid', 'reportedByName', 'reportedByRole',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == caseId &&
+        data.diseaseType in ['sot_xuat_huyet'] &&
+        (!('caseLabel' in data) || (data.caseLabel is string && data.caseLabel.size() <= 128)) &&
+        data.lat is number && data.lat >= -90 && data.lat <= 90 &&
+        data.lng is number && data.lng >= -180 && data.lng <= 180 &&
+        data.specificAddress is string && data.specificAddress.size() <= 256 &&
+        (!('wardCode' in data) || (data.wardCode is string && data.wardCode.size() <= 32)) &&
+        data.wardName is string && data.wardName.size() >= 1 && data.wardName.size() <= 128 &&
+        (!('provinceCode' in data) || (data.provinceCode is string && data.provinceCode.size() <= 32)) &&
+        data.provinceName is string && data.provinceName.size() >= 1 && data.provinceName.size() <= 128 &&
+        data.fullAddress is string && data.fullAddress.size() >= 1 && data.fullAddress.size() <= 512 &&
+        data.radiusMeters is number && data.radiusMeters >= 10 && data.radiusMeters <= 50000 &&
+        data.status in ['active', 'monitoring', 'resolved'] &&
+        data.recordedDate is string && data.recordedDate.size() >= 8 && data.recordedDate.size() <= 32 &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000)) &&
+        data.reportedByUid is string && data.reportedByUid.size() >= 1 && data.reportedByUid.size() <= 128 &&
+        (!('reportedByName' in data) || (data.reportedByName is string && data.reportedByName.size() <= 128)) &&
+        (!('reportedByRole' in data) || (data.reportedByRole is string && data.reportedByRole.size() <= 64)) &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    // Epidemic Cases & Containment Zones (No patient PII; visible when map toggle enabled)
+    match /epidemicCases/{caseId} {
+      allow get: if isValidId(caseId);
+      allow list: if true;
+      allow create: if isValidId(caseId) && isStaff() && isNotBanned() &&
+        isValidEpidemicCase(request.resource.data, caseId) &&
+        request.resource.data.reportedByUid == request.auth.uid;
+      allow update: if isValidId(caseId) && isStaff() && isNotBanned() &&
+        isValidEpidemicCase(request.resource.data, caseId) &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (isAdmin() || request.resource.data.reportedByUid == resource.data.reportedByUid);
+      allow delete: if isValidId(caseId) && isStaff() && isNotBanned() &&
+        (isAdmin() || resource.data.reportedByUid == request.auth.uid);
     }
   }
 }

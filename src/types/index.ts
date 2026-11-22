@@ -477,6 +477,33 @@ export interface MapLocation {
   notes?: string;
 }
 
+export type EpidemicDiseaseType = 'sot_xuat_huyet';
+
+export type EpidemicCaseStatus = 'active' | 'monitoring' | 'resolved';
+
+export interface EpidemicCase {
+  id: string;
+  diseaseType: EpidemicDiseaseType;
+  caseLabel?: string; // Nhãn / mã ca bệnh (vd: Ca SXH - Tổ 3), không lưu thông tin cá nhân nhạy cảm
+  lat: number;
+  lng: number;
+  specificAddress: string;
+  wardCode?: string;
+  wardName: string;
+  provinceCode?: string;
+  provinceName: string;
+  fullAddress: string;
+  radiusMeters: number; // Khoảng cách khoanh vùng (mét)
+  status: EpidemicCaseStatus;
+  recordedDate: string; // YYYY-MM-DD
+  notes?: string;
+  reportedByUid: string;
+  reportedByName?: string;
+  reportedByRole?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface QuickLink {
   id: string;
   title: string;
@@ -598,6 +625,7 @@ export interface BackupItem {
     serviceRatingsCount?: number;
     legacyUserSnapshotsCount?: number;
     userMigrationClaimsCount?: number;
+    epidemicCasesCount?: number;
     totalRecords?: number;
   };
   storageType?: 'cloud' | 'github';
@@ -808,6 +836,16 @@ export interface RescueSignal {
   senderGender?: 'Nam' | 'Nữ' | 'Khác';
   senderAddress?: string;
   senderVerified?: boolean;
+  isForRelative?: boolean;
+  relativeRelation?: string;
+  usedReporterInfoAsSubstitute?: boolean;
+  incidentAddress?: string;
+  reporterName?: string;
+  reporterPhone?: string;
+  reporterCitizenIdMasked?: string;
+  reporterAddress?: string;
+  reporterVerified?: boolean;
+  isCustomLocation?: boolean;
   category: RescueSignalCategory;
   note?: string;
   lat: number;
@@ -1056,6 +1094,7 @@ export interface SystemSettings {
   migrationBannerNote?: string;
   businessTripConfig?: BusinessTripConfig;
   cccdLookupEnabled?: boolean;
+  epidemicMapButtonVisible?: boolean; // Admin bật/tắt nút "Xem bản đồ dịch bệnh" cho tất cả đối tượng
   updatedAt?: string;
 }
 

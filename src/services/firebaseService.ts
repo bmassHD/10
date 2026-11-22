@@ -15,6 +15,7 @@ import {
   arrayUnion,
   increment,
   writeBatch,
+  onSnapshot,
 } from 'firebase/firestore';
 import { initializeApp as initSecondaryApp, deleteApp as deleteSecondaryApp } from 'firebase/app';
 import { getAuth as getSecondaryAuth, createUserWithEmailAndPassword, signOut as signSecondaryOut } from 'firebase/auth';
@@ -68,6 +69,7 @@ import {
   ServiceRatingCategory,
   LegacyUserSnapshot,
   UserMigrationClaim,
+  EpidemicCase,
 } from '../types';
 import { getOrCreateDeviceId } from './systemNotificationService';
 
@@ -122,6 +124,7 @@ export const emptySystemSettings: SystemSettings = {
   vaccinationBannerEnabled: true,
   vaccinationBannerNote: '',
   cccdLookupEnabled: true,
+  epidemicMapButtonVisible: true,
   version: 'v3.0.0 (Bản Chính Thức)',
   highlightImages: [],
   vaccinationSchedules: [],
@@ -1823,6 +1826,33 @@ export async function createRescueSignal(
         ? input.senderAddress.trim().slice(0, 512)
         : undefined,
       senderVerified: typeof input.senderVerified === 'boolean' ? input.senderVerified : undefined,
+      isForRelative: typeof input.isForRelative === 'boolean' ? input.isForRelative : undefined,
+      relativeRelation: input.relativeRelation?.trim()
+        ? input.relativeRelation.trim().slice(0, 64)
+        : undefined,
+      usedReporterInfoAsSubstitute:
+        typeof input.usedReporterInfoAsSubstitute === 'boolean'
+          ? input.usedReporterInfoAsSubstitute
+          : undefined,
+      incidentAddress: input.incidentAddress?.trim()
+        ? input.incidentAddress.trim().slice(0, 512)
+        : undefined,
+      reporterName: input.reporterName?.trim()
+        ? input.reporterName.trim().slice(0, 128)
+        : undefined,
+      reporterPhone: input.reporterPhone?.trim()
+        ? input.reporterPhone.trim().slice(0, 32)
+        : undefined,
+      reporterCitizenIdMasked: input.reporterCitizenIdMasked?.trim()
+        ? input.reporterCitizenIdMasked.trim().slice(0, 32)
+        : undefined,
+      reporterAddress: input.reporterAddress?.trim()
+        ? input.reporterAddress.trim().slice(0, 512)
+        : undefined,
+      reporterVerified:
+        typeof input.reporterVerified === 'boolean' ? input.reporterVerified : undefined,
+      isCustomLocation:
+        typeof input.isCustomLocation === 'boolean' ? input.isCustomLocation : undefined,
       category: input.category,
       note: input.note?.trim() ? input.note.trim().slice(0, 1000) : undefined,
       lat: Math.max(-90, Math.min(90, input.lat)),
@@ -1850,6 +1880,7 @@ export async function updateRescueSignal(
       | 'lat'
       | 'lng'
       | 'accuracy'
+      | 'incidentAddress'
       | 'status'
       | 'note'
       | 'responderName'
@@ -1869,6 +1900,9 @@ export async function updateRescueSignal(
     if (typeof patch.lat === 'number') payload.lat = Math.max(-90, Math.min(90, patch.lat));
     if (typeof patch.lng === 'number') payload.lng = Math.max(-180, Math.min(180, patch.lng));
     if (typeof patch.accuracy === 'number') payload.accuracy = Math.round(patch.accuracy);
+    if (patch.incidentAddress !== undefined) {
+      payload.incidentAddress = patch.incidentAddress.trim().slice(0, 512);
+    }
     if (patch.status) payload.status = patch.status;
     if (patch.note !== undefined) payload.note = patch.note.trim().slice(0, 1000);
     if (patch.responderName !== undefined) payload.responderName = patch.responderName.trim().slice(0, 128);
@@ -1891,6 +1925,72 @@ export async function deleteRescueSignal(id: string): Promise<void> {
   const path = `rescueSignals/${id}`;
   try {
     await deleteDoc(doc(db, 'rescueSignals', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+    throw error;
+  }
+}
+
+// Epidemic Cases (Bản đồ Dịch bệnh & Khoanh vùng)
+export function subscribeEpidemicCases(
+  onData: (cases: EpidemicCase[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const path = 'epidemicCases';
+  const q = query(collection(db, path), orderBy('updatedAt', 'desc'));
+  return onSnapshot(
+    q,
+    snap => {
+      const items = snap.docs.map(d => ({
+        id: d.id,
+        ...(d.data() as Omit<EpidemicCase, 'id'>),
+      }));
+      onData(items);
+    },
+    err => {
+      if (onError) onError(err);
+    }
+  );
+}
+
+export async function saveEpidemicCase(item: EpidemicCase): Promise<void> {
+  const path = `epidemicCases/${item.id}`;
+  const isNew = !item.createdAt;
+  const nowIso = new Date().toISOString();
+  try {
+    const payload = cleanDataForFirestore({
+      id: item.id,
+      diseaseType: item.diseaseType || 'sot_xuat_huyet',
+      caseLabel: item.caseLabel?.trim() ? item.caseLabel.trim().slice(0, 128) : undefined,
+      lat: Math.max(-90, Math.min(90, Number(item.lat))),
+      lng: Math.max(-180, Math.min(180, Number(item.lng))),
+      specificAddress: (item.specificAddress || '').trim().slice(0, 256),
+      wardCode: item.wardCode?.trim() ? item.wardCode.trim().slice(0, 32) : undefined,
+      wardName: (item.wardName || '').trim().slice(0, 128),
+      provinceCode: item.provinceCode?.trim() ? item.provinceCode.trim().slice(0, 32) : undefined,
+      provinceName: (item.provinceName || '').trim().slice(0, 128),
+      fullAddress: (item.fullAddress || '').trim().slice(0, 512),
+      radiusMeters: Math.max(10, Math.min(50000, Math.round(Number(item.radiusMeters) || 200))),
+      status: item.status || 'active',
+      recordedDate: (item.recordedDate || nowIso.slice(0, 10)).slice(0, 32),
+      notes: item.notes?.trim() ? item.notes.trim().slice(0, 1000) : undefined,
+      reportedByUid: item.reportedByUid.slice(0, 128),
+      reportedByName: item.reportedByName?.trim() ? item.reportedByName.trim().slice(0, 128) : undefined,
+      reportedByRole: item.reportedByRole?.trim() ? item.reportedByRole.trim().slice(0, 64) : undefined,
+      createdAt: item.createdAt || nowIso,
+      updatedAt: nowIso,
+    });
+    await setDoc(doc(db, 'epidemicCases', item.id), payload);
+  } catch (error) {
+    handleFirestoreError(error, isNew ? OperationType.CREATE : OperationType.UPDATE, path);
+    throw error;
+  }
+}
+
+export async function deleteEpidemicCase(id: string): Promise<void> {
+  const path = `epidemicCases/${id}`;
+  try {
+    await deleteDoc(doc(db, 'epidemicCases', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
     throw error;

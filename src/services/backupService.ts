@@ -182,6 +182,7 @@ export const BACKUP_COLLECTIONS: ReadonlyArray<{ key: string; label: string }> =
   { key: 'admins', label: 'Danh sách Quản trị viên' },
   { key: 'tasks', label: 'Nhiệm vụ công việc' },
   { key: 'rescueSignals', label: 'Tín hiệu cứu hộ SOS' },
+  { key: 'epidemicCases', label: 'Bản đồ dịch bệnh & Ca khoanh vùng' },
   { key: 'siteStats', label: 'Thống kê lượt truy cập' },
   { key: 'onlinePresence', label: 'Trạng thái trực tuyến' },
   { key: 'pushSubscriptions', label: 'Đăng ký thông báo đẩy' },
@@ -217,6 +218,7 @@ const RESTORABLE_COLLECTIONS = new Set<string>([
   'admins',
   'tasks',
   'rescueSignals',
+  'epidemicCases',
   'siteStats',
   'onlinePresence',
   'pushSubscriptions',
@@ -317,6 +319,7 @@ export class BackupService {
       serviceRatingsCount: 0,
       legacyUserSnapshotsCount: 0,
       userMigrationClaimsCount: 0,
+      epidemicCasesCount: 0,
       totalRecords: 0,
     };
 
@@ -441,6 +444,7 @@ export class BackupService {
         if (collName === 'serviceRatings') stats.serviceRatingsCount = count;
         if (collName === 'legacyUserSnapshots') stats.legacyUserSnapshotsCount = count;
         if (collName === 'userMigrationClaims') stats.userMigrationClaimsCount = count;
+        if (collName === 'epidemicCases') stats.epidemicCasesCount = count;
       } catch (collectionErr) {
         console.warn(`Snapshot reading collection ${collName} failed:`, collectionErr);
         backupData[collName] = [];

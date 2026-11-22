@@ -321,6 +321,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                 locations={settings.mapLocations}
                 stationName={settings.stationName}
                 defaultAddress={settings.address}
+                epidemicMapButtonVisible={settings.epidemicMapButtonVisible !== false}
               />
             </div>
           </div>

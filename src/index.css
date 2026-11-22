@@ -66,3 +66,112 @@
   scrollbar-width: none;
 }
 
+:root {
+  --sos-border-width: 5px;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --sos-border-width: 7px;
+  }
+}
+
+@keyframes sos-gradient-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes sos-border-blink {
+  0%,
+  100% {
+    opacity: 1;
+    filter: saturate(1.25) brightness(1.08);
+  }
+  50% {
+    opacity: 0.16;
+    filter: saturate(0.9) brightness(0.92);
+  }
+}
+
+.sos-site-border-glow {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 99989;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 18px rgba(244, 63, 94, 0.55),
+    inset 0 0 38px rgba(249, 115, 22, 0.3);
+  animation: sos-border-blink 0.95s ease-in-out infinite;
+}
+
+.sos-site-border-frame {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 99990;
+  pointer-events: none;
+  background-image: linear-gradient(
+    125deg,
+    #ff003c 0%,
+    #ff6a00 22%,
+    #ffd000 44%,
+    #ec4899 66%,
+    #3b82f6 84%,
+    #ff003c 100%
+  );
+  background-size: 300% 300%;
+  -webkit-clip-path: polygon(
+    0% 0%,
+    100% 0%,
+    100% 100%,
+    0% 100%,
+    0% 0%,
+    var(--sos-border-width) var(--sos-border-width),
+    var(--sos-border-width) calc(100% - var(--sos-border-width)),
+    calc(100% - var(--sos-border-width)) calc(100% - var(--sos-border-width)),
+    calc(100% - var(--sos-border-width)) var(--sos-border-width),
+    var(--sos-border-width) var(--sos-border-width)
+  );
+  clip-path: polygon(
+    0% 0%,
+    100% 0%,
+    100% 100%,
+    0% 100%,
+    0% 0%,
+    var(--sos-border-width) var(--sos-border-width),
+    var(--sos-border-width) calc(100% - var(--sos-border-width)),
+    calc(100% - var(--sos-border-width)) calc(100% - var(--sos-border-width)),
+    calc(100% - var(--sos-border-width)) var(--sos-border-width),
+    var(--sos-border-width) var(--sos-border-width)
+  );
+  animation:
+    sos-gradient-flow 2.8s linear infinite,
+    sos-border-blink 0.95s ease-in-out infinite;
+}
+
+.leaflet-picking-mode .leaflet-grab {
+  cursor: crosshair !important;
+}
+
+.rescue-sos-beacon-pin,
+.rescue-relative-draft-pin {
+  background: transparent !important;
+  border: none !important;
+}
+
+.rescue-sos-beacon-pin img {
+  max-width: none !important;
+}
+
+
+

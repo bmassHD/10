@@ -31,6 +31,9 @@ import {
   Plus,
   UserCheck,
   Loader2,
+  Users,
+  User,
+  MousePointerClick,
 } from 'lucide-react';
 import L from 'leaflet';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -60,6 +63,7 @@ import { UserAvatar } from '../common/UserAvatar';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
 import { getUserVerificationProgress } from '../../utils/verificationBadge';
 import { maskVerifiedValue } from '../../utils/verifiedIdentity';
+import { reverseGeocodeCoordinates } from '../../utils/vietnamAddressMatcher';
 
 interface RescueMapViewProps {
   settings: SystemSettings;
@@ -117,6 +121,17 @@ function getSafeAvatarSrc(url?: string | null): string {
   }
   return '';
 }
+
+const RELATIVE_RELATION_OPTIONS = [
+  'Bố / Mẹ',
+  'Ông / Bà',
+  'Vợ / Chồng',
+  'Con cái',
+  'Anh / Chị / Em',
+  'Người thân khác',
+  'Hàng xóm / Người cần giúp',
+  'Khác',
+];
 
 interface CombinedMedicalPoint {
   id: string;
@@ -180,6 +195,24 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   const [category, setCategory] = useState<RescueSignalCategory>('medical_emergency');
   const [noteInput, setNoteInput] = useState<string>('');
 
+  // Self vs Relative (Proxy) SOS state
+  const [sosMode, setSosMode] = useState<'self' | 'relative'>('self');
+  const [useMyInfoForRelative, setUseMyInfoForRelative] = useState<boolean>(false);
+  const [relativeName, setRelativeName] = useState<string>('');
+  const [relativeRelation, setRelativeRelation] = useState<string>('Bố / Mẹ');
+  const [relativeRelationCustom, setRelativeRelationCustom] = useState<string>('');
+  const [relativePhone, setRelativePhone] = useState<string>('');
+  const [relativeDob, setRelativeDob] = useState<string>('');
+  const [relativeGender, setRelativeGender] = useState<'Nam' | 'Nữ' | 'Khác' | ''>('');
+  const [relativeCitizenId, setRelativeCitizenId] = useState<string>('');
+  const [reporterCitizenIdInput, setReporterCitizenIdInput] = useState<string>('');
+  const [reporterAddressInput, setReporterAddressInput] = useState<string>('');
+  const [customSosCoords, setCustomSosCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [incidentAddress, setIncidentAddress] = useState<string>('');
+  const [suggestedMapAddress, setSuggestedMapAddress] = useState<string>('');
+  const [isReverseGeocodingSos, setIsReverseGeocodingSos] = useState<boolean>(false);
+  const [isPickingMapLocation, setIsPickingMapLocation] = useState<boolean>(false);
+
   // Mandatory GPS state (optional for Admin monitor mode)
   const [userCoords, setUserCoords] = useState<{
     lat: number;
@@ -214,6 +247,9 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const signalMarkersMapRef = useRef<Map<string, L.Marker>>(new Map());
   const userMarkerRef = useRef<L.Marker | null>(null);
+  const relativeDraftMarkerRef = useRef<L.Marker | null>(null);
+  const lastTileModeRef = useRef<'satellite' | 'streets' | null>(null);
+  const lastAutoFilledAddressRef = useRef<string>('');
   const shouldFocusUserOnNextGpsRef = useRef<boolean>(false);
   const lastLivePushRef = useRef<number>(0);
 
@@ -425,7 +461,9 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
 
   // Admin can access Rescue Map without providing GPS location or phone number
   const hasAccess = isAdmin || Boolean(confirmedPhone && userCoords);
-  const canBroadcastSos = Boolean(confirmedPhone && userCoords);
+  const canBroadcastSos = Boolean(
+    confirmedPhone && (userCoords || (isAdmin && showAdminVerifyBox))
+  );
 
   // Listen to ALL real-time rescueSignals & active nearbyFacilities once access requirements are met
   useEffect(() => {
@@ -517,9 +555,10 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
     );
   }, [activeSignals, deviceId, currentUser?.uid, confirmedPhone]);
 
-  // Periodically sync user's live GPS into their active SOS signal if moving
+  // Periodically sync user's live GPS into their active self-SOS signal if moving
+  // (Never overwrite custom pinned coordinates when SOS was sent on behalf of a relative)
   useEffect(() => {
-    if (!myActiveSignal || !userCoords) return;
+    if (!myActiveSignal || !userCoords || myActiveSignal.isForRelative) return;
     const now = Date.now();
     const movedKm = calculateHaversineDistance(
       myActiveSignal.lat,
@@ -626,19 +665,114 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   // Clean up Leaflet on unmount
   useEffect(() => {
     return () => {
+      if (relativeDraftMarkerRef.current) {
+        relativeDraftMarkerRef.current.remove();
+        relativeDraftMarkerRef.current = null;
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
         tileLayerRef.current = null;
         markersLayerRef.current = null;
+        lastTileModeRef.current = null;
         signalMarkersMapRef.current.clear();
       }
     };
   }, []);
 
+  const lookupAddressForCustomCoords = useCallback(async (lat: number, lng: number) => {
+    setIsReverseGeocodingSos(true);
+    try {
+      const res = await reverseGeocodeCoordinates(lat, lng);
+      const resolvedAddr = (res.fullAddress || res.displayName || '').trim();
+      if (resolvedAddr) {
+        setSuggestedMapAddress(resolvedAddr);
+        setIncidentAddress(prev => {
+          const trimmedPrev = prev.trim();
+          if (!trimmedPrev || trimmedPrev === lastAutoFilledAddressRef.current) {
+            lastAutoFilledAddressRef.current = resolvedAddr;
+            return resolvedAddr;
+          }
+          return prev;
+        });
+      }
+    } catch {
+      // Keep user's manual address entry intact on reverse-geocode errors
+    } finally {
+      setIsReverseGeocodingSos(false);
+    }
+  }, []);
+
+  const applyCustomSosCoordinates = useCallback(
+    (lat: number, lng: number, panMap = false) => {
+      const next = { lat, lng };
+      setCustomSosCoords(next);
+      if (panMap && mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize({ animate: false });
+        mapInstanceRef.current.setView([lat, lng], Math.max(mapInstanceRef.current.getZoom(), 15), {
+          animate: false,
+        });
+      }
+      void lookupAddressForCustomCoords(lat, lng);
+    },
+    [lookupAddressForCustomCoords]
+  );
+
+  // Sync own info into relative fields when substitute option is toggled ON
+  useEffect(() => {
+    if (!useMyInfoForRelative) return;
+    const ownPhone = isVerifiedSosUser ? verifiedPhoneVal || confirmedPhone : confirmedPhone;
+    const ownName = isVerifiedSosUser ? verifiedDisplayName || senderName.trim() : senderName.trim();
+    if (ownName) setRelativeName(ownName);
+    if (ownPhone) setRelativePhone(ownPhone);
+    if (isVerifiedSosUser) {
+      if (verifiedDob) setRelativeDob(verifiedDob);
+      if (verifiedGender === 'Nam' || verifiedGender === 'Nữ' || verifiedGender === 'Khác') {
+        setRelativeGender(verifiedGender);
+      }
+      if (verifiedCitizenId) setRelativeCitizenId(verifiedCitizenId);
+    }
+  }, [
+    useMyInfoForRelative,
+    isVerifiedSosUser,
+    verifiedPhoneVal,
+    confirmedPhone,
+    verifiedDisplayName,
+    senderName,
+    verifiedDob,
+    verifiedGender,
+    verifiedCitizenId,
+  ]);
+
+  // Keep Leaflet container dimensions synced across layout changes (prevents blank/white map canvas)
+  useEffect(() => {
+    if (!hasAccess || !mapContainerRef.current) return;
+    const container = mapContainerRef.current;
+    const invalidate = () => {
+      mapInstanceRef.current?.invalidateSize({ animate: false });
+    };
+    const timer = window.setTimeout(invalidate, 80);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        invalidate();
+      });
+      observer.observe(container);
+    }
+    return () => {
+      window.clearTimeout(timer);
+      observer?.disconnect();
+    };
+  }, [hasAccess, sosMode, isPickingMapLocation, Boolean(myActiveSignal)]);
+
   // Initialize and update Leaflet Rescue Map (supports Admin viewing without userCoords)
   useEffect(() => {
     if (!hasAccess || !mapContainerRef.current) return;
+
+    const getTileUrl = (mode: 'satellite' | 'streets') =>
+      mode === 'satellite'
+        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     if (!mapInstanceRef.current) {
       const initialCenter: [number, number] = userCoords
@@ -659,20 +793,27 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       });
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      const url =
-        mapTileType === 'satellite'
-          ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-          : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-      tileLayerRef.current = L.tileLayer(url, { maxZoom: 19 }).addTo(map);
+      tileLayerRef.current = L.tileLayer(getTileUrl(mapTileType), {
+        maxZoom: 19,
+        maxNativeZoom: mapTileType === 'satellite' ? 17 : 19,
+        keepBuffer: 4,
+        updateWhenZooming: false,
+      }).addTo(map);
+      lastTileModeRef.current = mapTileType;
       markersLayerRef.current = L.layerGroup().addTo(map);
       mapInstanceRef.current = map;
-    } else if (tileLayerRef.current) {
-      const url =
-        mapTileType === 'satellite'
-          ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-          : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-      tileLayerRef.current.setUrl(url);
+    } else if (lastTileModeRef.current !== mapTileType) {
+      if (tileLayerRef.current) {
+        tileLayerRef.current.remove();
+      }
+      tileLayerRef.current = L.tileLayer(getTileUrl(mapTileType), {
+        maxZoom: 19,
+        maxNativeZoom: mapTileType === 'satellite' ? 17 : 19,
+        keepBuffer: 4,
+        updateWhenZooming: false,
+      }).addTo(mapInstanceRef.current);
+      tileLayerRef.current.bringToBack();
+      lastTileModeRef.current = mapTileType;
     }
 
     const markersLayer = markersLayerRef.current;
@@ -781,7 +922,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       const avatarInitial = escapeHtml(
         ((sig.senderName || sig.phone || 'S').trim()[0] || 'S').toUpperCase()
       );
-      const pinSize = safeAvatar ? (isSelected ? 46 : 40) : isSelected ? 34 : 28;
+      // Fixed pixel dimension centered directly at (lat, lng) so avatar never scales with map zoom
+      const pinSize = safeAvatar ? 42 : 30;
+      const ringShadow = isSelected
+        ? `0 0 0 8px ${pinShadow}, 0 4px 14px rgba(0,0,0,0.35)`
+        : `0 0 0 5px ${pinShadow}, 0 3px 10px rgba(0,0,0,0.3)`;
       const badgeContent = safeAvatar
         ? `
           <div style="
@@ -791,7 +936,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
             border-radius:50%;
             background:${pinColor};
             border:3px solid #ffffff;
-            box-shadow:0 0 0 ${isSelected ? '10px' : '7px'} ${pinShadow};
+            box-shadow:${ringShadow};
             overflow:hidden;
             display:flex;
             align-items:center;
@@ -806,7 +951,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
               alt="${escapeHtml(sig.senderName || sig.phone)}"
               referrerpolicy="no-referrer"
               onerror="this.style.display='none'"
-              style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;"
+              style="position:absolute;inset:0;width:100%;height:100%;max-width:none;object-fit:cover;border-radius:50%;display:block;"
             />
           </div>
         `
@@ -817,7 +962,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
             border-radius:50%;
             background:${pinColor};
             border:3px solid #ffffff;
-            box-shadow:0 0 0 ${isSelected ? '10px' : '7px'} ${pinShadow};
+            box-shadow:${ringShadow};
             display:flex;
             align-items:center;
             justify-content:center;
@@ -830,27 +975,32 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       const sosIcon = L.divIcon({
         className: 'rescue-sos-beacon-pin',
         html: `
-          <div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);">
+          <div style="position:relative;width:${pinSize}px;height:${pinSize}px;">
             <div style="
+              position:absolute;
+              bottom:${pinSize + 6}px;
+              left:50%;
+              transform:translateX(-50%);
               background:${pinColor};
               color:#ffffff;
-              padding:4px 9px;
+              padding:3px 9px;
               border-radius:9999px;
-              font-size:12px;
+              font-size:11px;
               font-weight:900;
               letter-spacing:0.03em;
               white-space:nowrap;
               border:2px solid #ffffff;
-              box-shadow:0 4px 14px ${pinShadow};
-              margin-bottom:5px;
+              box-shadow:0 4px 12px ${pinShadow};
+              pointer-events:auto;
             ">
-              ${isResolved ? 'ĐÃ CỨU' : 'SOS'} · ${escapeHtml(sig.phone)}
+              ${isResolved ? 'ĐÃ CỨU' : sig.isForRelative ? 'SOS HỘ' : 'SOS'} · ${escapeHtml(sig.phone)}
             </div>
             ${badgeContent}
           </div>
         `,
-        iconSize: safeAvatar ? [164, 82] : [140, 62],
-        iconAnchor: safeAvatar ? [82, 74] : [70, 56],
+        iconSize: [pinSize, pinSize],
+        iconAnchor: [pinSize / 2, pinSize / 2],
+        popupAnchor: [0, -(pinSize / 2 + 8)],
       });
 
       const marker = L.marker([sig.lat, sig.lng], {
@@ -869,21 +1019,32 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
         ? `<img src="${escapeHtml(safeAvatar)}" alt="${escapeHtml(sig.senderName || sig.phone)}" referrerpolicy="no-referrer" onerror="this.style.display='none'" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid ${pinColor};flex-shrink:0;" />`
         : '';
 
+      const displayIncidentAddr = sig.incidentAddress || sig.senderAddress;
+
       marker.bindPopup(`
-        <div style="font-family: inherit; font-size: 12px; line-height: 1.5; min-width: 235px;">
-          <div style="display:inline-block;padding:2px 8px;border-radius:6px;background:${
-            isResolved ? '#d1fae5' : isResponding ? '#fef3c7' : '#fee2e2'
-          };color:${
-            isResolved ? '#065f46' : isResponding ? '#92400e' : '#b91c1c'
-          };font-weight:800;font-size:11px;margin-bottom:6px;">
+        <div style="font-family: inherit; font-size: 12px; line-height: 1.5; min-width: 245px;">
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
+            <span style="display:inline-block;padding:2px 8px;border-radius:6px;background:${
+              isResolved ? '#d1fae5' : isResponding ? '#fef3c7' : '#fee2e2'
+            };color:${
+              isResolved ? '#065f46' : isResponding ? '#92400e' : '#b91c1c'
+            };font-weight:800;font-size:11px;">
+              ${
+                isResolved
+                  ? sig.outcome === 'referred'
+                    ? 'ĐÃ CỨU · CHUYỂN TUYẾN'
+                    : 'ĐÃ CỨU AN TOÀN'
+                  : isResponding
+                  ? 'ĐANG ĐIỀU PHỐI CỨU HỘ'
+                  : 'TÍN HIỆU CỨU HỘ KHẨN (SOS)'
+              }
+            </span>
             ${
-              isResolved
-                ? sig.outcome === 'referred'
-                  ? 'ĐÃ CỨU · CHUYỂN TUYẾN'
-                  : 'ĐÃ CỨU AN TOÀN'
-                : isResponding
-                ? 'ĐANG ĐIỀU PHỐI CỨU HỘ'
-                : 'TÍN HIỆU CỨU HỘ KHẨN (SOS)'
+              sig.isForRelative
+                ? `<span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#fff7ed;color:#c2410c;border:1px solid #fdba74;font-weight:800;font-size:11px;">PHÁT TIN HỘ · ${escapeHtml(
+                    sig.relativeRelation || 'NGƯỜI THÂN'
+                  )}</span>`
+                : ''
             }
           </div>
           <div style="display:flex;align-items:center;gap:10px;margin:2px 0 6px;">
@@ -898,7 +1059,16 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
           </div>
           ${sig.senderDob || sig.senderGender ? `<div style="color:#475569;font-size:11px;">${sig.senderDob ? `Ngày sinh: <strong>${escapeHtml(sig.senderDob)}</strong>` : ''}${sig.senderDob && sig.senderGender ? ' · ' : ''}${sig.senderGender ? `Giới tính: <strong>${escapeHtml(sig.senderGender)}</strong>` : ''}</div>` : ''}
           ${sig.senderCitizenIdMasked ? `<div style="color:#475569;font-size:11px;">CCCD: <strong>${escapeHtml(sig.senderCitizenIdMasked)}</strong></div>` : ''}
-          ${sig.senderAddress ? `<div style="color:#475569;font-size:11px;">Địa chỉ: ${escapeHtml(sig.senderAddress)}</div>` : ''}
+          ${displayIncidentAddr ? `<div style="color:#0f172a;font-size:11px;margin-top:2px;"><strong>${sig.isForRelative ? 'Địa chỉ cần cứu hộ' : 'Địa chỉ'}:</strong> ${escapeHtml(displayIncidentAddr)}</div>` : ''}
+          ${
+            sig.isForRelative && (sig.reporterName || sig.reporterPhone)
+              ? `<div style="margin-top:4px;padding:4px 7px;border-radius:6px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#334155;">Người phát tin hộ: <strong>${escapeHtml(
+                  sig.reporterName || 'Người thân'
+                )}${sig.reporterVerified ? ' ✓' : ''}</strong>${
+                  sig.reporterPhone ? ` · <a href="tel:${escapeHtml(sig.reporterPhone)}" style="color:#b91c1c;font-weight:700;text-decoration:none;">${escapeHtml(sig.reporterPhone)}</a>` : ''
+                }${sig.usedReporterInfoAsSubstitute ? ' <span style="color:#0369a1;">(dùng TT bản thân thay thế)</span>' : ''}</div>`
+              : ''
+          }
           <div style="color:#334155;margin-top:3px;">Tình huống: <strong>${escapeHtml(catLabel)}</strong></div>
           ${sig.referredToFacility ? `<div style="color:#0369a1;font-weight:700;">Chuyển đến: ${escapeHtml(sig.referredToFacility)}</div>` : ''}
           ${sig.note ? `<div style="color:#475569;margin-top:3px;font-style:italic;">"${escapeHtml(sig.note)}"</div>` : ''}
@@ -907,7 +1077,12 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
           </div>
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
             <a href="tel:${escapeHtml(sig.phone)}" style="background:#dc2626;color:#fff;padding:5px 10px;border-radius:8px;font-weight:700;text-decoration:none;">Gọi ngay</a>
-            ${sig.extraPhone ? `<a href="tel:${escapeHtml(sig.extraPhone)}" style="background:#0f766e;color:#fff;padding:5px 10px;border-radius:8px;font-weight:700;text-decoration:none;">Gọi SĐT phụ</a>` : ''}
+            ${
+              sig.reporterPhone && sig.reporterPhone !== sig.phone
+                ? `<a href="tel:${escapeHtml(sig.reporterPhone)}" style="background:#ea580c;color:#fff;padding:5px 10px;border-radius:8px;font-weight:700;text-decoration:none;">Gọi người báo hộ</a>`
+                : ''
+            }
+            ${sig.extraPhone && sig.extraPhone !== sig.reporterPhone ? `<a href="tel:${escapeHtml(sig.extraPhone)}" style="background:#0f766e;color:#fff;padding:5px 10px;border-radius:8px;font-weight:700;text-decoration:none;">Gọi SĐT phụ</a>` : ''}
             <a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer" style="background:#0f172a;color:#fff;padding:5px 10px;border-radius:8px;font-weight:700;text-decoration:none;">${userCoords ? 'Chỉ đường GPS' : 'Mở Google Maps'}</a>
           </div>
         </div>
@@ -930,6 +1105,96 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
     combinedMedicalPoints,
     confirmedPhone,
     settings.mapLocations,
+  ]);
+
+  // Interactive draggable pin + map click listener for Relative SOS custom location
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!hasAccess || !map) return;
+
+    const shouldShowDraftPin =
+      (!myActiveSignal && sosMode === 'relative' && Boolean(customSosCoords)) ||
+      (Boolean(myActiveSignal?.isForRelative) && isPickingMapLocation && Boolean(customSosCoords));
+
+    if (shouldShowDraftPin && customSosCoords) {
+      const draftIcon = L.divIcon({
+        className: 'rescue-relative-draft-pin',
+        html: `
+          <div style="position:relative;width:28px;height:28px;">
+            <div style="
+              position:absolute;
+              bottom:34px;
+              left:50%;
+              transform:translateX(-50%);
+              background:#ea580c;
+              color:#ffffff;
+              padding:4px 10px;
+              border-radius:9999px;
+              font-size:11px;
+              font-weight:800;
+              white-space:nowrap;
+              border:2px solid #ffffff;
+              box-shadow:0 4px 14px rgba(234,88,12,0.45);
+              pointer-events:auto;
+            ">
+              📍 Vị trí SOS Người thân (kéo để chỉnh)
+            </div>
+            <div style="
+              width:28px;
+              height:28px;
+              border-radius:50%;
+              background:#ea580c;
+              border:3px solid #ffffff;
+              box-shadow:0 0 0 6px rgba(234,88,12,0.28);
+              display:flex;
+              align-items:center;
+              justify-content:center;
+              color:#ffffff;
+              font-weight:900;
+              font-size:14px;
+            ">+</div>
+          </div>
+        `,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+
+      if (!relativeDraftMarkerRef.current) {
+        const draftMarker = L.marker([customSosCoords.lat, customSosCoords.lng], {
+          icon: draftIcon,
+          draggable: true,
+          zIndexOffset: 1200,
+        }).addTo(map);
+        draftMarker.on('dragend', () => {
+          const pos = draftMarker.getLatLng();
+          applyCustomSosCoordinates(pos.lat, pos.lng, false);
+        });
+        relativeDraftMarkerRef.current = draftMarker;
+      } else {
+        relativeDraftMarkerRef.current.setLatLng([customSosCoords.lat, customSosCoords.lng]);
+        relativeDraftMarkerRef.current.setIcon(draftIcon);
+      }
+    } else if (relativeDraftMarkerRef.current) {
+      relativeDraftMarkerRef.current.remove();
+      relativeDraftMarkerRef.current = null;
+    }
+
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
+      if (!isPickingMapLocation) return;
+      applyCustomSosCoordinates(e.latlng.lat, e.latlng.lng, false);
+    };
+
+    map.on('click', handleMapClick);
+    return () => {
+      map.off('click', handleMapClick);
+    };
+  }, [
+    hasAccess,
+    myActiveSignal,
+    sosMode,
+    customSosCoords,
+    isPickingMapLocation,
+    applyCustomSosCoordinates,
   ]);
 
   const handleConfirmPhone = (e: React.FormEvent) => {
@@ -981,6 +1246,143 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
     const effectiveSenderName = isVerifiedSosUser
       ? verifiedDisplayName || senderName.trim()
       : senderName.trim();
+
+    if (sosMode === 'relative') {
+      if (!primaryPhone || !isValidVietnamesePhone(primaryPhone)) {
+        showToast('warning', 'Thiếu SĐT người phát tin hộ', 'Vui lòng nhập và xác nhận số điện thoại người phát tin hộ.');
+        return;
+      }
+      if (!effectiveSenderName) {
+        showToast('warning', 'Thiếu họ tên người phát tin hộ', 'Vui lòng nhập đầy đủ họ tên của người phát tin hộ.');
+        return;
+      }
+
+      const effectiveRelation =
+        relativeRelation === 'Khác'
+          ? relativeRelationCustom.trim() || 'Người thân'
+          : relativeRelation;
+
+      let targetName = '';
+      let targetPhone = '';
+      let targetDob = '';
+      let targetGender: 'Nam' | 'Nữ' | 'Khác' | undefined;
+      let targetCitizenIdRaw = '';
+      let targetVerified = false;
+
+      if (useMyInfoForRelative) {
+        targetName = effectiveSenderName;
+        targetPhone = primaryPhone;
+        targetDob = isVerifiedSosUser ? verifiedDob : relativeDob.trim();
+        targetGender =
+          isVerifiedSosUser &&
+          (verifiedGender === 'Nam' || verifiedGender === 'Nữ' || verifiedGender === 'Khác')
+            ? verifiedGender
+            : relativeGender || undefined;
+        targetCitizenIdRaw = isVerifiedSosUser ? verifiedCitizenId : relativeCitizenId.trim();
+        targetVerified = isVerifiedSosUser;
+      } else {
+        targetName = relativeName.trim();
+        targetPhone = normalizePhoneInput(relativePhone);
+        if (!targetName) {
+          showToast('warning', 'Thiếu họ tên người thân', 'Vui lòng nhập họ tên người cần cứu hộ hoặc chọn dùng thông tin bản thân thay thế.');
+          return;
+        }
+        if (!targetPhone || !isValidVietnamesePhone(targetPhone)) {
+          showToast('warning', 'Thiếu SĐT liên hệ người thân', 'Vui lòng nhập SĐT hợp lệ của người cần cứu hộ (hoặc bấm "Dùng SĐT của tôi").');
+          return;
+        }
+        targetDob = relativeDob.trim();
+        targetGender = relativeGender || undefined;
+        targetCitizenIdRaw = relativeCitizenId.trim();
+      }
+
+      if (!customSosCoords) {
+        setIsPickingMapLocation(true);
+        mapContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        showToast(
+          'warning',
+          'Chưa chọn vị trí trên bản đồ',
+          'Vui lòng nhấn trực tiếp lên bản đồ để ghim vị trí của người thân cần cứu hộ.'
+        );
+        return;
+      }
+
+      const cleanIncidentAddr = incidentAddress.trim();
+      if (!cleanIncidentAddr) {
+        showToast(
+          'warning',
+          'Thiếu địa chỉ cụ thể',
+          'Vui lòng nhập địa chỉ cụ thể nơi người thân cần cứu hộ (số nhà, tên đường, phường/xã, điểm mốc).'
+        );
+        return;
+      }
+
+      const reporterCccdRaw = isVerifiedSosUser
+        ? verifiedCitizenId
+        : reporterCitizenIdInput.trim();
+      const reporterAddrRaw = isVerifiedSosUser
+        ? verifiedFullAddress
+        : reporterAddressInput.trim();
+
+      setIsBroadcasting(true);
+      try {
+        try {
+          localStorage.setItem(RESCUE_NAME_STORAGE_KEY, effectiveSenderName);
+        } catch {
+          // ignore
+        }
+        const newId = await createRescueSignal({
+          phone: targetPhone,
+          extraPhone:
+            targetPhone !== primaryPhone
+              ? primaryPhone
+              : confirmedExtraPhone || undefined,
+          senderName: targetName,
+          senderAvatarUrl:
+            useMyInfoForRelative && isVerifiedSosUser && verifiedAvatarUrl
+              ? verifiedAvatarUrl
+              : undefined,
+          senderCitizenIdMasked: targetCitizenIdRaw
+            ? maskVerifiedValue(targetCitizenIdRaw, 'cccd')
+            : undefined,
+          senderDob: targetDob || undefined,
+          senderGender: targetGender,
+          senderAddress: cleanIncidentAddr,
+          senderVerified: targetVerified || undefined,
+          isForRelative: true,
+          relativeRelation: effectiveRelation,
+          usedReporterInfoAsSubstitute: useMyInfoForRelative,
+          incidentAddress: cleanIncidentAddr,
+          reporterName: effectiveSenderName,
+          reporterPhone: primaryPhone,
+          reporterCitizenIdMasked: reporterCccdRaw
+            ? maskVerifiedValue(reporterCccdRaw, 'cccd')
+            : undefined,
+          reporterAddress: reporterAddrRaw || undefined,
+          reporterVerified: isVerifiedSosUser || undefined,
+          isCustomLocation: true,
+          category,
+          note: noteInput.trim() || undefined,
+          lat: customSosCoords.lat,
+          lng: customSosCoords.lng,
+          deviceId,
+          uid: currentUser?.uid,
+        });
+        setSelectedSignalId(newId);
+        setNoteInput('');
+        setIsPickingMapLocation(false);
+        showToast(
+          'error',
+          'ĐÃ PHÁT TÍN HIỆU SOS CHO NGƯỜI THÂN',
+          `Vị trí ghim trên bản đồ và địa chỉ "${cleanIncidentAddr}" đang được hiển thị công khai.`
+        );
+      } catch (err: any) {
+        showToast('error', 'Không thể phát tín hiệu', err?.message || 'Vui lòng thử lại hoặc gọi 115 ngay.');
+      } finally {
+        setIsBroadcasting(false);
+      }
+      return;
+    }
 
     if (!primaryPhone || !userCoords) {
       showToast('warning', 'Thiếu thông tin bắt buộc', 'Cần số điện thoại và định vị GPS để phát tín hiệu.');
@@ -1036,7 +1438,49 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   };
 
   const handleUpdateMyCoords = async () => {
-    if (!myActiveSignal || !userCoords) return;
+    if (!myActiveSignal) return;
+    if (myActiveSignal.isForRelative) {
+      if (!isPickingMapLocation || !customSosCoords) {
+        setCustomSosCoords({ lat: myActiveSignal.lat, lng: myActiveSignal.lng });
+        setIsPickingMapLocation(true);
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize({ animate: false });
+          mapInstanceRef.current.setView(
+            [myActiveSignal.lat, myActiveSignal.lng],
+            Math.max(mapInstanceRef.current.getZoom(), 15),
+            { animate: false }
+          );
+        }
+        mapContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        showToast(
+          'info',
+          'Chọn lại vị trí trên bản đồ',
+          'Nhấp vào bản đồ hoặc kéo ghim màu cam để chọn vị trí mới, sau đó bấm Lưu vị trí ghim mới.'
+        );
+        return;
+      }
+      setIsUpdatingSignal(true);
+      try {
+        await updateRescueSignal(myActiveSignal.id, {
+          lat: customSosCoords.lat,
+          lng: customSosCoords.lng,
+          ...(incidentAddress.trim() ? { incidentAddress: incidentAddress.trim() } : {}),
+        });
+        setIsPickingMapLocation(false);
+        showToast(
+          'success',
+          'Đã cập nhật vị trí ghim trên bản đồ',
+          `${customSosCoords.lat.toFixed(5)}, ${customSosCoords.lng.toFixed(5)}`
+        );
+      } catch (err: any) {
+        showToast('error', 'Lỗi cập nhật vị trí', err?.message);
+      } finally {
+        setIsUpdatingSignal(false);
+      }
+      return;
+    }
+
+    if (!userCoords) return;
     setIsUpdatingSignal(true);
     try {
       await updateRescueSignal(myActiveSignal.id, {
@@ -1653,9 +2097,13 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
           <div className="rounded-3xl bg-rose-700 text-white p-5 sm:p-6 shadow-lg space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="space-y-1.5">
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-rose-100">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wider text-rose-100">
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-white animate-ping" />
-                  <span>Đang phát tín hiệu cứu hộ công khai</span>
+                  <span>
+                    {myActiveSignal.isForRelative
+                      ? `Đang phát SOS hộ (${myActiveSignal.relativeRelation || 'Người thân'})`
+                      : 'Đang phát tín hiệu cứu hộ công khai'}
+                  </span>
                   <span aria-hidden="true">·</span>
                   <span>{formatRelativeTimeVi(myActiveSignal.createdAt)}</span>
                 </div>
@@ -1679,11 +2127,24 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                   )}
                   <span className="text-sm font-semibold text-rose-100">
                     {CATEGORY_META[myActiveSignal.category]?.label}
+                    {myActiveSignal.senderName ? ` · ${myActiveSignal.senderName}` : ''}
                     {myActiveSignal.status === 'responding' ? ' · Đã có đơn vị tiếp cận' : ''}
                   </span>
                 </div>
+                {myActiveSignal.incidentAddress && (
+                  <p className="text-xs sm:text-sm font-semibold text-white/95">
+                    Địa chỉ cần cứu hộ: {myActiveSignal.incidentAddress}
+                  </p>
+                )}
+                {myActiveSignal.isForRelative && myActiveSignal.reporterName && (
+                  <p className="text-xs text-rose-100">
+                    Người phát tin hộ: <strong>{myActiveSignal.reporterName}</strong>
+                    {myActiveSignal.reporterPhone ? ` (${myActiveSignal.reporterPhone})` : ''}
+                  </p>
+                )}
                 <p className="text-xs text-rose-100 font-mono tabular-nums">
-                  Vị trí đang phát: {myActiveSignal.lat.toFixed(6)}, {myActiveSignal.lng.toFixed(6)}
+                  {myActiveSignal.isForRelative ? 'Vị trí ghim trên bản đồ:' : 'Vị trí đang phát:'}{' '}
+                  {myActiveSignal.lat.toFixed(6)}, {myActiveSignal.lng.toFixed(6)}
                 </p>
               </div>
 
@@ -1695,7 +2156,13 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                   className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                 >
                   <LocateFixed className="w-4 h-4 shrink-0" />
-                  <span>Cập nhật tọa độ mới</span>
+                  <span>
+                    {myActiveSignal.isForRelative
+                      ? isPickingMapLocation && customSosCoords
+                        ? 'Lưu vị trí ghim mới'
+                        : 'Chỉnh vị trí trên bản đồ'
+                      : 'Cập nhật tọa độ mới'}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -1949,19 +2416,437 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
         </div>
       ) : (
         /* Broadcast SOS Form */
-        <div className="rounded-3xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 shadow-xs p-5 sm:p-6 space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+        <div className="rounded-3xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 shadow-xs p-5 sm:p-6 space-y-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div>
               <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
                 Phát Tín Hiệu Cứu Hộ Khẩn Cấp (SOS)
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Khi phát tín hiệu, số điện thoại, ảnh đại diện và vị trí GPS của bạn sẽ được làm nổi bật công khai trên bản đồ để mọi người và lực lượng y tế hỗ trợ kịp thời.
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Hỗ trợ phát SOS cho chính bạn (theo GPS hiện tại) hoặc phát SOS hộ cho người thân (tùy chỉnh vị trí trực tiếp trên bản đồ &amp; ghi rõ địa chỉ).
               </p>
+            </div>
+
+            {/* Mode Switcher: Self vs Relative */}
+            <div className="grid grid-cols-2 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 w-full lg:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setSosMode('self');
+                  setIsPickingMapLocation(false);
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                  sosMode === 'self'
+                    ? 'bg-rose-700 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span>SOS cho bản thân</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSosMode('relative');
+                  if (!customSosCoords) {
+                    const seed = userCoords
+                      ? { lat: userCoords.lat, lng: userCoords.lng }
+                      : settings.mapLocations?.[0]
+                      ? { lat: settings.mapLocations[0].lat, lng: settings.mapLocations[0].lng }
+                      : null;
+                    if (seed) {
+                      setCustomSosCoords(seed);
+                      if (!incidentAddress.trim()) {
+                        void lookupAddressForCustomCoords(seed.lat, seed.lng);
+                      }
+                    }
+                  }
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                  sosMode === 'relative'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                <span>SOS cho người thân</span>
+              </button>
             </div>
           </div>
 
-          {isVerifiedSosUser && renderVerifiedSosIdentityCard()}
+          {sosMode === 'self' ? (
+            <>
+              {isVerifiedSosUser && renderVerifiedSosIdentityCard()}
+              {!userCoords && isAdmin && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
+                  <span>Để phát SOS cho bản thân, thiết bị cần có tọa độ GPS (hoặc chuyển sang tab &quot;SOS cho người thân&quot; để ghim trực tiếp trên bản đồ).</span>
+                  <button
+                    type="button"
+                    onClick={() => requestGpsLocation(true)}
+                    disabled={isLocating}
+                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    {isLocating ? 'Đang lấy GPS...' : 'Lấy GPS hiện tại'}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              {/* Section 1: Reporter Info (Người phát tin hộ) */}
+              <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>1. Thông tin Người phát tin hộ (Bạn)</span>
+                  </div>
+                  {isVerifiedSosUser && (
+                    <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                      Tài khoản đã xác minh
+                    </span>
+                  )}
+                </div>
+
+                {isVerifiedSosUser ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                      <span className="text-[11px] text-slate-500 block">Họ tên người báo hộ</span>
+                      <strong className="text-slate-900 dark:text-white flex items-center gap-1">
+                        <span>{verifiedDisplayName || senderName || 'Đã xác minh'}</span>
+                        {verificationProgress.isFullyVerified && <VerifiedBlueTick size="xs" />}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                      <span className="text-[11px] text-slate-500 block">SĐT người báo hộ</span>
+                      <strong className="text-slate-900 dark:text-white tabular-nums">
+                        {verifiedPhoneVal || confirmedPhone}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                      <span className="text-[11px] text-slate-500 block">CCCD / Địa chỉ</span>
+                      <strong className="text-slate-800 dark:text-slate-200 truncate block">
+                        {verifiedCitizenId ? maskVerifiedValue(verifiedCitizenId, 'cccd') : verifiedFullAddress || 'Đã xác thực'}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Họ và tên người phát tin hộ *
+                      </label>
+                      <input
+                        type="text"
+                        value={senderName}
+                        onChange={e => setSenderName(e.target.value)}
+                        placeholder="Nhập đầy đủ họ tên..."
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        SĐT người phát tin hộ *
+                      </label>
+                      <input
+                        type="tel"
+                        value={confirmedPhone}
+                        readOnly
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 text-xs font-bold tabular-nums text-slate-800 dark:text-slate-200"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Số CCCD người báo (tùy chọn)
+                      </label>
+                      <input
+                        type="text"
+                        value={reporterCitizenIdInput}
+                        onChange={e => setReporterCitizenIdInput(e.target.value)}
+                        placeholder="12 số CCCD (sẽ ẩn bớt khi hiển thị)"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Địa chỉ liên hệ người báo
+                      </label>
+                      <input
+                        type="text"
+                        value={reporterAddressInput}
+                        onChange={e => setReporterAddressInput(e.target.value)}
+                        placeholder="Địa chỉ của bạn (tùy chọn)"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Section 2: Relative Victim Details OR Substitute Own Info */}
+              <div className="p-4 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 space-y-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>2. Thông tin Người thân cần cứu hộ</span>
+                  </div>
+
+                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 cursor-pointer select-none shadow-2xs">
+                    <input
+                      type="checkbox"
+                      checked={useMyInfoForRelative}
+                      onChange={e => setUseMyInfoForRelative(e.target.checked)}
+                      className="w-4 h-4 rounded accent-amber-600 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                      Sử dụng thông tin của bản thân thay thế
+                    </span>
+                  </label>
+                </div>
+
+                {useMyInfoForRelative && (
+                  <p className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/70 rounded-xl px-3 py-2">
+                    Hệ thống đang sử dụng họ tên, SĐT và thông tin cá nhân của chính bạn làm thông tin liên hệ cho ca SOS người thân này. Bạn vẫn tùy chỉnh vị trí trên bản đồ và địa chỉ cụ thể bên dưới.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Mối quan hệ với người phát tin *
+                    </label>
+                    <select
+                      value={relativeRelation}
+                      onChange={e => setRelativeRelation(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    >
+                      {RELATIVE_RELATION_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                    {relativeRelation === 'Khác' && (
+                      <input
+                        type="text"
+                        value={relativeRelationCustom}
+                        onChange={e => setRelativeRelationCustom(e.target.value)}
+                        placeholder="Nhập mối quan hệ cụ thể..."
+                        className="mt-1.5 w-full px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Họ và tên người cần cứu hộ *
+                    </label>
+                    <input
+                      type="text"
+                      disabled={useMyInfoForRelative}
+                      value={relativeName}
+                      onChange={e => setRelativeName(e.target.value)}
+                      placeholder="Họ và tên người thân..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:bg-slate-100 disabled:dark:bg-slate-800 disabled:cursor-not-allowed text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                        SĐT liên hệ người thân *
+                      </label>
+                      {!useMyInfoForRelative && confirmedPhone && (
+                        <button
+                          type="button"
+                          onClick={() => setRelativePhone(confirmedPhone)}
+                          className="text-[11px] font-bold text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
+                        >
+                          Dùng SĐT của tôi
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      disabled={useMyInfoForRelative}
+                      value={relativePhone}
+                      onChange={e => setRelativePhone(e.target.value)}
+                      placeholder="SĐT người thân (hoặc SĐT liên hệ)"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:bg-slate-100 disabled:dark:bg-slate-800 disabled:cursor-not-allowed text-xs font-bold tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Ngày sinh / Năm sinh
+                    </label>
+                    <input
+                      type="text"
+                      disabled={useMyInfoForRelative}
+                      value={relativeDob}
+                      onChange={e => setRelativeDob(e.target.value)}
+                      placeholder="VD: 15/08/1958 hoặc 1958"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:bg-slate-100 disabled:dark:bg-slate-800 disabled:cursor-not-allowed text-xs tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Giới tính
+                    </label>
+                    <select
+                      disabled={useMyInfoForRelative}
+                      value={relativeGender}
+                      onChange={e =>
+                        setRelativeGender(e.target.value as 'Nam' | 'Nữ' | 'Khác' | '')
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:bg-slate-100 disabled:dark:bg-slate-800 disabled:cursor-not-allowed text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    >
+                      <option value="">-- Chọn giới tính --</option>
+                      <option value="Nam">Nam</option>
+                      <option value="Nữ">Nữ</option>
+                      <option value="Khác">Khác</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Số CCCD (tùy chọn · tự động che khi công khai)
+                    </label>
+                    <input
+                      type="text"
+                      disabled={useMyInfoForRelative}
+                      value={relativeCitizenId}
+                      onChange={e => setRelativeCitizenId(e.target.value)}
+                      placeholder="Số CCCD của người thân (nếu biết)"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:bg-slate-100 disabled:dark:bg-slate-800 disabled:cursor-not-allowed text-xs tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 3: Direct Map Pinning & Specific Address */}
+              <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-rose-800 dark:text-rose-200 flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>3. Tùy chỉnh vị trí trên Bản đồ &amp; Địa chỉ cụ thể *</span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextPicking = !isPickingMapLocation;
+                        setIsPickingMapLocation(nextPicking);
+                        if (nextPicking) {
+                          const map = mapInstanceRef.current;
+                          if (map) {
+                            map.invalidateSize({ animate: false });
+                          }
+                          if (!customSosCoords) {
+                            const seed = userCoords
+                              ? { lat: userCoords.lat, lng: userCoords.lng }
+                              : settings.mapLocations?.[0]
+                              ? { lat: settings.mapLocations[0].lat, lng: settings.mapLocations[0].lng }
+                              : map
+                              ? { lat: map.getCenter().lat, lng: map.getCenter().lng }
+                              : null;
+                            if (seed) {
+                              applyCustomSosCoordinates(seed.lat, seed.lng, true);
+                            }
+                          } else if (map) {
+                            map.setView(
+                              [customSosCoords.lat, customSosCoords.lng],
+                              Math.max(map.getZoom(), 15),
+                              { animate: false }
+                            );
+                          }
+                          mapContainerRef.current?.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'center',
+                          });
+                          window.setTimeout(() => {
+                            mapInstanceRef.current?.invalidateSize({ animate: false });
+                          }, 350);
+                        }
+                      }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-extrabold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                        isPickingMapLocation
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-rose-700 hover:bg-rose-800 text-white shadow-xs'
+                      }`}
+                    >
+                      <MousePointerClick className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {isPickingMapLocation
+                          ? 'Đang chọn trên bản đồ · Bấm để dừng'
+                          : 'Chọn / Ghim vị trí trực tiếp trên Bản đồ'}
+                      </span>
+                    </button>
+
+                    {userCoords && (
+                      <button
+                        type="button"
+                        onClick={() => applyCustomSosCoordinates(userCoords.lat, userCoords.lng, true)}
+                        className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <LocateFixed className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>Lấy GPS hiện tại làm mốc</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {customSosCoords ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs">
+                    <span className="font-mono font-bold text-emerald-800 dark:text-emerald-300 tabular-nums">
+                      Tọa độ đã ghim: {customSosCoords.lat.toFixed(6)}, {customSosCoords.lng.toFixed(6)}
+                    </span>
+                    <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                      {isReverseGeocodingSos
+                        ? 'Đang tự động tra địa chỉ...'
+                        : 'Có thể kéo ghim màu cam trên bản đồ để tinh chỉnh từng mét'}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                    Chưa có tọa độ ghim. Hãy bấm &quot;Chọn / Ghim vị trí trực tiếp trên Bản đồ&quot; và chạm vào vị trí người thân trên bản đồ bên dưới.
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-200">
+                    Địa chỉ cụ thể nơi người thân cần cứu hộ *
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={incidentAddress}
+                    onChange={e => setIncidentAddress(e.target.value)}
+                    placeholder="Ghi rõ số nhà, tên đường, hẻm/ngõ, ấp/khóm/khu phố, phường/xã, tỉnh/TP và điểm mốc dễ nhận biết..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                  {suggestedMapAddress &&
+                    suggestedMapAddress !== incidentAddress.trim() && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-1.5">
+                        <span className="truncate">
+                          Gợi ý theo điểm ghim: <strong>{suggestedMapAddress}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            lastAutoFilledAddressRef.current = suggestedMapAddress;
+                            setIncidentAddress(suggestedMapAddress);
+                          }}
+                          className="font-bold text-rose-700 dark:text-rose-400 hover:underline cursor-pointer shrink-0"
+                        >
+                          Áp dụng địa chỉ này
+                        </button>
+                      </div>
+                    )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             {(Object.keys(CATEGORY_META) as RescueSignalCategory[]).map(catKey => {
@@ -1987,7 +2872,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-            {!isVerifiedSosUser && (
+            {sosMode === 'self' && !isVerifiedSosUser && (
               <div className="md:col-span-3">
                 <input
                   type="text"
@@ -1998,12 +2883,20 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                 />
               </div>
             )}
-            <div className={isVerifiedSosUser ? 'md:col-span-8' : 'md:col-span-5'}>
+            <div
+              className={
+                sosMode === 'relative' || isVerifiedSosUser ? 'md:col-span-8' : 'md:col-span-5'
+              }
+            >
               <input
                 type="text"
                 value={noteInput}
                 onChange={e => setNoteInput(e.target.value)}
-                placeholder="Mô tả nhanh tình trạng, số người cần cứu, điểm mốc..."
+                placeholder={
+                  sosMode === 'relative'
+                    ? 'Mô tả tình trạng nạn nhân, số người cần cứu, lưu ý tiếp cận...'
+                    : 'Mô tả nhanh tình trạng, số người cần cứu, điểm mốc...'
+                }
                 className="w-full px-3.5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
               />
             </div>
@@ -2015,7 +2908,13 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                 className="w-full min-h-[48px] py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-extrabold text-sm shadow-md inline-flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60 whitespace-nowrap"
               >
                 <Radio className={`w-4 h-4 shrink-0 ${isBroadcasting ? 'animate-spin' : ''}`} />
-                <span>{isBroadcasting ? 'Đang phát tín hiệu...' : 'PHÁT TÍN HIỆU CỨU HỘ (SOS)'}</span>
+                <span>
+                  {isBroadcasting
+                    ? 'Đang phát tín hiệu...'
+                    : sosMode === 'relative'
+                    ? 'PHÁT SOS CHO NGƯỜI THÂN'
+                    : 'PHÁT TÍN HIỆU CỨU HỘ (SOS)'}
+                </span>
               </button>
             </div>
           </div>
@@ -2151,8 +3050,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Leaflet Interactive Map */}
         <div className="lg:col-span-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden p-3 sm:p-4 space-y-3">
-          <div className="h-[420px] sm:h-[520px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 relative isolate z-0">
-            <div ref={mapContainerRef} className="w-full h-full" />
+          <div className="h-[420px] sm:h-[520px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 relative z-0 bg-slate-200 dark:bg-slate-800">
+            <div
+              ref={mapContainerRef}
+              className={`w-full h-full ${isPickingMapLocation ? 'leaflet-picking-mode' : ''}`}
+            />
 
             <div className="absolute top-3 inset-x-3 z-[1000] flex items-center justify-between gap-2 pointer-events-none">
               <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[54%]">
@@ -2174,6 +3076,26 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                 <span>{isLocating ? 'Đang định vị...' : 'Xem vị trí của tôi'}</span>
               </button>
             </div>
+
+            {isPickingMapLocation && (
+              <div className="absolute bottom-3 inset-x-3 z-[1000] pointer-events-none flex justify-center">
+                <div className="pointer-events-auto max-w-xl w-full rounded-2xl bg-amber-600/95 text-white px-4 py-2.5 shadow-lg border border-amber-400 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 font-bold min-w-0">
+                    <MousePointerClick className="w-4 h-4 shrink-0" />
+                    <span>
+                      Nhấn lên bản đồ hoặc kéo ghim cam để đặt vị trí người thân cần cứu hộ
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsPickingMapLocation(false)}
+                    className="px-3 py-1 rounded-xl bg-white text-amber-800 font-extrabold cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Xong
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 px-1">
@@ -2266,9 +3188,16 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                             />
                           )}
                           <div className="min-w-0 space-y-0.5">
-                            <div className="text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
-                              {isResponding ? 'Đang điều phối cứu hộ' : 'Đang phát tín hiệu SOS'}
-                              {isMine ? ' · Của bạn' : ''}
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
+                              <span>
+                                {isResponding ? 'Đang điều phối cứu hộ' : 'Đang phát tín hiệu SOS'}
+                                {isMine ? ' · Của bạn' : ''}
+                              </span>
+                              {sig.isForRelative && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-[10px]">
+                                  Phát hộ · {sig.relativeRelation || 'Người thân'}
+                                </span>
+                              )}
                             </div>
                             <a
                               href={`tel:${sig.phone}`}
@@ -2317,9 +3246,33 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                               .join(' · ')}
                           </div>
                         )}
-                        {sig.senderAddress && (
-                          <div className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
-                            Địa chỉ: {sig.senderAddress}
+                        {(sig.incidentAddress || sig.senderAddress) && (
+                          <div className="text-[11px] text-slate-700 dark:text-slate-300 leading-snug font-medium">
+                            {sig.isForRelative ? 'Địa chỉ cần cứu hộ:' : 'Địa chỉ:'}{' '}
+                            {sig.incidentAddress || sig.senderAddress}
+                          </div>
+                        )}
+                        {sig.isForRelative && (sig.reporterName || sig.reporterPhone) && (
+                          <div className="text-[11px] text-slate-600 dark:text-slate-300 bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 flex flex-wrap items-center gap-1">
+                            <span>Người phát tin hộ:</span>
+                            <strong className="text-slate-900 dark:text-white">
+                              {sig.reporterName || 'Người thân'}
+                            </strong>
+                            {sig.reporterVerified && <VerifiedBlueTick size="xs" />}
+                            {sig.reporterPhone && (
+                              <a
+                                href={`tel:${sig.reporterPhone}`}
+                                onClick={e => e.stopPropagation()}
+                                className="font-bold text-rose-700 dark:text-rose-400 hover:underline tabular-nums"
+                              >
+                                · {sig.reporterPhone}
+                              </a>
+                            )}
+                            {sig.usedReporterInfoAsSubstitute && (
+                              <span className="text-sky-700 dark:text-sky-400">
+                                (dùng TT bản thân)
+                              </span>
+                            )}
                           </div>
                         )}
                         {sig.note && (
@@ -2443,6 +3396,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                             >
                               {isReferred ? 'Đã chuyển tuyến' : 'Đã cứu · Tại chỗ'}
                             </span>
+                            {sig.isForRelative && (
+                              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                                Phát hộ · {sig.relativeRelation || 'Người thân'}
+                              </span>
+                            )}
                             <span className="text-xs font-bold text-slate-800 dark:text-slate-200 tabular-nums">
                               {sig.phone}
                             </span>
@@ -2452,6 +3410,17 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                             {sig.senderName && <span>· {sig.senderName}</span>}
                             {sig.senderVerified && <VerifiedBlueTick size="xs" />}
                           </div>
+                          {(sig.incidentAddress || sig.senderAddress) && (
+                            <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
+                              Địa chỉ: {sig.incidentAddress || sig.senderAddress}
+                            </div>
+                          )}
+                          {sig.isForRelative && (sig.reporterName || sig.reporterPhone) && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              Người phát tin hộ: {sig.reporterName || 'Người thân'}
+                              {sig.reporterPhone ? ` (${sig.reporterPhone})` : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
