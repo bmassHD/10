@@ -818,6 +818,37 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "diseaseType", "lat", "lng", "wardName", "provinceName", "fullAddress", "radiusMeters", "status", "recordedDate", "reportedByUid", "createdAt", "updatedAt"]
+    },
+    "QrLoginSession": {
+      "title": "QrLoginSession",
+      "description": "Cross-device QR login handoff session with ephemeral ECDH public key and encrypted auth bundle",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "pairCode": { "type": "string", "maxLength": 16 },
+        "pollSecretHash": { "type": "string", "maxLength": 64 },
+        "publicKey": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "enum": ["pending", "scanned", "approved", "rejected", "expired", "consumed"] },
+        "createdAtMs": { "type": "number" },
+        "expiresAtMs": { "type": "number" },
+        "pcDevice": { "type": "object" },
+        "scannerDisplayName": { "type": "string", "maxLength": 128 },
+        "scannerEmailMasked": { "type": "string", "maxLength": 128 },
+        "scannerUid": { "type": "string", "maxLength": 128 },
+        "encryptedAuthBundle": { "type": "string", "maxLength": 16000 }
+      },
+      "required": ["sessionId", "pairCode", "pollSecretHash", "publicKey", "status", "createdAtMs", "expiresAtMs", "pcDevice"]
+    },
+    "QrPairCode": {
+      "title": "QrPairCode",
+      "description": "Short-lived 6-character pair code index resolving to a QrLoginSession ID",
+      "type": "object",
+      "properties": {
+        "pairCode": { "type": "string", "maxLength": 16 },
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "expiresAtMs": { "type": "number" }
+      },
+      "required": ["pairCode", "sessionId", "expiresAtMs"]
     }
   },
   "firestore": {
@@ -960,6 +991,14 @@
     "/epidemicCases/{caseId}": {
       "schema": { "$ref": "#/entities/EpidemicCase" },
       "description": "Epidemic case locations and containment zone radii managed by medical staff and admins"
+    },
+    "/qrLoginSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/QrLoginSession" },
+      "description": "Cross-device QR login sessions shared across serverless instances with ECDH-encrypted handoff bundles"
+    },
+    "/qrPairCodes/{pairCode}": {
+      "schema": { "$ref": "#/entities/QrPairCode" },
+      "description": "Short-lived 6-character QR pair code lookup registry"
     }
   }
 }
