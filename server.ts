@@ -16,6 +16,27 @@ import {
   AI_PROVIDERS_INFO,
   AiProviderType,
 } from './src/server/aiAgentService';
+import {
+  completeZaloExchange,
+  createZaloAuthorizationUrl,
+  getZaloStatusPayload,
+  handleZaloOAuthCallback,
+  resolveZaloMiniAppPhone,
+} from './src/server/zaloAuthService';
+import {
+  approveQrLoginSession,
+  createQrLoginSession,
+  inspectQrLoginSession,
+  pollQrLoginSession,
+} from './src/server/qrLoginService';
+import {
+  createBiometricAuthenticationOptions,
+  createBiometricRegistrationOptions,
+  getBiometricStatusForDevice,
+  revokeBiometricCredentials,
+  verifyBiometricAuthentication,
+  verifyBiometricRegistration,
+} from './src/server/biometricAuthService';
 
 dotenv.config();
 
@@ -1569,7 +1590,7 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
   });
 
   // Diagnostics endpoint
-  app.get('/api/diagnostics', async (_req, res) => {
+  app.get('/api/diagnostics', async (req, res) => {
     const RSS_URL = 'https://suckhoedoisong.vn/y-te.rss';
     const startTime = Date.now();
 
@@ -1655,6 +1676,8 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
         mapsResolve: '/api/maps/resolve-urls',
         facebookPreview: '/api/facebook-preview',
         pushSubscribe: '/api/push/subscribe',
+        zaloStatus: '/api/auth/zalo/status',
+        zaloCallback: '/api/auth/zalo/callback',
       },
       services: {
         rssUpstream: rssStatus,
@@ -1662,6 +1685,7 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
           configured: hasGeminiKey,
           model: DEFAULT_GEMINI_MODEL,
         },
+        zaloOauth: getZaloStatusPayload(req),
         firebase: {
           projectId: firebaseDiag.projectId,
           databaseId: firebaseDiag.databaseId,
@@ -1981,6 +2005,187 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
     }
   });
 
+  // Zalo OAuth v4 + Graph API v2.0 Authentication Endpoints
+  app.get('/api/auth/zalo/status', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(getZaloStatusPayload(req));
+  });
+
+  app.get('/api/auth/zalo/url', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const mode = req.query?.mode === 'link' ? 'link' : 'login';
+      const result = createZaloAuthorizationUrl(req, res, mode);
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      return res.status(503).json({
+        ok: false,
+        error: err?.message || 'Chưa cấu hình đăng nhập Zalo.',
+        status: getZaloStatusPayload(req),
+      });
+    }
+  });
+
+  app.get(['/api/auth/zalo/callback', '/api/auth/zalo/callback/'], async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const html = await handleZaloOAuthCallback(req, res);
+    return res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
+  });
+
+  app.post('/api/auth/zalo/complete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const payload = await completeZaloExchange(req, res);
+      return res.json(payload);
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể hoàn tất đăng nhập Zalo.',
+      });
+    }
+  });
+
+  app.post('/api/auth/zalo/phone', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const { accessToken, phoneToken } = req.body || {};
+      const result = await resolveZaloMiniAppPhone(accessToken, phoneToken);
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể giải mã số điện thoại Zalo.',
+      });
+    }
+  });
+
+  // Cross-device PC QR Login Endpoints (scan & approve from signed-in mobile)
+  app.post('/api/auth/qr/create', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(createQrLoginSession(req));
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể khởi tạo phiên đăng nhập QR.',
+      });
+    }
+  });
+
+  app.post('/api/auth/qr/inspect', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await inspectQrLoginSession(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Không thể đọc thông tin phiên QR.';
+      const status = message.includes('đăng nhập trên điện thoại') ? 401 : 400;
+      return res.status(status).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/auth/qr/approve', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await approveQrLoginSession(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Không thể xác nhận đăng nhập QR.';
+      const status = message.includes('đăng nhập trên điện thoại') ? 401 : 400;
+      return res.status(status).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/auth/qr/status', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(pollQrLoginSession(req));
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể kiểm tra trạng thái mã QR.',
+      });
+    }
+  });
+
+  // WebAuthn Biometric (Face ID / Touch ID / Windows Hello) endpoints
+  app.post('/api/auth/biometric/register-options', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await createBiometricRegistrationOptions(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Không thể khởi tạo phiên kích hoạt sinh trắc học.';
+      const status = message.includes('cần đăng nhập') || message.includes('hết hạn') ? 401 : 400;
+      return res.status(status).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/auth/biometric/register-verify', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await verifyBiometricRegistration(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Không thể hoàn tất kích hoạt sinh trắc học.';
+      const status = message.includes('cần đăng nhập') || message.includes('không hợp lệ') ? 401 : 400;
+      return res.status(status).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/auth/biometric/login-options', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await createBiometricAuthenticationOptions(req);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể tạo thử thách đăng nhập sinh trắc học.',
+      });
+    }
+  });
+
+  app.post('/api/auth/biometric/login-verify', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await verifyBiometricAuthentication(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Xác thực sinh trắc học thất bại.';
+      const status = message.includes('cần đăng nhập') ? 401 : 400;
+      return res.status(status).json({
+        ok: false,
+        error: message,
+        credentialInvalidated: Boolean(err?.credentialInvalidated),
+      });
+    }
+  });
+
+  app.post('/api/auth/biometric/status', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(getBiometricStatusForDevice(req));
+    } catch (err: any) {
+      return res.status(400).json({
+        ok: false,
+        error: err?.message || 'Không thể kiểm tra trạng thái sinh trắc học.',
+      });
+    }
+  });
+
+  app.post('/api/auth/biometric/revoke', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await revokeBiometricCredentials(req);
+      return res.json(result);
+    } catch (err: any) {
+      const message = err?.message || 'Không thể hủy liên kết sinh trắc học.';
+      const status = message.includes('cần đăng nhập') ? 401 : 400;
+      return res.status(status).json({ ok: false, error: message });
+    }
+  });
+
   const resolveRequestOrigin = (req: express.Request): string => {
     const forwardedHost = String(req.headers['x-forwarded-host'] || '')
       .split(',')[0]
@@ -2021,6 +2226,17 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
       .replace(/https:\/\/tyt\.slhd\.id\.vn\//g, pageUrl)
       .replace(/https:\/\/tyt\.slhd\.id\.vn/g, origin);
   };
+
+  app.get('/zalo_verifierGDQXTRRmSYmmWyeKzPHR7GA3y4FkzIiLD34s.html', (_req, res, next) => {
+    const fileName = 'zalo_verifierGDQXTRRmSYmmWyeKzPHR7GA3y4FkzIiLD34s.html';
+    const publicFile = path.resolve(__dirname, 'public', fileName);
+    const distFile = path.resolve(__dirname, 'dist', fileName);
+    const targetFile = fs.existsSync(publicFile) ? publicFile : fs.existsSync(distFile) ? distFile : '';
+    if (!targetFile) return next();
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.sendFile(targetFile);
+  });
 
   app.get(['/seoapp.jpg', '/seoapp.png', '/iconapp.png'], (req, res, next) => {
     const fileName = req.path.replace(/^\/+/, '');

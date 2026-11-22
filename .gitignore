@@ -8,3 +8,6 @@ coverage/
 !.env.example
 .vapid-keys.json
 .push-subscriptions.json
+.biometric-master.key
+.biometric-credentials.json
+

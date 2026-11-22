@@ -43,12 +43,14 @@ import {
   X,
   Ticket,
   Search,
+  QrCode,
 } from 'lucide-react';
 import {
   useAuth,
   getPendingReferralCode,
   setPendingReferralCode,
   captureReferralCodeFromUrl,
+  isSyntheticZaloEmail,
 } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useUserPermissions } from '../../hooks/useUserPermissions';
@@ -57,6 +59,8 @@ import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
 import { AccountSecurityCard } from '../account/AccountSecurityCard';
+import { LoggedInDevicesPanel } from '../account/LoggedInDevicesPanel';
+import { QrLoginModal } from '../auth/QrLoginModal';
 import {
   SystemSettings,
   UserProfile,
@@ -92,6 +96,7 @@ import {
   maskAddressForLookup,
   maskGenderForLookup,
   verifyUnauthenticatedPasswordResetIdentity,
+  detectCurrentDeviceMeta,
 } from '../../utils/verifiedIdentity';
 import {
   savePushSubscriptionRecord,
@@ -198,12 +203,14 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     isPrimaryAdmin,
     hasPasswordProvider,
     hasGoogleProvider,
+    hasZaloProvider,
     totpConfig,
     twoFactorEnabled,
     enrolledSmsFactors,
     smsMfaEnabled,
     verifiedDevices,
     signInWithGoogle,
+    signInWithZalo,
     loginWithEmail,
     registerWithEmail,
     confirmAndLockPhoneNumber,
@@ -243,6 +250,8 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
   const [rememberMe, setRememberMe] = useState(savedCreds.remember);
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const isPcClient = detectCurrentDeviceMeta().platform !== 'mobile';
   const [forgotMode, setForgotMode] = useState(false);
   const [resetEmail, setResetEmail] = useState(savedCreds.email);
   const [resetPhone, setResetPhone] = useState('');
@@ -813,6 +822,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
       const vProgress = getUserVerificationProgress(userProfile, {
         emailVerified: Boolean(currentUser?.emailVerified),
         hasGoogleProvider,
+        hasZaloProvider,
         hasPasswordProvider,
         phoneNumber: userProfile?.verifiedPhone || userProfile?.phoneNumber || currentUser?.phoneNumber,
         twoFactorEnabled,
@@ -1612,6 +1622,26 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
     }
   };
 
+  const handleZaloSignIn = async () => {
+    setSubmitting(true);
+    try {
+      const status = await signInWithZalo(rememberMe);
+      if (status === 'mfa_required') {
+        showToast(
+          'info',
+          'Bước 2/2: Xác thực OTP qua tin nhắn SMS',
+          'Vui lòng nhận và nhập mã OTP gửi tới số điện thoại đã liên kết.'
+        );
+        return;
+      }
+      showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+    } catch (err: any) {
+      showToast('error', 'Đăng nhập Zalo thất bại', err?.message || 'Vui lòng thử lại.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSendUnauthPasswordReset = async () => {
     const clean = autoCompleteGmail(resetEmail);
     setResetEmail(clean);
@@ -1921,12 +1951,18 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
           .sort((a, b) => a.distanceKm - b.distanceKm)[0]
       : null;
 
+  const isZaloSynthetic = isSyntheticZaloEmail(currentUser?.email);
   const activeAvatar = profileForm.avatarUrl || userProfile?.avatarUrl || currentUser?.photoURL || '';
   const displayName =
-    userProfile?.displayName || currentUser?.displayName || currentUser?.email || 'Khách sử dụng thiết bị';
+    userProfile?.displayName ||
+    userProfile?.zaloName ||
+    currentUser?.displayName ||
+    (!isZaloSynthetic ? currentUser?.email : '') ||
+    'Khách sử dụng thiết bị';
   const verificationProgress = getUserVerificationProgress(userProfile, {
     emailVerified: Boolean(currentUser?.emailVerified),
     hasGoogleProvider,
+    hasZaloProvider,
     hasPasswordProvider,
     phoneNumber: userProfile?.verifiedPhone || userProfile?.phoneNumber || currentUser?.phoneNumber,
     twoFactorEnabled,
@@ -1999,7 +2035,11 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                   <span>·</span>
                   <span className="inline-flex items-center gap-1 min-w-0 max-w-[230px] sm:max-w-xs">
                     <span className="truncate">
-                      {hasEmailDone ? maskVerifiedValue(currentUser.email, 'email') : currentUser.email}
+                      {isZaloSynthetic && !hasGoogleProvider
+                        ? `Zalo${userProfile?.zaloId ? ` · ID ${userProfile.zaloId.slice(0, 8)}...` : ' · Đã liên kết'}`
+                        : hasEmailDone
+                        ? maskVerifiedValue(currentUser.email, 'email')
+                        : currentUser.email}
                     </span>
                   </span>
                 </div>
@@ -2029,7 +2069,11 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                     <span className="inline-flex items-center gap-1 text-emerald-200">
                       <Lock className="w-3.5 h-3.5" />
                       <span>
-                        {hasEmailDone ? 'Gmail: Đã xác minh' : 'Gmail: Chưa xác minh'}
+                        {hasEmailDone
+                          ? 'Gmail: Đã xác minh'
+                          : hasZaloProvider
+                          ? 'Zalo: Đã liên kết'
+                          : 'Gmail: Chưa xác minh'}
                       </span>
                     </span>
                   </>
@@ -2049,7 +2093,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                   <Settings className="w-4 h-4 shrink-0" />
                   <span>Bảng quản trị</span>
                 </button>
-              ) : (
+              ) : !isZaloSynthetic ? (
                 <button
                   type="button"
                   disabled={sendingReset}
@@ -2059,6 +2103,11 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                   <KeyRound className="w-4 h-4 shrink-0" />
                   <span>{sendingReset ? 'Đang gửi...' : 'Đổi mật khẩu'}</span>
                 </button>
+              ) : (
+                <div className="min-h-[42px] px-3 py-2 rounded-xl bg-white/10 text-emerald-100 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>Đăng nhập Zalo</span>
+                </div>
               )}
 
               <button
@@ -2133,13 +2182,13 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                   />
                 )}
               </div>
-              <div className="flex justify-end">
+              <div className="flex justify-center sm:justify-end">
                 <button
                   type="submit"
                   disabled={sendingReset}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-3.5 h-3.5 shrink-0" />
                   <span>{sendingReset ? 'Đang gửi...' : 'Xác nhận & Gửi liên kết'}</span>
                 </button>
               </div>
@@ -2428,13 +2477,13 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                             className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
                           />
 
-                          <div className="flex justify-end">
+                          <div className="flex justify-center sm:justify-end">
                             <button
                               type="submit"
                               disabled={submittingDispute}
-                              className="min-h-[42px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                              className="w-full sm:w-auto min-h-[44px] sm:min-h-[42px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                             >
-                              <Send className="w-3.5 h-3.5" />
+                              <Send className="w-3.5 h-3.5 shrink-0" />
                               <span>{submittingDispute ? 'Đang gửi...' : 'Gửi yêu cầu Admin điều chỉnh'}</span>
                             </button>
                           </div>
@@ -3078,11 +3127,11 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                       </>
                     )}
 
-                    <div className={`col-span-full ${isProfileLocked ? 'flex justify-end' : 'grid grid-cols-2 gap-2.5'} pt-2`}>
+                    <div className={`col-span-full ${isProfileLocked ? 'flex justify-center sm:justify-end' : 'grid grid-cols-2 gap-2.5'} pt-2`}>
                       <button
                         type="button"
                         onClick={() => setEditingProfile(false)}
-                        className="min-h-[44px] px-5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer"
+                        className={`${isProfileLocked ? 'w-full sm:w-auto' : 'w-full'} min-h-[44px] px-5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition inline-flex items-center justify-center cursor-pointer whitespace-nowrap`}
                       >
                         {isProfileLocked ? 'Đóng' : 'Hủy'}
                       </button>
@@ -3090,7 +3139,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                         <button
                           type="submit"
                           disabled={savingProfile || lockingCccd}
-                          className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm shadow-xs transition cursor-pointer disabled:opacity-50"
+                          className="w-full min-h-[44px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm shadow-xs transition inline-flex items-center justify-center cursor-pointer disabled:opacity-50 whitespace-nowrap"
                         >
                           {matchedCitizenRecord && !allowIdentityEditByAdmin && !userProfile?.citizenIdVerified
                             ? lockingCccd
@@ -3112,12 +3161,16 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
               {/* Khoá 2FA Authenticator & Thiết lập Mật khẩu / Quên mật khẩu */}
               <AccountSecurityCard
                 settings={settings}
+                setCurrentView={setCurrentView}
                 onOpenIdentityCard={() => {
                   setIdentityExpanded(true);
                   setEditingProfile(true);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
               />
+
+              {/* Thiết bị đã đăng nhập & Quản lý phiên hoạt động */}
+              <LoggedInDevicesPanel />
 
               {/* Thẻ Sao lưu & Khôi phục dữ liệu định danh cá nhân */}
               <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
@@ -3325,32 +3378,66 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={handleGoogleSignIn}
-                    className="w-full min-h-[46px] py-2.5 px-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm font-semibold text-slate-800 dark:text-slate-100 shadow-xs transition flex items-center justify-center gap-2.5 cursor-pointer"
-                  >
-                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                      />
-                    </svg>
-                    <span>{authMode === 'register' ? 'Đăng ký nhanh với Google' : 'Đăng nhập nhanh với Google'}</span>
-                  </button>
+                  <div className="space-y-2.5">
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={handleGoogleSignIn}
+                        className="min-h-[46px] py-2.5 px-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm font-semibold text-slate-800 dark:text-slate-100 shadow-xs transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                      >
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                          <path
+                            fill="#4285F4"
+                            d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                          />
+                        </svg>
+                        <span>Google</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={handleZaloSignIn}
+                        className="min-h-[46px] py-2.5 px-3 rounded-2xl bg-[#0068FF] hover:bg-[#0057D8] text-white text-sm font-semibold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                      >
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white text-[#0068FF] font-black text-xs leading-none shrink-0">
+                          Z
+                        </span>
+                        <span>Zalo</span>
+                      </button>
+                    </div>
+
+                    {authMode === 'login' && isPcClient && (
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => setQrModalOpen(true)}
+                        className="w-full min-h-[46px] py-2.5 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                      >
+                        <QrCode className="w-4 h-4 shrink-0" />
+                        <span>Đăng nhập bằng mã QR (Quét từ điện thoại)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <QrLoginModal
+                    isOpen={qrModalOpen}
+                    onClose={() => setQrModalOpen(false)}
+                    onSuccess={() => setQrModalOpen(false)}
+                  />
 
                   <div className="relative flex py-1 items-center">
                     <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />
@@ -3712,7 +3799,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
               </button>
             </div>
 
-            <div className="px-4 sm:px-5 py-3.5 grid grid-cols-2 gap-2.5">
+            <div className={`px-4 sm:px-5 py-3.5 grid ${geoSupported ? 'grid-cols-2' : 'grid-cols-1'} gap-2.5`}>
               {geoSupported && (
                 <button
                   type="button"
@@ -3886,17 +3973,17 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                 placeholder="Ví dụ: 001090012345"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-sm font-mono font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
               />
-              <div className="flex items-center justify-end gap-2.5 pt-1">
+              <div className="grid grid-cols-2 sm:flex sm:items-center sm:justify-end gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => setNfcFallbackModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  className="min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                  className="min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
                 >
                   Áp dụng số CCCD
                 </button>

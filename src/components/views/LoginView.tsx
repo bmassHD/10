@@ -23,11 +23,13 @@ import {
   ArrowLeft,
   Send,
   Ticket,
+  QrCode,
 } from 'lucide-react';
 import {
   getPendingReferralCode,
   setPendingReferralCode,
   captureReferralCodeFromUrl,
+  isSyntheticZaloEmail,
 } from '../../contexts/AuthContext';
 import {
   autoCompleteGmail,
@@ -35,8 +37,11 @@ import {
   normalizeAndValidatePhone,
   maskVerifiedValue,
   verifyUnauthenticatedPasswordResetIdentity,
+  detectCurrentDeviceMeta,
 } from '../../utils/verifiedIdentity';
 import { formatFirebaseGoogleAuthError } from '../../utils/smsMfaUtils';
+import { QrLoginModal } from '../auth/QrLoginModal';
+import { LoggedInDevicesPanel } from '../account/LoggedInDevicesPanel';
 
 interface LoginViewProps {
   onSuccessNavigate?: (view: string) => void;
@@ -101,7 +106,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
   const {
     currentUser,
     userProfile,
+    hasZaloProvider,
     signInWithGoogle,
+    signInWithZalo,
     loginWithEmail,
     registerWithEmail,
     sendPasswordReset,
@@ -125,6 +132,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
   const [rememberMe, setRememberMe] = useState(savedCreds.remember);
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const isPcClient = detectCurrentDeviceMeta().platform !== 'mobile';
 
   // Forgot password inline mode (unauthenticated)
   const [forgotMode, setForgotMode] = useState(false);
@@ -289,6 +298,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
     }
   };
 
+  const handleZaloSignIn = async () => {
+    setSubmitting(true);
+    try {
+      await signInWithZalo(rememberMe);
+      showToast('success', 'Đăng nhập Zalo thành công', 'Đã đồng bộ họ tên và ảnh đại diện từ Zalo.');
+      if (onSuccessNavigate) {
+        onSuccessNavigate('portal');
+      }
+    } catch (err: any) {
+      showToast('error', 'Đăng nhập Zalo thất bại', err?.message || 'Vui lòng thử lại.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSendUnauthPasswordReset = async () => {
     const clean = autoCompleteGmail(resetEmail);
     setResetEmail(clean);
@@ -437,8 +461,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
 
   // If already logged in, show User Profile & Verification Dashboard
   if (currentUser) {
+    const isZaloSynthetic = isSyntheticZaloEmail(currentUser.email);
     const activeAvatar = profileForm.avatarUrl || userProfile?.avatarUrl || currentUser.photoURL || '';
-    const displayName = userProfile?.displayName || currentUser.displayName || currentUser.email || 'Người dùng';
+    const displayName =
+      userProfile?.displayName ||
+      userProfile?.zaloName ||
+      currentUser.displayName ||
+      (!isZaloSynthetic ? currentUser.email : '') ||
+      'Người dùng';
 
     return (
       <div className="max-w-4xl mx-auto py-8 px-4 animate-in fade-in duration-200 space-y-6">
@@ -486,16 +516,30 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                       {userProfile?.accountType === 'employee' ? 'Cán bộ Y tế' : 'Tài khoản Người dân'}
                     </span>
                   )}
+                  {hasZaloProvider && (
+                    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#0068FF]/10 text-[#0068FF] border border-[#0068FF]/20">
+                      Zalo
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2">
-                  <span>
-                    Email:{' '}
-                    <strong className="text-slate-700 dark:text-slate-300">
-                      {currentUser.emailVerified || userProfile?.emailVerified || hasGoogleProvider
-                        ? maskVerifiedValue(currentUser.email, 'email')
-                        : currentUser.email}
-                    </strong>
-                  </span>
+                  {isZaloSynthetic && !hasGoogleProvider ? (
+                    <span>
+                      Tài khoản:{' '}
+                      <strong className="text-[#0068FF]">
+                        Zalo {userProfile?.zaloId ? `(ID: ${userProfile.zaloId.slice(0, 8)}...)` : 'Đã xác thực'}
+                      </strong>
+                    </span>
+                  ) : (
+                    <span>
+                      Email:{' '}
+                      <strong className="text-slate-700 dark:text-slate-300">
+                        {currentUser.emailVerified || userProfile?.emailVerified || hasGoogleProvider
+                          ? maskVerifiedValue(currentUser.email, 'email')
+                          : currentUser.email}
+                      </strong>
+                    </span>
+                  )}
                   <span>•</span>
                   <span>Mã định danh UID: <code className="text-[11px] font-mono">{currentUser.uid.slice(0, 10)}...</code></span>
                 </p>
@@ -505,16 +549,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
-              {currentUser.email && (
+            <div className={`w-full sm:w-auto ${currentUser.email && !isZaloSynthetic ? 'grid grid-cols-2 sm:flex' : 'flex'} items-center gap-2.5`}>
+              {currentUser.email && !isZaloSynthetic && (
                 <button
                   type="button"
                   disabled={sendingReset}
                   onClick={() => setResetGateOpen(v => !v)}
-                  className="px-3.5 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-3.5 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                   title="Xác minh thông tin để gửi đường dẫn đặt / tạo mật khẩu qua Gmail"
                 >
-                  <KeyRound className="w-3.5 h-3.5" />
+                  <KeyRound className="w-3.5 h-3.5 shrink-0" />
                   <span>{sendingReset ? 'Đang gửi...' : 'Đặt lại mật khẩu'}</span>
                 </button>
               )}
@@ -522,10 +566,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
               <button
                 type="button"
                 onClick={() => logout()}
-                className="px-3.5 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-3.5 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50/70 sm:bg-transparent dark:bg-rose-950/30 sm:dark:bg-transparent hover:bg-rose-50 dark:hover:bg-rose-950/50 border border-rose-200/70 sm:border-transparent dark:border-rose-800/60 sm:dark:border-transparent rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
-                <LogOut className="w-4 h-4" />
-                Đăng xuất
+                <LogOut className="w-4 h-4 shrink-0" />
+                <span>Đăng xuất</span>
               </button>
             </div>
           </div>
@@ -591,13 +635,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                   />
                 )}
               </div>
-              <div className="flex justify-end">
+              <div className="flex justify-center sm:justify-end">
                 <button
                   type="submit"
                   disabled={sendingReset}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-3.5 h-3.5 shrink-0" />
                   <span>{sendingReset ? 'Đang gửi...' : 'Xác nhận & Gửi liên kết'}</span>
                 </button>
               </div>
@@ -605,7 +649,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
           )}
 
           {/* Security & Password Reset Feedback */}
-          {(hasGoogleProvider || resetSentTo) && (
+          {(hasGoogleProvider || hasZaloProvider || resetSentTo) && (
             <div className="mt-4 p-4 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-2.5 text-xs text-blue-900 dark:text-blue-200 leading-relaxed">
                 <KeyRound className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
@@ -614,6 +658,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
                     <>
                       <strong>Đã gửi đường dẫn đặt lại mật khẩu tới Gmail {resetSentTo}.</strong>{' '}
                       Mở Gmail (hoặc thư mục Spam) và nhấn vào liên kết của hệ thống để thiết lập mật khẩu đăng nhập trực tiếp.
+                    </>
+                  ) : isZaloSynthetic && !hasGoogleProvider ? (
+                    <>
+                      Bạn đang đăng nhập nhanh qua <strong>Zalo</strong> (đã đồng bộ Họ tên & Ảnh đại diện). Nếu Zalo chưa chia sẻ tự động Số điện thoại, vui lòng nhập và lưu số điện thoại liên lạc ở biểu mẫu bên dưới.
                     </>
                   ) : (
                     <>
@@ -633,6 +681,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
             </div>
           </div>
         </div>
+
+        {/* Thiết bị đã đăng nhập */}
+        <LoggedInDevicesPanel />
 
         {/* User Information Form */}
         <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -848,11 +899,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
               </>
             )}
 
-            <div className="col-span-full flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+            <div className="col-span-full flex items-center justify-center sm:justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="submit"
                 disabled={savingProfile}
-                className="px-6 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md transition cursor-pointer"
+                className="w-full sm:w-auto min-h-[44px] px-6 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md transition inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
               >
                 {savingProfile ? 'Đang lưu hồ sơ...' : 'Lưu thông tin định danh'}
               </button>
@@ -1011,33 +1062,70 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate }) => {
               </button>
             </div>
 
-            {/* Google Auth Button */}
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={handleGoogleSignIn}
-              className="w-full min-h-[44px] py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm transition flex items-center justify-center gap-2 mb-4 cursor-pointer"
-            >
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                />
-              </svg>
-              <span>{authMode === 'register' ? 'Đăng ký nhanh với Google' : 'Đăng nhập nhanh với Google'}</span>
-            </button>
+            {/* Symmetrical Google & Zalo Auth Row + PC QR Login */}
+            <div className="space-y-2.5 mb-4">
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleGoogleSignIn}
+                  className="min-h-[44px] py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                >
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                    />
+                  </svg>
+                  <span>Google</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleZaloSignIn}
+                  className="min-h-[44px] py-2.5 px-3 rounded-xl bg-[#0068FF] hover:bg-[#0057D8] text-white text-xs font-semibold shadow-sm transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                >
+                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white text-[#0068FF] font-black text-[11px] leading-none shrink-0">
+                    Z
+                  </span>
+                  <span>Zalo</span>
+                </button>
+              </div>
+
+              {authMode === 'login' && isPcClient && (
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => setQrModalOpen(true)}
+                  className="w-full min-h-[44px] py-2.5 px-4 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>Đăng nhập bằng mã QR (Trên PC)</span>
+                </button>
+              )}
+            </div>
+
+            <QrLoginModal
+              isOpen={qrModalOpen}
+              onClose={() => setQrModalOpen(false)}
+              onSuccess={() => {
+                setQrModalOpen(false);
+                if (onSuccessNavigate) onSuccessNavigate('portal');
+              }}
+            />
 
             <div className="relative flex py-2 items-center mb-4">
               <div className="flex-grow border-t border-slate-100 dark:border-slate-800" />

@@ -1090,13 +1090,13 @@ export const CitizenHubView: React.FC<CitizenHubViewProps> = ({
                 />
               </div>
 
-              <div className="flex justify-end pt-0.5">
+              <div className="flex justify-center sm:justify-end pt-0.5">
                 <button
                   type="submit"
                   disabled={fbSubmitting}
-                  className="px-5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm transition inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-3.5 h-3.5 shrink-0" />
                   <span>{fbSubmitting ? 'Đang gửi...' : 'Gửi ý kiến phản ánh'}</span>
                 </button>
               </div>

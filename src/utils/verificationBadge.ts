@@ -4,6 +4,7 @@ import { maskVerifiedValue } from './verifiedIdentity';
 export interface VerificationRuntimeFlags {
   emailVerified?: boolean;
   hasGoogleProvider?: boolean;
+  hasZaloProvider?: boolean;
   hasPasswordProvider?: boolean;
   twoFactorEnabled?: boolean;
   twoFactorLoading?: boolean;
@@ -49,11 +50,12 @@ export function getUserVerificationProgress(
   profile?: Partial<UserProfile> | null,
   runtime?: VerificationRuntimeFlags
 ): UserVerificationProgress {
+  const rawEmail = String(profile?.email || '').trim().toLowerCase();
+  const isSyntheticZalo = rawEmail.endsWith('@zalo.tyt.local');
   const emailDone = Boolean(
-    runtime?.emailVerified ||
-      runtime?.hasGoogleProvider ||
-      profile?.emailVerified ||
-      profile?.googleLinked
+    runtime?.hasGoogleProvider ||
+      profile?.googleLinked ||
+      (!isSyntheticZalo && (runtime?.emailVerified || profile?.emailVerified))
   );
 
   const phoneDone = Boolean(
@@ -143,7 +145,10 @@ export function getAccountSecuritySyncItems(
   const prog = getUserVerificationProgress(profile, runtime);
   const resolvedPhone =
     profile?.verifiedPhone || profile?.phoneNumber || runtime?.phoneNumber || '';
-  const resolvedEmail = profile?.email || '';
+  const rawProfileEmail = profile?.email || '';
+  const isSyntheticZalo = rawProfileEmail.trim().toLowerCase().endsWith('@zalo.tyt.local');
+  const resolvedEmail = isSyntheticZalo ? '' : rawProfileEmail;
+  const hasZaloLinked = Boolean(runtime?.hasZaloProvider || profile?.zaloLinked || isSyntheticZalo);
   const isAdminAccount = Boolean(
     runtime?.isAdmin ||
       profile?.role === 'admin' ||
@@ -165,6 +170,8 @@ export function getAccountSecuritySyncItems(
         ? prog.emailDone
           ? maskVerifiedValue(resolvedEmail, 'email')
           : resolvedEmail
+        : hasZaloLinked
+        ? 'Đang đăng nhập bằng Zalo (chưa liên kết Gmail)'
         : 'Khoá định danh Gmail duy nhất',
       done: prog.emailDone,
       statusLabel: prog.emailDone ? 'Đã xác minh' : 'Chưa xác minh',

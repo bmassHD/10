@@ -1936,9 +1936,9 @@ export const DocumentsView: React.FC = () => {
                       />
                       <label
                         htmlFor="docFileInput"
-                        className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
+                        className="cursor-pointer w-full sm:w-auto min-h-[44px] sm:min-h-[40px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
                       >
-                        <Upload className="w-4 h-4" />
+                        <Upload className="w-4 h-4 shrink-0" />
                         <span>Chọn tệp văn bản chính</span>
                       </label>
 
@@ -1986,9 +1986,9 @@ export const DocumentsView: React.FC = () => {
 
                   {/* Additional / Appendix Documents Section */}
                   <div className="p-4 rounded-2xl border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                       <span className="font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
-                        <Paperclip className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <Paperclip className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
                         <span>2. Văn Bản Đính Kèm / Phụ Lục ({attachments.length})</span>
                       </span>
                       <input
@@ -2001,11 +2001,11 @@ export const DocumentsView: React.FC = () => {
                       />
                       <label
                         htmlFor="docAppendixFilesInput"
-                        className={`cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] transition shrink-0 ${
+                        className={`cursor-pointer w-full sm:w-auto min-h-[42px] sm:min-h-[36px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-[11px] transition shrink-0 ${
                           isUploadingAttachment ? 'opacity-60 pointer-events-none' : ''
                         }`}
                       >
-                        <Plus className="w-3.5 h-3.5" />
+                        <Plus className="w-3.5 h-3.5 shrink-0" />
                         <span>{isUploadingAttachment ? 'Đang tải...' : 'Thêm tệp phụ lục'}</span>
                       </label>
                     </div>

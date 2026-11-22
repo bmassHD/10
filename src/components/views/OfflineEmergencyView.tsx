@@ -203,9 +203,9 @@ export const OfflineEmergencyView: React.FC<OfflineEmergencyViewProps> = ({ sett
                       <div className="pt-1">
                         <a
                           href={`tel:${orgDirector.phone}`}
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition"
+                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[36px] inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition"
                         >
-                          <Phone className="w-3.5 h-3.5" />
+                          <Phone className="w-3.5 h-3.5 shrink-0" />
                           <span>Gọi: {orgDirector.phone}</span>
                         </a>
                       </div>
@@ -231,9 +231,9 @@ export const OfflineEmergencyView: React.FC<OfflineEmergencyViewProps> = ({ sett
                       <div className="pt-1">
                         <a
                           href={`tel:${dd.phone}`}
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition"
+                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[36px] inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition"
                         >
-                          <Phone className="w-3.5 h-3.5" />
+                          <Phone className="w-3.5 h-3.5 shrink-0" />
                           <span>Gọi: {dd.phone}</span>
                         </a>
                       </div>
@@ -284,9 +284,9 @@ export const OfflineEmergencyView: React.FC<OfflineEmergencyViewProps> = ({ sett
                       <div className="pt-1">
                         <a
                           href={`tel:${loc.phone}`}
-                          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition shadow-xs"
+                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[36px] inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold font-mono transition shadow-xs"
                         >
-                          <Phone className="w-3.5 h-3.5" />
+                          <Phone className="w-3.5 h-3.5 shrink-0" />
                           <span>Gọi điểm trạm: {loc.phone}</span>
                         </a>
                       </div>

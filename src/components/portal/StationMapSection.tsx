@@ -10,6 +10,8 @@ import {
   Building2,
   Map as MapIcon,
   User,
+  LocateFixed,
+  Loader2,
 } from 'lucide-react';
 import L from 'leaflet';
 import { MapLocation } from '../../types';
@@ -94,6 +96,8 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const userMarkerRef = useRef<L.Marker | null>(null);
+  const shouldFocusUserOnNextGpsRef = useRef<boolean>(false);
 
   // Request user geolocation & persist for current session
   const requestGeoLocation = useCallback((recenterMap = false) => {
@@ -102,6 +106,9 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
       return;
     }
 
+    if (recenterMap) {
+      shouldFocusUserOnNextGpsRef.current = true;
+    }
     setIsLocating(true);
     setGeoError(null);
 
@@ -121,10 +128,11 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
         }
 
         if (recenterMap && mapInstanceRef.current) {
-          mapInstanceRef.current.setView([coords.lat, coords.lng], 15, { animate: true });
+          mapInstanceRef.current.setView([coords.lat, coords.lng], 16, { animate: true });
         }
       },
       err => {
+        shouldFocusUserOnNextGpsRef.current = false;
         setIsLocating(false);
         try {
           sessionStorage.setItem(GEO_SESSION_PROMPTED_KEY, '1');
@@ -132,14 +140,22 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
           // Ignore storage error
         }
         if (err.code === 1) {
-          setGeoError('Vui lòng cấp quyền vị trí trình duyệt để tự động định vị.');
+          setGeoError('Vui lòng cấp quyền vị trí trình duyệt để xem vị trí của bạn trên bản đồ.');
         } else {
-          setGeoError('Chưa lấy được tọa độ GPS. Vuốt xuống để thử lại.');
+          setGeoError('Chưa lấy được tọa độ GPS. Hãy kiểm tra định vị thiết bị và thử lại.');
         }
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
   }, []);
+
+  const handleViewMyLocation = useCallback(() => {
+    if (userLocation && mapInstanceRef.current) {
+      mapInstanceRef.current.setView([userLocation.lat, userLocation.lng], 16, { animate: true });
+      userMarkerRef.current?.openPopup();
+    }
+    requestGeoLocation(true);
+  }, [userLocation, requestGeoLocation]);
 
   // Automatically acquire GPS once per session (and always auto-update if already granted)
   useEffect(() => {
@@ -261,9 +277,10 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
       const map = L.map(mapContainerRef.current, {
         center: initialCenter,
         zoom: 14,
-        zoomControl: true,
+        zoomControl: false,
         attributionControl: false,
       });
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
 
       const initialTileUrl =
         mapTileType === 'satellite'
@@ -361,8 +378,19 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
       });
 
       const userMarker = L.marker([userLocation.lat, userLocation.lng], { icon: userIcon });
-      userMarker.bindPopup('<strong>Vị trí của bạn</strong>');
+      userMarker.bindPopup(
+        `<div style="font-family:inherit;font-size:12px;"><strong>Vị trí của bạn</strong><br/><span style="font-family:monospace;font-size:11px;color:#475569;">${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}</span></div>`
+      );
       markersLayer.addLayer(userMarker);
+      userMarkerRef.current = userMarker;
+
+      if (shouldFocusUserOnNextGpsRef.current) {
+        shouldFocusUserOnNextGpsRef.current = false;
+        map.setView([userLocation.lat, userLocation.lng], 16, { animate: true });
+        userMarker.openPopup();
+      }
+    } else {
+      userMarkerRef.current = null;
     }
   }, [activeLocations, selectedLocation, userLocation, mapTileType]);
 
@@ -464,12 +492,12 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
+          <div className="grid grid-cols-2 w-full sm:w-64 gap-2 shrink-0">
             <a
               href={getGoogleMapsDirUrl(nearestLocation)}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs flex items-center justify-center gap-1.5 transition whitespace-nowrap"
+              className="min-h-[40px] px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs flex items-center justify-center gap-1.5 transition whitespace-nowrap"
             >
               <span>Google Maps</span>
               <ExternalLink className="w-3 h-3 shrink-0" />
@@ -478,7 +506,7 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
               href={getAppleMapsDirUrl(nearestLocation)}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs flex items-center justify-center gap-1.5 transition whitespace-nowrap"
+              className="min-h-[40px] px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs flex items-center justify-center gap-1.5 transition whitespace-nowrap"
             >
               <span>Apple Maps</span>
               <ExternalLink className="w-3 h-3 shrink-0" />
@@ -506,8 +534,25 @@ export const StationMapSection: React.FC<StationMapSectionProps> = ({
           <div className="lg:col-span-2 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-inner h-[360px] sm:h-[440px] relative isolate z-0">
             <div ref={mapContainerRef} className="w-full h-full" />
 
-            <div className="absolute top-3 left-3 z-10 pointer-events-none bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700 text-xs font-semibold text-white whitespace-nowrap tabular-nums shadow-sm">
-              {mapTileType === 'satellite' ? 'Vệ tinh' : 'Giao thông'} · {activeLocations.length} điểm
+            <div className="absolute top-3 inset-x-3 z-[1000] flex items-center justify-between gap-2 pointer-events-none">
+              <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[52%]">
+                {mapTileType === 'satellite' ? 'Vệ tinh' : 'Giao thông'} · {activeLocations.length} điểm
+              </div>
+
+              <button
+                type="button"
+                onClick={handleViewMyLocation}
+                disabled={isLocating}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 hover:bg-emerald-50 dark:hover:bg-slate-800 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 text-xs font-bold shadow-md backdrop-blur-md flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0 pointer-events-auto disabled:opacity-70"
+                title="Đưa bản đồ về vị trí GPS hiện tại của bạn"
+              >
+                {isLocating ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                ) : (
+                  <LocateFixed className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                )}
+                <span>{isLocating ? 'Đang định vị...' : 'Xem vị trí của tôi'}</span>
+              </button>
             </div>
           </div>
 

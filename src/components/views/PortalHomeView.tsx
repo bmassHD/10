@@ -256,11 +256,11 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
               </div>
 
               {isAdmin && (
-                <div className="flex justify-end">
+                <div className="flex justify-center sm:justify-end">
                   <button
                     type="button"
                     onClick={() => setCurrentView('admin')}
-                    className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-700 text-sm font-semibold text-slate-700 dark:text-slate-300 transition inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-700 text-sm font-semibold text-slate-700 dark:text-slate-300 transition inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
                     <span>Chỉnh sửa</span>
                     <ArrowRight className="w-4 h-4 shrink-0" />
@@ -391,14 +391,14 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
               );
             })()}
 
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex justify-center sm:justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => {
                   setReadingPost(null);
                   setCurrentView('news', 'tab=station');
                 }}
-                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <span>Mở bảng tin</span>
                 <ArrowRight className="w-3.5 h-3.5 shrink-0" />

@@ -110,7 +110,7 @@ service cloud.firestore {
       return data.keys().hasAll(['deviceId', 'deviceName', 'platform', 'isTrusted', 'verifiedAt', 'lastActiveAt']) &&
         data.keys().hasOnly([
           'deviceId', 'deviceName', 'platform', 'os', 'browser', 'isTrusted',
-          'verificationMethod', 'verifiedAt', 'firstSeenAt', 'lastActiveAt',
+          'verificationMethod', 'biometricEnabled', 'verifiedAt', 'firstSeenAt', 'lastActiveAt',
           'activeSessionId', 'isSessionActive', 'sessionStartedAt',
           'lastHeartbeatAt', 'lastHeartbeatMs', 'forceLogoutSessionId', 'forceLogoutRequestedAt'
         ]) &&
@@ -122,7 +122,8 @@ service cloud.firestore {
         data.lastActiveAt is string && data.lastActiveAt.size() >= 1 && data.lastActiveAt.size() <= 64 &&
         (!('os' in data) || (data.os is string && data.os.size() <= 64)) &&
         (!('browser' in data) || (data.browser is string && data.browser.size() <= 64)) &&
-        (!('verificationMethod' in data) || data.verificationMethod in ['password', 'google', 'sms_mfa', 'sms_otp', 'totp_2fa', 'manual']) &&
+        (!('verificationMethod' in data) || data.verificationMethod in ['password', 'google', 'zalo', 'qr', 'biometric', 'sms_mfa', 'sms_otp', 'totp_2fa', 'manual']) &&
+        (!('biometricEnabled' in data) || data.biometricEnabled is bool) &&
         (!('firstSeenAt' in data) || (data.firstSeenAt is string && data.firstSeenAt.size() <= 64)) &&
         (!('activeSessionId' in data) || (data.activeSessionId is string && data.activeSessionId.size() <= 128)) &&
         (!('isSessionActive' in data) || data.isSessionActive is bool) &&
@@ -819,9 +820,14 @@ service cloud.firestore {
 
     // Work Schedules & Duty Roster
     match /workSchedules/{scheduleId} {
-      allow get: if isValidId(scheduleId);
-      allow list: if true;
+      allow get, list: if true;
       allow create, update, delete: if isValidId(scheduleId) && isStaff();
+    }
+
+    // Business Trips (Lịch công tác)
+    match /businessTrips/{tripId} {
+      allow get, list: if true;
+      allow create, update, delete: if isValidId(tripId) && isStaff();
     }
 
     // Documents
@@ -1175,8 +1181,7 @@ service cloud.firestore {
 
     // Station Events & Holiday Celebrations
     match /events/{eventId} {
-      allow get: if isValidId(eventId) && (isStaff() || resource.data.isActive == true);
-      allow list: if true;
+      allow get, list: if true;
       allow create: if isValidId(eventId) && isAdmin() && isValidStationEvent(request.resource.data);
       allow update: if isValidId(eventId) && isAdmin() && isValidStationEvent(request.resource.data) &&
         request.resource.data.createdAt == resource.data.createdAt;

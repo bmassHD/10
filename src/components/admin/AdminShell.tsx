@@ -48,6 +48,7 @@ import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
 
 export type AdminSubTab =
+  | 'dashboard'
   | 'notifications'
   | 'events_setup'
   | 'apps_setup'
@@ -95,6 +96,19 @@ export function buildAdminNavGroups(counts?: {
   ratingsCount?: number;
 }): AdminNavGroup[] {
   return [
+    {
+      id: 'dashboard_group',
+      title: 'Tổng quan hệ thống',
+      items: [
+        {
+          id: 'dashboard',
+          label: 'Dashboard Thống kê',
+          shortLabel: 'Dashboard',
+          icon: LayoutGrid,
+          keywords: ['dashboard', 'thống kê', 'tổng quan', 'analytics', 'metrics', 'tổng hợp'],
+        },
+      ],
+    },
     {
       id: 'operations',
       title: 'Điều hành & Công dân',

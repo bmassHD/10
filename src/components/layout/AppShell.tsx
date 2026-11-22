@@ -40,6 +40,7 @@ import {
   Users,
   Megaphone,
   LayoutGrid,
+  QrCode,
 } from 'lucide-react';
 import { useAuth, PRIMARY_ADMIN_EMAIL } from '../../contexts/AuthContext';
 import { SystemSettings, RoleType, AccountType, VaccinationScheduleItem, HolidayScheduleItem, WorkSchedule } from '../../types';
@@ -1193,6 +1194,20 @@ export const AppShell: React.FC<AppShellProps> = ({
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
               <PWAInstallButton variant="drawer" />
 
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileDrawerOpen(false);
+                    window.dispatchEvent(new CustomEvent('tyt:open-qr-scanner'));
+                  }}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>Quét mã QR đăng nhập PC</span>
+                </button>
+              )}
+
               {currentUser ? (
                 <div className="flex items-center justify-between gap-2 text-sm">
                   <button
@@ -1362,6 +1377,19 @@ export const AppShell: React.FC<AppShellProps> = ({
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 dark:text-white shrink-0" />
                     <span className="hidden sm:inline">Trang Quản trị</span>
                     <span className="sm:hidden">Quản trị</span>
+                  </button>
+                )}
+
+                {/* Quick QR Scanner Button for Authenticated Users */}
+                {currentUser && (
+                  <button
+                    type="button"
+                    onClick={() => window.dispatchEvent(new CustomEvent('tyt:open-qr-scanner'))}
+                    className="p-2 rounded-xl text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer shrink-0"
+                    title="Quét mã QR đăng nhập trên PC"
+                    aria-label="Quét mã QR đăng nhập trên PC"
+                  >
+                    <QrCode className="w-4 h-4" />
                   </button>
                 )}
 

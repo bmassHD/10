@@ -159,6 +159,7 @@ import { AgentAutomationManager } from '../admin/AgentAutomationManager';
 import { OrganizationAccountsManager } from '../admin/OrganizationAccountsManager';
 import { FirebaseConfigReadonlyCard } from '../admin/FirebaseConfigReadonlyCard';
 import { AppsManager } from '../admin/AppsManager';
+import { AdminDashboardOverview } from '../admin/AdminDashboardOverview';
 import { buildAdminNavGroups, AdminSubTab as AdminShellSubTab } from '../admin/AdminShell';
 import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../utils/mobileGrid';
 import { StationLogo } from '../common/StationLogo';
@@ -232,6 +233,7 @@ interface AdminConsoleViewProps {
 type AdminSubTab = AdminShellSubTab;
 
 const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
+  'dashboard',
   'vaccination_setup',
   'work_holiday_setup',
   'events_setup',
@@ -285,7 +287,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       ? (activeSubTab as AdminSubTab)
       : initialSubTab && VALID_ADMIN_SUBTABS.has(initialSubTab as AdminSubTab)
       ? (initialSubTab as AdminSubTab)
-      : 'notifications');
+      : 'dashboard');
 
   const [internalSubTab, setInternalSubTab] = useState<AdminSubTab>(resolvedInitialTab);
   const subTab: AdminSubTab =
@@ -478,6 +480,16 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [maintenanceMessage, setMaintenanceMessage] = useState<string>(
     settings.maintenanceMessage ||
       'Hệ thống Cổng thông tin điện tử Trạm Y tế đang được bảo trì, nâng cấp định kỳ. Quý người dân cần hỗ trợ y tế khẩn cấp vui lòng liên hệ trực tiếp số Cấp cứu 24/7 bên dưới.'
+  );
+  const [wifiRestrictionEnabled, setWifiRestrictionEnabled] = useState<boolean>(
+    Boolean(settings.wifiIpRestriction?.enabled)
+  );
+  const [wifiAllowedIpsText, setWifiAllowedIpsText] = useState<string>(
+    (settings.wifiIpRestriction?.allowedIps || []).join(', ')
+  );
+  const [wifiRestrictionMessage, setWifiRestrictionMessage] = useState<string>(
+    settings.wifiIpRestriction?.message ||
+      'Hệ thống Cổng thông tin điện tử chỉ cho phép truy cập từ mạng WiFi nội bộ của Trạm Y Tế. Vui lòng kết nối đúng mạng nội bộ để tiếp tục.'
   );
   const [hiddenTabs, setHiddenTabs] = useState<string[]>(settings.hiddenTabs || []);
   const [tabMaintenance, setTabMaintenance] = useState<Record<string, boolean>>(
@@ -1850,6 +1862,39 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     }
   };
 
+  const handleSaveWifiRestriction = async (enabled: boolean, ipsText: string, msg: string) => {
+    const prevEnabled = wifiRestrictionEnabled;
+    setWifiRestrictionEnabled(enabled);
+    try {
+      const allowedIps = ipsText
+        .split(/[,;\n]/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      await updateSystemSettings({
+        wifiIpRestriction: {
+          enabled,
+          allowedIps,
+          message: msg.trim(),
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      await logAuditEvent(
+        enabled ? 'Bật Giới hạn truy cập WiFi nội bộ' : 'Tắt Giới hạn truy cập WiFi nội bộ',
+        'Hệ thống',
+        `WiFi IP Restriction: ${enabled ? 'BẬT' : 'TẮT'} (IPS: ${allowedIps.join(', ')})`,
+        {
+          uid: currentUser?.uid || 'admin',
+          name: userProfile?.displayName || 'Admin',
+        }
+      );
+      showToast('success', 'Đã lưu cấu hình giới hạn IP / WiFi nội bộ thành công');
+    } catch (err: any) {
+      setWifiRestrictionEnabled(prevEnabled);
+      showToast('error', 'Không thể lưu cấu hình WiFi', err?.message);
+    }
+  };
+
   const handleToggleHiddenTabImmediate = async (tabId: string, tabLabel: string) => {
     const prevHidden = hiddenTabs;
     const isCurrentlyHidden = prevHidden.includes(tabId);
@@ -3184,6 +3229,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         );
       })()}
 
+      {/* Subtab: Admin Dashboard Overview */}
+      {subTab === 'dashboard' && (
+        <AdminDashboardOverview
+          settings={settings}
+          users={users}
+          feedbackList={feedbackList}
+          events={events}
+          workSchedules={workSchedules}
+        />
+      )}
+
       {/* Subtab: Organization / Business Accounts */}
       {subTab === 'org_accounts' && isAdmin && (
         <OrganizationAccountsManager settings={settings} />
@@ -3193,7 +3249,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       {subTab === 'ai_automation' && isAdmin && <AgentAutomationManager settings={settings} />}
 
       {/* Subtab: Read-only Firebase Config & Direct Console Links */}
-      {subTab === 'firebase_config' && isAdmin && <FirebaseConfigReadonlyCard />}
+      {subTab === 'firebase_config' && isAdmin && (
+        <FirebaseConfigReadonlyCard settings={settings} onRefresh={onRefreshData} />
+      )}
 
       {/* Subtab: Smartphone-style Apps Launcher Manager */}
       {subTab === 'apps_setup' && isAdmin && <AppsManager settings={settings} />}
@@ -7598,6 +7656,105 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   placeholder="Hệ thống Cổng thông tin điện tử Trạm Y tế đang được bảo trì..."
                   className="w-full px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs"
                 />
+              </div>
+            </div>
+
+            {/* WiFi IP Restriction Configuration */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800/70 space-y-3 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="font-bold text-teal-950 dark:text-teal-200 text-sm">
+                    Giới hạn truy cập theo IP / WiFi nội bộ
+                  </div>
+                  <p className="text-[11px] text-teal-800/80 dark:text-teal-300/80 mt-0.5">
+                    Khi bật, chỉ các thiết bị kết nối đúng dải IP / WiFi nội bộ được phép truy cập site; người dùng ngoài mạng sẽ bị chặn (trừ Quản trị viên).
+                  </p>
+                </div>
+
+                <div className="inline-flex items-center gap-2.5 shrink-0 select-none">
+                  <span
+                    className={`text-[11px] font-bold ${
+                      wifiRestrictionEnabled
+                        ? 'text-teal-700 dark:text-teal-300'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {wifiRestrictionEnabled ? 'Đang bật' : 'Đã tắt'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={wifiRestrictionEnabled}
+                    onClick={() => void handleSaveWifiRestriction(!wifiRestrictionEnabled, wifiAllowedIpsText, wifiRestrictionMessage)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                      wifiRestrictionEnabled ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform ${
+                        wifiRestrictionEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-teal-200/60 dark:border-teal-900/60">
+                <div className="flex items-center justify-between">
+                  <label className="block font-semibold text-teal-950 dark:text-teal-200">
+                    Danh sách IP hoặc dải mạng được phép (phân cách bằng dấu phẩy)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch('https://api.ipify.org?format=json');
+                        const data = await res.json();
+                        if (data?.ip) {
+                          const current = wifiAllowedIpsText.trim();
+                          const nextText = current ? `${current}, ${data.ip}` : data.ip;
+                          setWifiAllowedIpsText(nextText);
+                          showToast('success', `Đã lấy IP hiện tại của bạn: ${data.ip}`);
+                        }
+                      } catch {
+                        showToast('error', 'Không thể lấy IP hiện tại');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-[11px] font-bold transition cursor-pointer"
+                  >
+                    + Lấy IP hiện tại của tôi
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={wifiAllowedIpsText}
+                  onChange={e => setWifiAllowedIpsText(e.target.value)}
+                  placeholder="VD: 192.168.1., 14.160.20., 127.0.0.1"
+                  className="w-full px-3 py-2 rounded-xl border border-teal-200 dark:border-teal-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-teal-950 dark:text-teal-200 mb-1">
+                  Thông báo hiển thị khi người dùng ngoài mạng truy cập
+                </label>
+                <textarea
+                  rows={2}
+                  value={wifiRestrictionMessage}
+                  onChange={e => setWifiRestrictionMessage(e.target.value)}
+                  placeholder="Hệ thống chỉ cho phép truy cập từ mạng WiFi nội bộ của Trạm Y Tế..."
+                  className="w-full px-3 py-2 rounded-xl border border-teal-200 dark:border-teal-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveWifiRestriction(wifiRestrictionEnabled, wifiAllowedIpsText, wifiRestrictionMessage)}
+                  className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  Lưu cấu hình WiFi
+                </button>
               </div>
             </div>
 

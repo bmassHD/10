@@ -786,7 +786,7 @@ export const RichPostEditorModal: React.FC<RichPostEditorModalProps> = ({
                           }`}
                           style={{ backgroundColor: c.value }}
                           title={c.name}
-                        />
+                        ></button>
                       ))}
                     </div>
                   </div>

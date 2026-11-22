@@ -24,11 +24,14 @@ import {
   Pencil,
   Shield,
   CreditCard,
+  LogOut,
+  ExternalLink,
 } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, isSyntheticZaloEmail } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { logAuditEvent } from '../../services/firebaseService';
 import { SystemSettings, UserVerifiedDevice } from '../../types';
+import { SecurityItemLandingModal } from './SecurityItemLandingModal';
 import {
   generateTotpSecret,
   generateRecoveryCodes,
@@ -51,14 +54,21 @@ import {
 interface AccountSecurityCardProps {
   settings: SystemSettings;
   onOpenIdentityCard?: () => void;
+  setCurrentView?: (view: string) => void;
 }
 
 type ActiveSection = 'verify' | 'phone' | 'totp_2fa' | 'password' | 'cccd' | 'devices' | null;
 
 function formatDeviceMethod(method: UserVerifiedDevice['verificationMethod']): string {
   switch (method) {
+    case 'biometric':
+      return 'Face ID / Touch ID';
+    case 'qr':
+      return 'Quét mã QR';
     case 'google':
       return 'Google';
+    case 'zalo':
+      return 'Zalo';
     case 'sms_mfa':
       return 'SMS 2FA';
     case 'sms_otp':
@@ -75,6 +85,7 @@ function formatDeviceMethod(method: UserVerifiedDevice['verificationMethod']): s
 export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
   settings,
   onOpenIdentityCard,
+  setCurrentView,
 }) => {
   const {
     currentUser,
@@ -83,6 +94,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
     isPrimaryAdmin,
     hasPasswordProvider,
     hasGoogleProvider,
+    hasZaloProvider,
     totpConfig,
     twoFactorEnabled,
     twoFactorLoading,
@@ -91,9 +103,12 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
     verifiedDevices,
     currentDeviceId,
     currentDeviceTrusted,
+    currentSessionId,
+    revokeConcurrentDeviceSession,
     sendVerificationEmailToCurrentUser,
     refreshCurrentUserState,
     linkGoogleAccount,
+    linkZaloAccount,
     confirmAndLockPhoneNumber,
     registerOrVerifyCurrentDevice,
     renameVerifiedDevice,
@@ -120,6 +135,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
   const securityRuntime = {
     emailVerified: currentUser?.emailVerified,
     hasGoogleProvider,
+    hasZaloProvider,
     hasPasswordProvider,
     twoFactorEnabled,
     twoFactorLoading,
@@ -149,11 +165,13 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
   const [activeSection, setActiveSection] = useState<ActiveSection>(() =>
     !isEmailVerified ? 'verify' : !isPhoneVerified ? 'phone' : null
   );
+  const [landingSection, setLandingSection] = useState<'verify' | 'phone' | 'totp_2fa' | 'password' | 'cccd' | 'devices' | null>(null);
 
-  // Email / Google verification state
+  // Email / Google / Zalo verification state
   const [sendingEmailVerify, setSendingEmailVerify] = useState(false);
   const [refreshingEmailVerify, setRefreshingEmailVerify] = useState(false);
   const [linkingGoogle, setLinkingGoogle] = useState(false);
+  const [linkingZalo, setLinkingZalo] = useState(false);
 
   // Password setup / change state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -258,6 +276,24 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
       showToast('error', 'Liên kết thất bại', formatFirebaseGoogleAuthError(err));
     } finally {
       setLinkingGoogle(false);
+    }
+  };
+
+  const handleLinkZalo = async () => {
+    setLinkingZalo(true);
+    try {
+      const zaloProf = await linkZaloAccount();
+      showToast(
+        'success',
+        'Đã liên kết Zalo thành công',
+        zaloProf.phoneNumber
+          ? `Đã đồng bộ tên (${zaloProf.name}), ảnh đại diện và SĐT từ Zalo.`
+          : `Đã đồng bộ tên (${zaloProf.name}) và ảnh đại diện từ Zalo.`
+      );
+    } catch (err: any) {
+      showToast('error', 'Liên kết Zalo thất bại', err?.message || 'Vui lòng thử lại.');
+    } finally {
+      setLinkingZalo(false);
     }
   };
 
@@ -721,17 +757,17 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
           <div className="border-t border-slate-100 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
             {/* ITEM 1: XÁC MINH GMAIL / EMAIL */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('verify')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('verify')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                     <MailCheck className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-emerald-600 transition">
                       {itemByKey.verify.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 truncate">
@@ -740,20 +776,37 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                       </span>
                     </div>
                   </div>
-                </div>
+                </button>
+
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('verify')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Xác minh Email"
+                    aria-label="Mở Landing Page chuyên biệt: Xác minh Email"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.verify.done}
                     label={itemByKey.verify.statusLabel}
                     tone={itemByKey.verify.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'verify' ? 'rotate-90 text-emerald-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('verify')}
+                    className="p-1 text-slate-400 hover:text-emerald-600 transition cursor-pointer"
+                    aria-label={activeSection === 'verify' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'verify' ? 'rotate-90 text-emerald-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'verify' && (
                 <div className="px-4 sm:px-5 pb-4 pt-1 bg-slate-50/70 dark:bg-slate-950/40">
@@ -761,11 +814,17 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>Gmail / Email Firebase</span>
+                          <span>
+                            {isSyntheticZaloEmail(currentUser.email) && !hasGoogleProvider
+                              ? 'Liên kết Gmail & Zalo'
+                              : 'Gmail / Email Firebase'}
+                          </span>
                           {isEmailVerified && <Lock className="w-3 h-3 text-emerald-600 shrink-0" />}
                         </div>
                         <div className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate mt-0.5">
-                          {isEmailVerified
+                          {isSyntheticZaloEmail(currentUser.email) && !hasGoogleProvider
+                            ? `Zalo: ${userProfile?.zaloName || userProfile?.displayName || 'Đã liên kết'} · Chưa liên kết Gmail`
+                            : isEmailVerified
                             ? maskVerifiedValue(currentUser.email, 'email')
                             : currentUser.email}
                         </div>
@@ -773,39 +832,59 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                       <StatusTag done={isEmailVerified} label={isEmailVerified ? 'Đã xác minh' : 'Chưa xác minh'} />
                     </div>
 
-                    {!isEmailVerified && (
-                      <div className="flex flex-wrap items-center gap-2">
+                    <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
+                      {!isEmailVerified && !isSyntheticZaloEmail(currentUser.email) && (
                         <button
                           type="button"
                           disabled={sendingEmailVerify}
                           onClick={handleSendEmailVerification}
-                          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                         >
-                          <Send className="w-3.5 h-3.5" />
+                          <Send className="w-3.5 h-3.5 shrink-0" />
                           <span>{sendingEmailVerify ? 'Đang gửi...' : 'Gửi link Firebase'}</span>
                         </button>
-                        {!hasGoogleProvider && (
-                          <button
-                            type="button"
-                            disabled={linkingGoogle}
-                            onClick={handleLinkGoogle}
-                            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
-                          >
-                            <Shield className="w-3.5 h-3.5 text-blue-600" />
-                            <span>{linkingGoogle ? 'Đang liên kết...' : 'Liên kết Google'}</span>
-                          </button>
-                        )}
+                      )}
+                      {!hasGoogleProvider && (
+                        <button
+                          type="button"
+                          disabled={linkingGoogle}
+                          onClick={handleLinkGoogle}
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                        >
+                          <Shield className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span>{linkingGoogle ? 'Đang liên kết...' : 'Liên kết Google'}</span>
+                        </button>
+                      )}
+                      {!hasZaloProvider ? (
+                        <button
+                          type="button"
+                          disabled={linkingZalo}
+                          onClick={handleLinkZalo}
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#0068FF] hover:bg-[#0057D8] text-white font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                        >
+                          <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-white text-[#0068FF] font-black text-[10px] leading-none shrink-0">
+                            Z
+                          </span>
+                          <span>{linkingZalo ? 'Đang liên kết...' : 'Liên kết Zalo'}</span>
+                        </button>
+                      ) : (
+                        <span className="w-full sm:w-auto min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#0068FF]/10 text-[#0068FF] font-semibold inline-flex items-center justify-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          <span>Đã liên kết Zalo{userProfile?.zaloName ? ` (${userProfile.zaloName})` : ''}</span>
+                        </span>
+                      )}
+                      {!isEmailVerified && !isSyntheticZaloEmail(currentUser.email) && (
                         <button
                           type="button"
                           disabled={refreshingEmailVerify}
                           onClick={handleRefreshEmailVerification}
-                          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
                         >
-                          <RefreshCw className={`w-3.5 h-3.5 ${refreshingEmailVerify ? 'animate-spin' : ''}`} />
+                          <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${refreshingEmailVerify ? 'animate-spin' : ''}`} />
                           <span>Tôi đã xác minh</span>
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -813,37 +892,53 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
 
             {/* ITEM 2: SỐ ĐIỆN THOẠI (ĐIỀN & XÁC NHẬN, KHÔNG TRÙNG LẶP) */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('phone')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('phone')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
                     <Phone className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-sky-600 transition">
                       {itemByKey.phone.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
                       {itemByKey.phone.subtitle}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('phone')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-sky-700 dark:hover:text-sky-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Xác minh Số điện thoại"
+                    aria-label="Mở Landing Page chuyên biệt: Xác minh Số điện thoại"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.phone.done}
                     label={itemByKey.phone.statusLabel}
                     tone={itemByKey.phone.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'phone' ? 'rotate-90 text-sky-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('phone')}
+                    className="p-1 text-slate-400 hover:text-sky-600 transition cursor-pointer"
+                    aria-label={activeSection === 'phone' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'phone' ? 'rotate-90 text-sky-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'phone' && (
                 <div className="px-4 sm:px-5 pb-4 pt-2 bg-slate-50/70 dark:bg-slate-950/40 space-y-3">
@@ -883,9 +978,9 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                         <button
                           type="submit"
                           disabled={confirmingPhone || !phoneInput.trim()}
-                          className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+                          className="w-full sm:w-auto min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 whitespace-nowrap"
                         >
-                          <Check className="w-4 h-4" />
+                          <Check className="w-4 h-4 shrink-0" />
                           <span>{confirmingPhone ? 'Đang lưu...' : 'Xác nhận'}</span>
                         </button>
                       </div>
@@ -947,12 +1042,12 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                                   placeholder="Nhập mật khẩu để gỡ..."
                                   className="flex-1 min-h-[44px] px-3 py-2 rounded-xl border border-rose-300 dark:border-rose-700 bg-slate-50 dark:bg-slate-800 text-sm"
                                 />
-                                <div className="flex gap-2">
+                                <div className="grid grid-cols-2 sm:flex gap-2">
                                   <button
                                     type="button"
                                     disabled={isRemoving || !unenrollPassword}
                                     onClick={() => void handleUnenrollSmsFactor(factor.uid, unenrollPassword)}
-                                    className="min-h-[44px] px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer disabled:opacity-50"
+                                    className="min-h-[44px] px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold inline-flex items-center justify-center cursor-pointer disabled:opacity-50 whitespace-nowrap"
                                   >
                                     Xác nhận
                                   </button>
@@ -962,7 +1057,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                                       setUnenrollTargetUid(null);
                                       setUnenrollPassword('');
                                     }}
-                                    className="min-h-[44px] px-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
+                                    className="min-h-[44px] px-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
                                   >
                                     Hủy
                                   </button>
@@ -980,37 +1075,53 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
 
             {/* ITEM 3: KHOÁ 2FA (GOOGLE / MICROSOFT AUTHENTICATOR) */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('totp_2fa')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('totp_2fa')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                     <QrCode className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-emerald-600 transition">
                       {itemByKey.totp_2fa.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
                       {itemByKey.totp_2fa.subtitle}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('totp_2fa')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Khoá 2FA Authenticator"
+                    aria-label="Mở Landing Page chuyên biệt: Khoá 2FA Authenticator"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.totp_2fa.done}
                     label={itemByKey.totp_2fa.statusLabel}
                     tone={itemByKey.totp_2fa.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'totp_2fa' ? 'rotate-90 text-emerald-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('totp_2fa')}
+                    className="p-1 text-slate-400 hover:text-emerald-600 transition cursor-pointer"
+                    aria-label={activeSection === 'totp_2fa' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'totp_2fa' ? 'rotate-90 text-emerald-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'totp_2fa' && (
                 <div className="px-4 sm:px-5 pb-4 pt-2 bg-slate-50/70 dark:bg-slate-950/40 space-y-3">
@@ -1024,13 +1135,13 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                   )}
                   {twoFactorEnabled ? (
                     <div className="space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => setShowRecoveryCodes((v) => !v)}
-                          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                         >
-                          <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                          <Eye className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                           <span>
                             {showRecoveryCodes
                               ? 'Ẩn mã khôi phục'
@@ -1040,7 +1151,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                         <button
                           type="button"
                           onClick={() => setDisableOpen((v) => !v)}
-                          className="min-h-[44px] px-3.5 py-2 rounded-xl text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold cursor-pointer"
+                          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl border border-rose-200/70 sm:border-transparent dark:border-rose-800/60 sm:dark:border-transparent text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
                         >
                           {disableOpen ? 'Hủy tắt 2FA' : 'Tắt Khoá 2FA'}
                         </button>
@@ -1165,7 +1276,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                             type="button"
                             disabled={savingPassword}
                             onClick={handleSetPasswordInside2FA}
-                            className="min-h-[44px] px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold cursor-pointer disabled:opacity-60"
+                            className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold inline-flex items-center justify-center cursor-pointer disabled:opacity-60 whitespace-nowrap"
                           >
                             {savingPassword ? 'Đang lưu...' : 'Lưu mật khẩu'}
                           </button>
@@ -1237,20 +1348,20 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                           placeholder="Nhập OTP 6 số"
                           className="flex-1 min-h-[44px] px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-base font-bold tracking-[0.35em] text-center"
                         />
-                        <div className="flex gap-2">
+                        <div className="grid grid-cols-2 sm:flex gap-2">
                           <button
                             type="button"
                             onClick={() => setSetupOpen(false)}
-                            className="min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold cursor-pointer"
+                            className="min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
                           >
                             Hủy
                           </button>
                           <button
                             type="submit"
                             disabled={enabling2FA || setupOtpInput.length < 6}
-                            className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                           >
-                            <ShieldCheck className="w-4 h-4" />
+                            <ShieldCheck className="w-4 h-4 shrink-0" />
                             <span>{enabling2FA ? 'Đang bật...' : 'Kích hoạt'}</span>
                           </button>
                         </div>
@@ -1263,40 +1374,73 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
 
             {/* ITEM 4: MẬT KHẨU & KHÔI PHỤC */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('password')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('password')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
                     <KeyRound className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-amber-600 transition">
                       {itemByKey.password.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
                       {itemByKey.password.subtitle}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('password')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-amber-700 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Quản lý Mật khẩu"
+                    aria-label="Mở Landing Page chuyên biệt: Quản lý Mật khẩu"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.password.done}
                     label={itemByKey.password.statusLabel}
                     tone={itemByKey.password.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'password' ? 'rotate-90 text-emerald-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('password')}
+                    className="p-1 text-slate-400 hover:text-amber-600 transition cursor-pointer"
+                    aria-label={activeSection === 'password' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'password' ? 'rotate-90 text-amber-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'password' && (
                 <div className="px-4 sm:px-5 pb-4 pt-2 bg-slate-50/70 dark:bg-slate-950/40 space-y-3">
+                  {isSyntheticZaloEmail(currentUser.email) ? (
+                    <div className="p-3.5 rounded-2xl bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 text-xs text-sky-900 dark:text-sky-200 space-y-2">
+                      <p>
+                        Tài khoản đang sử dụng <strong>Đăng nhập nhanh qua Zalo</strong> nên không cần thiết lập mật khẩu riêng.
+                      </p>
+                      {!hasGoogleProvider && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection('verify')}
+                          className="w-full sm:w-auto min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-700 text-sky-800 dark:text-sky-200 font-semibold inline-flex items-center justify-center cursor-pointer whitespace-nowrap"
+                        >
+                          Liên kết thêm Gmail / Google
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
                   {resetSent && (
                     <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1465,43 +1609,61 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                       </button>
                     </form>
                   )}
+                    </>
+                  )}
                 </div>
               )}
             </div>
 
             {/* ITEM 5: ĐỊNH DANH CCCD / VNEID */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('cccd')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('cccd')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
                     <CreditCard className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-indigo-600 transition">
                       {itemByKey.cccd.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
                       {itemByKey.cccd.subtitle}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('cccd')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Định danh CCCD / VNeID"
+                    aria-label="Mở Landing Page chuyên biệt: Định danh CCCD / VNeID"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.cccd.done}
                     label={itemByKey.cccd.statusLabel}
                     tone={itemByKey.cccd.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'cccd' ? 'rotate-90 text-indigo-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('cccd')}
+                    className="p-1 text-slate-400 hover:text-indigo-600 transition cursor-pointer"
+                    aria-label={activeSection === 'cccd' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'cccd' ? 'rotate-90 text-indigo-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'cccd' && (
                 <div className="px-4 sm:px-5 pb-4 pt-2 bg-slate-50/70 dark:bg-slate-950/40 space-y-2.5">
@@ -1525,7 +1687,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                       <button
                         type="button"
                         onClick={onOpenIdentityCard}
-                        className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shrink-0 cursor-pointer"
+                        className="w-full sm:w-auto min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs inline-flex items-center justify-center shrink-0 cursor-pointer whitespace-nowrap"
                       >
                         {isCitizenIdVerified ? 'Xem định danh' : 'Xác minh CCCD'}
                       </button>
@@ -1537,37 +1699,53 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
 
             {/* ITEM 6: QUẢN LÝ THIẾT BỊ ĐÃ XÁC MINH */}
             <div>
-              <button
-                type="button"
-                onClick={() => toggleSection('devices')}
-                className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('devices')}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer group"
+                >
                   <div className="w-9 h-9 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-400 flex items-center justify-center shrink-0">
                     <Smartphone className="w-4.5 h-4.5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate group-hover:text-teal-600 transition">
                       {itemByKey.devices.title}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate tabular-nums">
                       {itemByKey.devices.subtitle}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setLandingSection('devices')}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-teal-700 dark:hover:text-teal-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                    title="Mở Landing Page chuyên biệt: Quản lý Thiết bị"
+                    aria-label="Mở Landing Page chuyên biệt: Quản lý Thiết bị"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
                   <StatusTag
                     done={itemByKey.devices.done}
                     label={itemByKey.devices.statusLabel}
                     tone={itemByKey.devices.tone}
                   />
-                  <ChevronRight
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      activeSection === 'devices' ? 'rotate-90 text-teal-600' : ''
-                    }`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('devices')}
+                    className="p-1 text-slate-400 hover:text-teal-600 transition cursor-pointer"
+                    aria-label={activeSection === 'devices' ? 'Thu gọn' : 'Mở rộng'}
+                  >
+                    <ChevronRight
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        activeSection === 'devices' ? 'rotate-90 text-teal-600' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {activeSection === 'devices' && (
                 <div className="px-4 sm:px-5 pb-4 pt-2 bg-slate-50/70 dark:bg-slate-950/40 space-y-2.5">
@@ -1620,16 +1798,40 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                                     {dev.platform} · {formatDeviceMethod(dev.verificationMethod)} ·{' '}
                                     {new Date(dev.lastActiveAt).toLocaleDateString('vi-VN')}
                                   </div>
-                                  <div className="mt-1">
+                                  <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                                     <StatusTag
                                       done={dev.isTrusted}
                                       label={dev.isTrusted ? 'Đã xác minh' : 'Chưa xác minh'}
                                     />
+                                    {(isCurrent || (dev.isSessionActive && dev.activeSessionId === currentSessionId) || dev.isSessionActive) && (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                        Đang hoạt động
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                               </div>
 
                               <div className="flex items-center gap-1 shrink-0">
+                                {!isCurrent && dev.isSessionActive && (
+                                  <button
+                                    type="button"
+                                    title="Đăng xuất khỏi thiết bị này"
+                                    aria-label="Đăng xuất khỏi thiết bị này"
+                                    onClick={() => {
+                                      void revokeConcurrentDeviceSession(dev).then(() =>
+                                        showToast(
+                                          'success',
+                                          'Đã đăng xuất thiết bị',
+                                          `Đã thu hồi phiên hoạt động trên ${dev.deviceName}.`
+                                        )
+                                      );
+                                    }}
+                                    className="min-w-[40px] min-h-[40px] rounded-xl text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center justify-center cursor-pointer"
+                                  >
+                                    <LogOut className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   aria-label="Đổi tên thiết bị"
@@ -1682,6 +1884,13 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
           </div>
         </div>
       </div>
+      <SecurityItemLandingModal
+        isOpen={Boolean(landingSection)}
+        onClose={() => setLandingSection(null)}
+        sectionKey={landingSection}
+        settings={settings}
+        setCurrentView={setCurrentView || (() => {})}
+      />
     </div>
   );
 };

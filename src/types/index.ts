@@ -74,6 +74,10 @@ export interface UserProfile {
   identityVerifiedFromDatabase?: boolean;
   allowIdentityEditByAdmin?: boolean;
   googleLinked?: boolean;
+  zaloLinked?: boolean;
+  zaloId?: string;
+  zaloName?: string;
+  zaloAvatarUrl?: string;
   referralCodeUsed?: string;
   personalReferralCode?: string;
   referredByUid?: string;
@@ -174,7 +178,8 @@ export interface UserVerifiedDevice {
   os?: string;
   browser?: string;
   isTrusted: boolean;
-  verificationMethod?: 'password' | 'google' | 'sms_mfa' | 'sms_otp' | 'totp_2fa' | 'manual';
+  verificationMethod?: 'password' | 'google' | 'zalo' | 'qr' | 'biometric' | 'sms_mfa' | 'sms_otp' | 'totp_2fa' | 'manual';
+  biometricEnabled?: boolean;
   verifiedAt: string;
   firstSeenAt?: string;
   lastActiveAt: string;
@@ -385,6 +390,20 @@ export interface WorkSchedule {
   location: string;
   notes?: string;
   isPublic?: boolean;
+}
+
+export interface BusinessTrip {
+  id: string;
+  staffIds: string[];
+  staffNames: string[];
+  destination: string; // nơi công tác
+  startDate: string; // YYYY-MM-DD (từ ngày nào)
+  endDate: string; // YYYY-MM-DD (đến ngày nào)
+  content: string; // nội dung đi công tác
+  department?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: string;
 }
 
 export interface WeeklyWorkDayConfig {
@@ -969,6 +988,7 @@ export interface SystemSettings {
     guideText: string;
   };
   githubConfig?: GitHubConfig;
+  sandboxFirebase?: SandboxFirebaseConfig;
   socialLinks?: {
     facebook?: string;
     zalo?: string;
@@ -977,6 +997,11 @@ export interface SystemSettings {
   };
   maintenanceMode?: boolean;
   maintenanceMessage?: string;
+  wifiIpRestriction?: {
+    enabled?: boolean;
+    allowedIps?: string[];
+    message?: string;
+  };
   hiddenTabs?: string[];
   tabMaintenance?: Record<string, boolean>;
   accessControl?: AccessControlConfig;
@@ -1001,6 +1026,19 @@ export interface SystemSettings {
   lastAutoGithubBackupError?: string;
   migrationReconciliationActive?: boolean;
   migrationBannerNote?: string;
+  updatedAt?: string;
+}
+
+export interface SandboxFirebaseConfig {
+  enabled?: boolean;
+  mode?: 'independent' | 'parallel';
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  firestoreDatabaseId?: string;
   updatedAt?: string;
 }
 

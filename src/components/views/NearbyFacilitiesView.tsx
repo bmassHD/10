@@ -35,6 +35,7 @@ import {
   Clock3,
   XCircle,
   ArrowLeft,
+  Loader2,
 } from 'lucide-react';
 import L from 'leaflet';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -287,12 +288,17 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const markersMapRef = useRef<Map<string, L.Marker>>(new Map());
-
+  const userMarkerRef = useRef<L.Marker | null>(null);
+  const shouldFocusUserOnNextGpsRef = useRef<boolean>(false);
 
   const requestGeoLocation = useCallback(
     (recenter = false) => {
       if (typeof navigator === 'undefined' || !navigator.geolocation) {
-        setGeoError('Trình duyệt không hỗ trợ định vị GPS.');
+        const msg = 'Trình duyệt không hỗ trợ định vị GPS.';
+        setGeoError(msg);
+        if (recenter) {
+          showToast('error', 'Không thể định vị', msg);
+        }
         if (primaryStation) {
           setOrigin(prev =>
             prev || {
@@ -306,6 +312,9 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
         return;
       }
 
+      if (recenter) {
+        shouldFocusUserOnNextGpsRef.current = true;
+      }
       setIsLocating(true);
       setGeoError(null);
 
@@ -328,19 +337,19 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             // ignore
           }
           if (recenter && mapInstanceRef.current) {
-            mapInstanceRef.current.setView([coords.lat, coords.lng], 14, { animate: true });
+            mapInstanceRef.current.setView([coords.lat, coords.lng], 15, { animate: true });
           }
         },
         err => {
+          shouldFocusUserOnNextGpsRef.current = false;
           setIsLocating(false);
-          if (err.code === 1) {
-            setGeoError(
-              'Trình duyệt chưa cấp quyền GPS. Bạn vẫn có thể nhập tọa độ Vĩ độ / Kinh độ hoặc chọn điểm trên bản đồ để tính khoảng cách.'
-            );
-          } else {
-            setGeoError(
-              'Chưa lấy được tọa độ GPS hiện tại. Hãy bấm "Định vị lại" hoặc nhập Vĩ độ / Kinh độ.'
-            );
+          const msg =
+            err.code === 1
+              ? 'Trình duyệt chưa cấp quyền GPS. Bạn vẫn có thể nhập tọa độ Vĩ độ / Kinh độ hoặc chọn điểm trên bản đồ để tính khoảng cách.'
+              : 'Chưa lấy được tọa độ GPS hiện tại. Hãy bấm "Xem vị trí của tôi" hoặc nhập Vĩ độ / Kinh độ.';
+          setGeoError(msg);
+          if (recenter) {
+            showToast('warning', 'Chưa định vị được GPS', msg);
           }
           // Fallback to primary station coordinates so distance/time is still usable immediately
           if (primaryStation) {
@@ -357,8 +366,16 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
       );
     },
-    [primaryStation]
+    [primaryStation, showToast]
   );
+
+  const handleViewMyLocation = useCallback(() => {
+    if (origin?.source === 'gps' && mapInstanceRef.current) {
+      mapInstanceRef.current.setView([origin.lat, origin.lng], 15, { animate: true });
+      userMarkerRef.current?.openPopup();
+    }
+    requestGeoLocation(true);
+  }, [origin, requestGeoLocation]);
 
   useEffect(() => {
     requestGeoLocation(false);
@@ -820,9 +837,10 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
       const map = L.map(mapContainerRef.current, {
         center,
         zoom: 13,
-        zoomControl: true,
+        zoomControl: false,
         attributionControl: false,
       });
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
 
       const url =
         mapTileType === 'satellite'
@@ -934,6 +952,14 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
         )} · Kinh độ: ${origin.lng.toFixed(5)}</span></div>`
       );
       markersLayer.addLayer(userMarker);
+      userMarkerRef.current = userMarker;
+      if (shouldFocusUserOnNextGpsRef.current && origin.source === 'gps' && mapInstanceRef.current) {
+        shouldFocusUserOnNextGpsRef.current = false;
+        mapInstanceRef.current.setView([origin.lat, origin.lng], 15, { animate: true });
+        userMarker.openPopup();
+      }
+    } else {
+      userMarkerRef.current = null;
     }
 
     if (showHealthStations && settings.mapLocations && settings.mapLocations.length > 0) {
@@ -1058,18 +1084,16 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full lg:w-auto shrink-0">
           <button
             type="button"
             onClick={() => requestGeoLocation(true)}
             disabled={isLocating}
-            className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap disabled:opacity-60"
+            className="min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap disabled:opacity-60"
           >
-            <LocateFixed className={`w-4 h-4 ${isLocating ? 'animate-spin' : ''}`} />
+            <LocateFixed className={`w-4 h-4 shrink-0 ${isLocating ? 'animate-spin' : ''}`} />
             <span>{isLocating ? 'Đang định vị...' : 'Định vị GPS'}</span>
           </button>
-
-
 
           <button
             type="button"
@@ -1086,11 +1110,11 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
               }));
               setShowRequestModal(true);
             }}
-            className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
+            className="min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4 shrink-0" />
             <span>
-              Yêu cầu thêm Cơ sở
+              Thêm cơ sở
               {requestHistoryList.length > 0 ? ` (${requestHistoryList.length})` : ''}
             </span>
           </button>
@@ -1099,9 +1123,9 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             <button
               type="button"
               onClick={onOpenAdminManage}
-              className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+              className="col-span-2 sm:col-span-1 min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
             >
-              <Settings className="w-4 h-4" />
+              <Settings className="w-4 h-4 shrink-0" />
               <span>Quản lý (Admin)</span>
             </button>
           )}
@@ -1114,11 +1138,11 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
             <span>{geoError}</span>
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <button
               type="button"
               onClick={() => requestGeoLocation(true)}
-              className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold whitespace-nowrap cursor-pointer"
+              className="w-full sm:w-auto min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold inline-flex items-center justify-center whitespace-nowrap cursor-pointer"
             >
               Thử định vị GPS
             </button>
@@ -1170,13 +1194,13 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full md:w-auto shrink-0">
             {(nearestFacility.emergencyPhone || nearestFacility.phone) && (
               <a
                 href={`tel:${nearestFacility.emergencyPhone || nearestFacility.phone}`}
-                className="px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold inline-flex items-center gap-1.5 tabular-nums whitespace-nowrap"
+                className="min-h-[42px] sm:min-h-[38px] px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 tabular-nums whitespace-nowrap"
               >
-                <Phone className="w-3.5 h-3.5" />
+                <Phone className="w-3.5 h-3.5 shrink-0" />
                 <span>{nearestFacility.emergencyPhone || nearestFacility.phone}</span>
               </a>
             )}
@@ -1184,15 +1208,17 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
               href={getGoogleMapsUrl(nearestFacility)}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
+              className="min-h-[42px] sm:min-h-[38px] px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 font-semibold text-xs inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
             >
               <span>Google Maps</span>
-              <ExternalLink className="w-3 h-3" />
+              <ExternalLink className="w-3 h-3 shrink-0" />
             </a>
             <button
               type="button"
               onClick={() => setDetailFacility(nearestFacility)}
-              className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs cursor-pointer whitespace-nowrap"
+              className={`${
+                nearestFacility.emergencyPhone || nearestFacility.phone ? 'col-span-2 sm:col-span-1' : ''
+              } min-h-[42px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs inline-flex items-center justify-center cursor-pointer whitespace-nowrap`}
             >
               Chi tiết
             </button>
@@ -1214,11 +1240,11 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             />
           </div>
 
-          <div className="md:col-span-6 flex flex-wrap items-center gap-2">
+          <div className="md:col-span-6 grid grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => setOnly24h(v => !v)}
-              className={`px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap ${
+              className={`min-h-[42px] px-2.5 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap flex items-center justify-center ${
                 only24h
                   ? 'bg-emerald-700 border-emerald-700 text-white'
                   : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
@@ -1229,7 +1255,7 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             <button
               type="button"
               onClick={() => setOnlyEmergency(v => !v)}
-              className={`px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap ${
+              className={`min-h-[42px] px-2.5 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap flex items-center justify-center ${
                 onlyEmergency
                   ? 'bg-rose-700 border-rose-700 text-white'
                   : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
@@ -1240,7 +1266,7 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             <button
               type="button"
               onClick={() => setOnlyBhyt(v => !v)}
-              className={`px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap ${
+              className={`min-h-[42px] px-2.5 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer whitespace-nowrap flex items-center justify-center ${
                 onlyBhyt
                   ? 'bg-blue-700 border-blue-700 text-white'
                   : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
@@ -1309,7 +1335,7 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
             <button
               type="button"
               onClick={onOpenAdminManage}
-              className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+              className="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center justify-center mx-auto cursor-pointer whitespace-nowrap"
             >
               Quản lý Cơ sở Y tế lân cận
             </button>
@@ -1337,29 +1363,29 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
                   </span>
                 )}
               </div>
-              <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+              <div className="grid grid-cols-2 w-full sm:w-52 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold shrink-0">
                 <button
                   type="button"
                   onClick={() => setMapTileType('streets')}
-                  className={`px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                     mapTileType === 'streets'
-                      ? 'bg-emerald-700 text-white'
+                      ? 'bg-emerald-700 text-white shadow-xs'
                       : 'text-slate-600 dark:text-slate-300'
                   }`}
                 >
-                  <MapIcon className="w-3.5 h-3.5" />
+                  <MapIcon className="w-3.5 h-3.5 shrink-0" />
                   <span>Bản đồ</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setMapTileType('satellite')}
-                  className={`px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                     mapTileType === 'satellite'
-                      ? 'bg-emerald-700 text-white'
+                      ? 'bg-emerald-700 text-white shadow-xs'
                       : 'text-slate-600 dark:text-slate-300'
                   }`}
                 >
-                  <Layers className="w-3.5 h-3.5" />
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
                   <span>Vệ tinh</span>
                 </button>
               </div>
@@ -1367,6 +1393,27 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
 
             <div className="h-[380px] sm:h-[500px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 relative isolate z-0">
               <div ref={mapContainerRef} className="w-full h-full" />
+
+              <div className="absolute top-3 inset-x-3 z-[1000] flex items-center justify-between gap-2 pointer-events-none">
+                <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[52%]">
+                  {mapTileType === 'satellite' ? 'Vệ tinh' : 'Giao thông'} · {filteredFacilities.length} cơ sở
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleViewMyLocation}
+                  disabled={isLocating}
+                  className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 hover:bg-emerald-50 dark:hover:bg-slate-800 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 text-xs font-bold shadow-md backdrop-blur-md flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0 pointer-events-auto disabled:opacity-70"
+                  title="Đưa bản đồ về vị trí GPS hiện tại của bạn"
+                >
+                  {isLocating ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                  ) : (
+                    <LocateFixed className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                  )}
+                  <span>{isLocating ? 'Đang định vị...' : 'Xem vị trí của tôi'}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1701,7 +1748,7 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
               </div>
             </div>
 
-            <div className="px-6 py-3.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="px-5 sm:px-6 py-3.5 bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shrink-0">
               {canUserEditFacility(detailFacility) ? (
                 <button
                   type="button"
@@ -1710,35 +1757,35 @@ export const NearbyFacilitiesView: React.FC<NearbyFacilitiesViewProps> = ({
                     setDetailFacility(null);
                     openFacilityEditInModal(target, 'propose_edit');
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
-                  <Edit3 className="w-3.5 h-3.5" />
+                  <Edit3 className="w-3.5 h-3.5 shrink-0" />
                   <span>Đề xuất chỉnh sửa</span>
                 </button>
               ) : (
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 italic text-center sm:text-left">
                   * Không được đề xuất chỉnh sửa của cơ sở y tế khác.
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
                 <a
                   href={getGoogleMapsUrl(detailFacility)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  className="min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                 >
-                  <span>Mở Google Maps</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Google Maps</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                 </a>
                 <a
                   href={getAppleMapsUrl(detailFacility)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1.5"
+                  className="min-h-[44px] sm:min-h-[38px] px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                 >
                   <span>Apple Maps</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                 </a>
               </div>
             </div>

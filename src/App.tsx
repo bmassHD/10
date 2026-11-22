@@ -18,6 +18,7 @@ import { DocumentsView } from './components/views/DocumentsView';
 import { CitizenHubView } from './components/views/CitizenHubView';
 import { AdminConsoleView } from './components/views/AdminConsoleView';
 import { AccountDeviceView } from './components/views/AccountDeviceView';
+import { LoggedInDevicesView } from './components/views/LoggedInDevicesView';
 import { PublicDutyScheduleView } from './components/portal/PublicDutyScheduleView';
 import { StationMapSection } from './components/portal/StationMapSection';
 import { VaccinationView } from './components/views/VaccinationView';
@@ -26,9 +27,11 @@ import { PersonnelDirectoryView } from './components/views/PersonnelDirectoryVie
 import { RescueMapView } from './components/views/RescueMapView';
 import { NearbyFacilitiesView } from './components/views/NearbyFacilitiesView';
 import { EventsView } from './components/views/EventsView';
+import { BusinessTripView } from './components/views/BusinessTripView';
 import { BhxhLookupView } from './components/views/BhxhLookupView';
 import { AppsLauncherView } from './components/views/AppsLauncherView';
 import { OfflineEmergencyView } from './components/views/OfflineEmergencyView';
+import { NotFoundView } from './components/views/NotFoundView';
 import { ShieldAlert, LogIn, Wrench, EyeOff, Phone, ArrowLeft, Building2, MapPin, UserCheck, FolderGit2, RefreshCw, Ban, MonitorSmartphone, Clock, LogOut, Lock } from 'lucide-react';
 import { evaluateAccessRestriction } from './utils/deviceAccessDetector';
 import { getBannedUntilMs, formatBanTimestampVi, formatBanRemainingVi } from './utils/userBan';
@@ -36,6 +39,7 @@ import { getBannedUntilMs, formatBanTimestampVi, formatBanRemainingVi } from './
 import { AdminSetupWizard } from './components/modals/AdminSetupWizard';
 import { FeedbackModal } from './components/portal/FeedbackModal';
 import { AuthModal } from './components/auth/AuthModal';
+import { MobileQrScannerModal } from './components/auth/MobileQrScannerModal';
 import { TwoFactorGateModal } from './components/auth/TwoFactorGateModal';
 import { SmsMfaChallengeModal } from './components/auth/SmsMfaChallengeModal';
 import { ConcurrentLoginAlertModal } from './components/auth/ConcurrentLoginAlertModal';
@@ -49,6 +53,7 @@ import { FirstSessionSplashOverlay } from './components/common/FirstSessionSplas
 import { MandatoryPermissionGate } from './components/common/MandatoryPermissionGate';
 import { ConfettiEffect } from './components/common/ConfettiEffect';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { PasswordResetActionModal } from './components/auth/PasswordResetActionModal';
 import { useUserPermissions } from './hooks/useUserPermissions';
 
 import {
@@ -91,6 +96,7 @@ const VIEW_TO_HASH: Record<string, string> = {
   personnel_directory: 'nhan-luc-khoa-phong',
   vaccination: 'lich-tiem-chung',
   events: 'su-kien',
+  business_trip: 'lich-cong-tac',
   duty: 'lich-truc',
   map: 'ban-do',
   nearby_facilities: 'co-so-y-te-lan-can',
@@ -103,6 +109,7 @@ const VIEW_TO_HASH: Record<string, string> = {
   feedback_tracking: 'phan-anh',
   admin: 'quan-tri',
   account: 'tai-khoan',
+  account_devices: 'tai-khoan/thiet-bi',
   offline_emergency: 'ngoai-tuyen',
 };
 
@@ -164,6 +171,55 @@ function MainApp() {
       ? initialTabParam
       : undefined
   );
+  const [clientIp, setClientIp] = useState<string>('');
+  const [ipChecking, setIpChecking] = useState<boolean>(true);
+
+  useEffect(() => {
+    let mounted = true;
+    async function fetchClientIp() {
+      try {
+        const res = await fetch('https://api.ipify.org?format=json');
+        const data = await res.json();
+        if (mounted && data?.ip) {
+          setClientIp(data.ip);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (mounted) setIpChecking(false);
+      }
+    }
+    fetchClientIp();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const [authActionParams, setAuthActionParams] = useState<{ mode: string; oobCode: string } | null>(() => {
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      let mode = searchParams.get('mode');
+      let oobCode = searchParams.get('oobCode');
+
+      if (!mode || !oobCode) {
+        const hashStr = window.location.hash;
+        const queryIndex = hashStr.indexOf('?');
+        if (queryIndex !== -1) {
+          const hashQuery = new URLSearchParams(hashStr.substring(queryIndex + 1));
+          mode = mode || hashQuery.get('mode');
+          oobCode = oobCode || hashQuery.get('oobCode');
+        }
+      }
+
+      if (mode && oobCode) {
+        return { mode, oobCode };
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
   const [isPageLoading, setIsPageLoading] = useState<boolean>(false);
   const [showFirstSessionSplash, setShowFirstSessionSplash] = useState<boolean>(() => {
     try {
@@ -231,6 +287,70 @@ function MainApp() {
   const [isAdminSetupModalOpen, setIsAdminSetupModalOpen] = useState(false);
   const [isGeneralPopupOpen, setIsGeneralPopupOpen] = useState(false);
   const [isVaccinationPopupOpen, setIsVaccinationPopupOpen] = useState(false);
+  const [qrScannerModalOpen, setQrScannerModalOpen] = useState(false);
+  const [pendingQrDeepLink, setPendingQrDeepLink] = useState<{
+    sessionId?: string;
+    pairCode?: string;
+  } | null>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qrLogin = params.get('qrLogin')?.trim();
+      const qrCode = params.get('qrCode')?.trim().toUpperCase();
+      if (qrLogin || qrCode) {
+        return {
+          sessionId: qrLogin || undefined,
+          pairCode: qrCode || undefined,
+        };
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  // Open MobileQrScannerModal via custom window event from anywhere (LoggedInDevicesPanel, AppShell)
+  useEffect(() => {
+    const handleOpenQrScanner = () => {
+      if (!currentUser) {
+        setIsAuthModalOpen(true);
+        showToast(
+          'info',
+          'Vui lòng đăng nhập trên điện thoại',
+          'Sau khi đăng nhập, bạn có thể quét mã QR để xác nhận đăng nhập cho PC.'
+        );
+        return;
+      }
+      setQrScannerModalOpen(true);
+    };
+    window.addEventListener('tyt:open-qr-scanner', handleOpenQrScanner);
+    return () => window.removeEventListener('tyt:open-qr-scanner', handleOpenQrScanner);
+  }, [currentUser, showToast]);
+
+  // Handle ?qrLogin=...&qrCode=... URL deep link scanned from external camera
+  useEffect(() => {
+    if (!pendingQrDeepLink) return;
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('qrLogin') || url.searchParams.has('qrCode')) {
+        url.searchParams.delete('qrLogin');
+        url.searchParams.delete('qrCode');
+        window.history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+      }
+    } catch {
+      // ignore
+    }
+
+    if (currentUser) {
+      setQrScannerModalOpen(true);
+    } else {
+      setIsAuthModalOpen(true);
+      showToast(
+        'info',
+        'Đăng nhập trước khi xác nhận QR',
+        'Vui lòng đăng nhập tài khoản trên điện thoại để cấp quyền đăng nhập cho PC.'
+      );
+    }
+  }, [pendingQrDeepLink, currentUser, showToast]);
 
   // First-layer per-session white splash (displayed once per browser session, reloads on next session)
   useEffect(() => {
@@ -616,7 +736,18 @@ function MainApp() {
   const isGlobalMaintenance = settingsLoaded && !!settings.maintenanceMode;
   const isTabUnderMaintenance = settingsLoaded && !!settings.tabMaintenance?.[currentView];
   const isTabHidden = settingsLoaded && !!settings.hiddenTabs?.includes(currentView);
-  const blockedByGlobalMaintenance = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && isGlobalMaintenance && currentView !== 'account' && currentView !== 'admin';
+  const wifiRestricted = settingsLoaded && !!settings.wifiIpRestriction?.enabled;
+  const blockedByWifiRestriction =
+    wifiRestricted &&
+    !isSuperAdminActual &&
+    !isAdmin &&
+    !ipChecking &&
+    Boolean(clientIp) &&
+    !settings.wifiIpRestriction?.allowedIps?.some(ip => {
+      const cleanIp = ip.trim();
+      return cleanIp && (clientIp === cleanIp || clientIp.startsWith(cleanIp));
+    });
+  const blockedByGlobalMaintenance = !blockedByAccessRestriction && !blockedByWifiRestriction && !isSuperAdminActual && !isAdmin && isGlobalMaintenance && currentView !== 'account' && currentView !== 'admin';
   const blockedByTabMaintenance = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && !blockedByGlobalMaintenance && isTabUnderMaintenance && currentView !== 'account' && currentView !== 'admin';
   const blockedByHiddenTab = !blockedByAccessRestriction && !isSuperAdminActual && !isAdmin && !blockedByGlobalMaintenance && !blockedByTabMaintenance && isTabHidden && currentView !== 'account' && currentView !== 'admin';
 
@@ -1347,6 +1478,37 @@ function MainApp() {
             </div>
           )}
         </div>
+      ) : blockedByWifiRestriction ? (
+        <div className="max-w-2xl mx-auto py-10 sm:py-12 px-5 sm:px-6 my-6 rounded-3xl bg-white dark:bg-slate-900 border border-teal-200 dark:border-teal-800/70 shadow-sm text-center space-y-5">
+          <div className="w-16 h-16 rounded-2xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+              Hạn Chế Truy Cập Mạng WiFi Nội Bộ
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              {settings.wifiIpRestriction?.message ||
+                'Hệ thống Cổng thông tin điện tử chỉ cho phép truy cập từ mạng WiFi nội bộ của Trạm Y Tế. Vui lòng kết nối đúng mạng nội bộ để tiếp tục.'}
+            </p>
+            {clientIp && (
+              <p className="text-[11px] text-slate-400 font-mono">
+                IP thiết bị của bạn: {clientIp} (Chưa được cấu hình trong dải mạng nội bộ)
+              </p>
+            )}
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsAuthModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs transition inline-flex items-center gap-2 cursor-pointer shadow-xs"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Đăng nhập Quản trị viên (Bỏ qua giới hạn)</span>
+            </button>
+          </div>
+        </div>
       ) : blockedByGlobalMaintenance ? (
         <div className="max-w-2xl mx-auto py-10 sm:py-12 px-5 sm:px-6 my-6 rounded-3xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/70 shadow-sm text-center space-y-5">
           <div className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto">
@@ -1705,6 +1867,10 @@ function MainApp() {
             />
           )}
 
+          {currentView === 'business_trip' && (
+            <BusinessTripView userProfiles={users} />
+          )}
+
           {currentView === 'duty' && (
             <PublicDutyScheduleView
               settings={settings}
@@ -1814,6 +1980,14 @@ function MainApp() {
           {currentView === 'account' && (
             <AccountDeviceView settings={settings} setCurrentView={setCurrentView} />
           )}
+
+          {currentView === 'account_devices' && (
+            <LoggedInDevicesView settings={settings} setCurrentView={setCurrentView} />
+          )}
+
+          {currentView === 'not_found' && (
+            <NotFoundView settings={settings} setCurrentView={setCurrentView} />
+          )}
         </>
       )}
         </AppShell>
@@ -1837,6 +2011,16 @@ function MainApp() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         onRegisteredNavigate={() => setCurrentView('account')}
+      />
+
+      <MobileQrScannerModal
+        isOpen={qrScannerModalOpen}
+        initialSessionId={pendingQrDeepLink?.sessionId}
+        initialPairCode={pendingQrDeepLink?.pairCode}
+        onClose={() => {
+          setQrScannerModalOpen(false);
+          setPendingQrDeepLink(null);
+        }}
       />
 
       <TwoFactorGateModal />
@@ -1972,6 +2156,18 @@ function MainApp() {
       })()}
 
       <ConfettiEffect triggerKey={confettiTriggerKey} />
+
+      {authActionParams && (
+        <PasswordResetActionModal
+          mode={authActionParams.mode}
+          oobCode={authActionParams.oobCode}
+          onCompleted={() => {
+            setAuthActionParams(null);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            window.location.hash = '#dang-nhap';
+          }}
+        />
+      )}
     </>
   );
 }

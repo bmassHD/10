@@ -36,6 +36,7 @@ import {
   FeedbackAttachment,
   StaffTask,
   WorkSchedule,
+  BusinessTrip,
   DocumentItem,
   AuditLog,
   UserProfile,
@@ -169,6 +170,11 @@ export const emptySystemSettings: SystemSettings = {
   maintenanceMode: false,
   maintenanceMessage:
     'Hệ thống Cổng thông tin điện tử Trạm Y tế đang được bảo trì, nâng cấp định kỳ. Quý người dân cần hỗ trợ y tế khẩn cấp vui lòng liên hệ trực tiếp số Cấp cứu 24/7 bên dưới.',
+  wifiIpRestriction: {
+    enabled: false,
+    allowedIps: [],
+    message: 'Hệ thống Cổng thông tin điện tử chỉ cho phép truy cập từ mạng WiFi nội bộ của Trạm Y Tế. Vui lòng kết nối đúng mạng nội bộ để tiếp tục.',
+  },
   hiddenTabs: [],
   tabMaintenance: {},
   editorialBoard: '',
@@ -220,6 +226,7 @@ export const CONTROLLABLE_SIDEBAR_TABS: SidebarTabDefinition[] = [
   { id: 'personnel_directory', label: 'Nhân lực & Khoa phòng', hash: '#nhan-luc-khoa-phong', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'vaccination', label: 'Lịch tiêm chủng', hash: '#lich-tiem-chung', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'events', label: 'Sự kiện', hash: '#su-kien', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
+  { id: 'business_trip', label: 'Lịch công tác', hash: '#lich-cong-tac', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'duty', label: 'Lịch trực 24/7 & Làm việc', hash: '#lich-truc', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'map', label: 'Bản đồ & Định vị trạm', hash: '#ban-do', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
   { id: 'nearby_facilities', label: 'Cơ sở Y tế lân cận', hash: '#co-so-y-te-lan-can', group: 'CỔNG THÔNG TIN ĐIỆN TỬ' },
@@ -4164,6 +4171,29 @@ export function exportOrganizationsToExcel(organizations: UserProfile[]): void {
   ];
 
   XLSX.writeFile(wb, `Danh_sach_Tai_khoan_To_chuc_Doanh_nghiep_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+export async function getBusinessTrips(): Promise<BusinessTrip[]> {
+  try {
+    const snap = await getDocs(collection(db, 'businessTrips'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as BusinessTrip));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'businessTrips');
+    return [];
+  }
+}
+
+export async function saveBusinessTripToFirestore(trip: BusinessTrip): Promise<void> {
+  const clean = {
+    ...trip,
+    updatedAt: new Date().toISOString(),
+  };
+  const docRef = doc(db, 'businessTrips', trip.id);
+  await setDoc(docRef, clean, { merge: true });
+}
+
+export async function deleteBusinessTripFromFirestore(tripId: string): Promise<void> {
+  await deleteDoc(doc(db, 'businessTrips', tripId));
 }
 
 

@@ -30,6 +30,7 @@ import {
   Lock,
   Plus,
   UserCheck,
+  Loader2,
 } from 'lucide-react';
 import L from 'leaflet';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -212,6 +213,8 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const signalMarkersMapRef = useRef<Map<string, L.Marker>>(new Map());
+  const userMarkerRef = useRef<L.Marker | null>(null);
+  const shouldFocusUserOnNextGpsRef = useRef<boolean>(false);
   const lastLivePushRef = useRef<number>(0);
 
   const verificationProgress = useMemo(
@@ -243,7 +246,8 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
         userProfile.phoneVerified ||
         userProfile.emailVerified ||
         currentUser.emailVerified ||
-        userProfile.googleLinked)
+        userProfile.googleLinked ||
+        userProfile.zaloLinked)
   );
 
   const verifiedAvatarUrl = useMemo(
@@ -339,37 +343,60 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
   }, []);
 
   // Mandatory GPS acquisition & continuous watch upon accessing the page
-  const requestGpsLocation = useCallback(() => {
+  const requestGpsLocation = useCallback((recenterMap = false) => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setIsLocating(false);
-      setGpsError('Thiết bị hoặc trình duyệt không hỗ trợ định vị GPS.');
+      const msg = 'Thiết bị hoặc trình duyệt không hỗ trợ định vị GPS.';
+      setGpsError(msg);
+      if (recenterMap) {
+        showToast('error', 'Không thể lấy vị trí', msg);
+      }
       return;
     }
 
+    if (recenterMap) {
+      shouldFocusUserOnNextGpsRef.current = true;
+    }
     setIsLocating(true);
     setGpsError(null);
 
     navigator.geolocation.getCurrentPosition(
       pos => {
-        setUserCoords({
+        const nextCoords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
-        });
+        };
+        setUserCoords(nextCoords);
         setIsLocating(false);
         setGpsError(null);
+        if (recenterMap && mapInstanceRef.current) {
+          mapInstanceRef.current.setView([nextCoords.lat, nextCoords.lng], 16, { animate: true });
+        }
       },
       err => {
+        shouldFocusUserOnNextGpsRef.current = false;
         setIsLocating(false);
-        if (err.code === 1) {
-          setGpsError('Bắt buộc cấp quyền Vị trí (GPS) trên trình duyệt để truy cập Bản đồ Cứu hộ cứu nạn.');
-        } else {
-          setGpsError('Không thể thu được tín hiệu GPS. Vui lòng bật định vị thiết bị và thử lại.');
+        const msg =
+          err.code === 1
+            ? 'Vui lòng cấp quyền Vị trí (GPS) trên trình duyệt để xem vị trí của bạn trên bản đồ.'
+            : 'Không thể thu được tín hiệu GPS. Vui lòng bật định vị thiết bị và thử lại.';
+        setGpsError(msg);
+        if (recenterMap) {
+          showToast('warning', 'Chưa định vị được', msg);
         }
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
     );
-  }, []);
+  }, [showToast]);
+
+  const handleViewMyLocation = useCallback(() => {
+    if (userCoords && mapInstanceRef.current) {
+      mapInstanceRef.current.setView([userCoords.lat, userCoords.lng], 16, { animate: true });
+      userMarkerRef.current?.openPopup();
+    }
+    requestGpsLocation(true);
+  }, [userCoords, requestGpsLocation]);
 
   useEffect(() => {
     requestGpsLocation();
@@ -627,9 +654,10 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       const map = L.map(mapContainerRef.current, {
         center: initialCenter,
         zoom: initialZoom,
-        zoomControl: true,
+        zoomControl: false,
         attributionControl: false,
       });
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
 
       const url =
         mapTileType === 'satellite'
@@ -715,9 +743,17 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
       });
       const userMarker = L.marker([userCoords.lat, userCoords.lng], { icon: userIcon });
       userMarker.bindPopup(
-        `<div style="font-size:12px;"><strong>Vị trí của bạn</strong>${confirmedPhone ? `<br/>SĐT: <strong>${escapeHtml(confirmedPhone)}</strong>` : ''}</div>`
+        `<div style="font-size:12px;"><strong>Vị trí của bạn</strong><br/><span style="font-family:monospace;font-size:11px;color:#475569;">${userCoords.lat.toFixed(5)}, ${userCoords.lng.toFixed(5)}</span>${confirmedPhone ? `<br/>SĐT: <strong>${escapeHtml(confirmedPhone)}</strong>` : ''}</div>`
       );
       markersLayer.addLayer(userMarker);
+      userMarkerRef.current = userMarker;
+      if (shouldFocusUserOnNextGpsRef.current && mapInstanceRef.current) {
+        shouldFocusUserOnNextGpsRef.current = false;
+        mapInstanceRef.current.setView([userCoords.lat, userCoords.lng], 16, { animate: true });
+        userMarker.openPopup();
+      }
+    } else {
+      userMarkerRef.current = null;
     }
 
     // 3. Active SOS Rescue Signals (+ selected resolved signal if inspected)
@@ -1475,11 +1511,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                   </p>
                   <button
                     type="button"
-                    onClick={requestGpsLocation}
+                    onClick={() => requestGpsLocation(false)}
                     disabled={isLocating}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-2 transition cursor-pointer disabled:opacity-60"
+                    className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60 whitespace-nowrap"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLocating ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isLocating ? 'animate-spin' : ''}`} />
                     <span>{isLocating ? 'Đang xác định vị trí...' : 'Cấp quyền & Lấy vị trí GPS'}</span>
                   </button>
                 </div>
@@ -1571,39 +1607,39 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
         </div>
 
         {/* Tile Switcher & Refresh GPS */}
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="grid grid-cols-1 sm:flex sm:items-center gap-2.5 w-full lg:w-auto shrink-0">
           <button
             type="button"
-            onClick={requestGpsLocation}
-            className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            onClick={() => requestGpsLocation(true)}
+            className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
           >
-            <LocateFixed className="w-4 h-4 text-blue-600" />
+            <LocateFixed className="w-4 h-4 text-blue-600 shrink-0" />
             <span>{userCoords ? 'Cập nhật GPS' : 'Lấy GPS'}</span>
           </button>
 
-          <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+          <div className="grid grid-cols-2 w-full sm:w-48 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
             <button
               type="button"
               onClick={() => setMapTileType('streets')}
-              className={`px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              className={`min-h-[36px] sm:min-h-[32px] px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                 mapTileType === 'streets'
                   ? 'bg-emerald-700 text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300'
               }`}
             >
-              <MapIcon className="w-3.5 h-3.5" />
+              <MapIcon className="w-3.5 h-3.5 shrink-0" />
               <span>Bản đồ</span>
             </button>
             <button
               type="button"
               onClick={() => setMapTileType('satellite')}
-              className={`px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              className={`min-h-[36px] sm:min-h-[32px] px-3 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                 mapTileType === 'satellite'
                   ? 'bg-emerald-700 text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-300'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
+              <Layers className="w-3.5 h-3.5 shrink-0" />
               <span>Vệ tinh</span>
             </button>
           </div>
@@ -1651,22 +1687,22 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2.5 w-full md:w-auto shrink-0">
                 <button
                   type="button"
                   onClick={handleUpdateMyCoords}
                   disabled={isUpdatingSignal}
-                  className="px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 text-white text-xs font-bold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                  className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                 >
-                  <LocateFixed className="w-4 h-4" />
+                  <LocateFixed className="w-4 h-4 shrink-0" />
                   <span>Cập nhật tọa độ mới</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleResolveSignal(myActiveSignal, 'resolved')}
-                  className="px-4 py-2.5 rounded-xl bg-white text-rose-800 hover:bg-rose-50 text-xs font-extrabold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
+                  className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 rounded-xl bg-white text-rose-800 hover:bg-rose-50 text-xs font-extrabold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>Đã an toàn · Kết thúc SOS</span>
                 </button>
               </div>
@@ -1827,7 +1863,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
             <button
               type="button"
               onClick={() => setShowAdminVerifyBox(prev => !prev)}
-              className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-bold text-slate-700 dark:text-slate-200 whitespace-nowrap shrink-0 cursor-pointer"
+              className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center justify-center whitespace-nowrap shrink-0 cursor-pointer"
             >
               {showAdminVerifyBox ? 'Đóng khung phát SOS' : 'Nhập SĐT/GPS để phát SOS'}
             </button>
@@ -1849,11 +1885,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                     ) : (
                       <button
                         type="button"
-                        onClick={requestGpsLocation}
+                        onClick={() => requestGpsLocation(true)}
                         disabled={isLocating}
-                        className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                        className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
-                        <LocateFixed className="w-3.5 h-3.5" />
+                        <LocateFixed className="w-3.5 h-3.5 shrink-0" />
                         <span>{isLocating ? 'Đang lấy GPS...' : 'Cấp quyền & Lấy GPS'}</span>
                       </button>
                     )}
@@ -1897,11 +1933,11 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                     ) : (
                       <button
                         type="button"
-                        onClick={requestGpsLocation}
+                        onClick={() => requestGpsLocation(true)}
                         disabled={isLocating}
-                        className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                        className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
-                        <LocateFixed className="w-3.5 h-3.5" />
+                        <LocateFixed className="w-3.5 h-3.5 shrink-0" />
                         <span>{isLocating ? 'Đang lấy GPS...' : 'Cấp quyền & Lấy GPS'}</span>
                       </button>
                     )}
@@ -1976,7 +2012,7 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
                 type="button"
                 onClick={handleBroadcastSos}
                 disabled={isBroadcasting}
-                className="w-full py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-extrabold text-sm shadow-md inline-flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
+                className="w-full min-h-[48px] py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-extrabold text-sm shadow-md inline-flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60 whitespace-nowrap"
               >
                 <Radio className={`w-4 h-4 shrink-0 ${isBroadcasting ? 'animate-spin' : ''}`} />
                 <span>{isBroadcasting ? 'Đang phát tín hiệu...' : 'PHÁT TÍN HIỆU CỨU HỘ (SOS)'}</span>
@@ -2118,8 +2154,25 @@ export const RescueMapView: React.FC<RescueMapViewProps> = ({
           <div className="h-[420px] sm:h-[520px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 relative isolate z-0">
             <div ref={mapContainerRef} className="w-full h-full" />
 
-            <div className="absolute top-3 left-3 z-10 pointer-events-none bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700 text-xs font-semibold text-white whitespace-nowrap tabular-nums shadow-sm">
-              {activeSignals.length} SOS đang phát · {resolvedSignals.length} đã cứu · {combinedMedicalPoints.length} điểm y tế
+            <div className="absolute top-3 inset-x-3 z-[1000] flex items-center justify-between gap-2 pointer-events-none">
+              <div className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-white flex items-center whitespace-nowrap tabular-nums shadow-md pointer-events-auto truncate max-w-[54%]">
+                {activeSignals.length} SOS · {resolvedSignals.length} đã cứu · {combinedMedicalPoints.length} điểm y tế
+              </div>
+
+              <button
+                type="button"
+                onClick={handleViewMyLocation}
+                disabled={isLocating}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 hover:bg-rose-50 dark:hover:bg-slate-800 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 text-xs font-bold shadow-md backdrop-blur-md flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0 pointer-events-auto disabled:opacity-70"
+                title="Đưa bản đồ về vị trí GPS hiện tại của bạn"
+              >
+                {isLocating ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                ) : (
+                  <LocateFixed className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                )}
+                <span>{isLocating ? 'Đang định vị...' : 'Xem vị trí của tôi'}</span>
+              </button>
             </div>
           </div>
 

@@ -424,6 +424,7 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
   }
 
   const hasHotline = Boolean(settings.hotline && !settings.hotline.includes('Chưa cập nhật'));
+  const hasPrimaryHeaderBtn = Boolean((isAdmin && onOpenAdminSetup) || hasHotline);
 
   return (
     <div className="space-y-6">
@@ -450,37 +451,43 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
             </div>
 
             {/* Header Actions */}
-            <div className="flex flex-wrap items-center justify-end gap-2.5 shrink-0 self-end lg:self-center">
-              {isAdmin && onOpenAdminSetup ? (
-                <button
-                  type="button"
-                  onClick={onOpenAdminSetup}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Settings className="w-4 h-4 shrink-0" />
-                  <span>Thiết lập lịch</span>
-                </button>
-              ) : hasHotline ? (
-                <a
-                  href={`tel:${settings.hotline}`}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition inline-flex items-center gap-2 whitespace-nowrap shrink-0 tabular-nums"
-                >
-                  <Phone className="w-4 h-4 shrink-0" />
-                  <span>{settings.hotline}</span>
-                </a>
-              ) : null}
+            {(hasPrimaryHeaderBtn || onNavigateToMap) && (
+              <div
+                className={`grid ${
+                  hasPrimaryHeaderBtn && onNavigateToMap ? 'grid-cols-2' : 'grid-cols-1'
+                } sm:flex sm:flex-wrap sm:items-center sm:justify-end gap-2.5 shrink-0 w-full lg:w-auto`}
+              >
+                {isAdmin && onOpenAdminSetup ? (
+                  <button
+                    type="button"
+                    onClick={onOpenAdminSetup}
+                    className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition inline-flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Settings className="w-4 h-4 shrink-0" />
+                    <span>Thiết lập lịch</span>
+                  </button>
+                ) : hasHotline ? (
+                  <a
+                    href={`tel:${settings.hotline}`}
+                    className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm transition inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0 tabular-nums"
+                  >
+                    <Phone className="w-4 h-4 shrink-0" />
+                    <span>{settings.hotline}</span>
+                  </a>
+                ) : null}
 
-              {onNavigateToMap && (
-                <button
-                  type="button"
-                  onClick={onNavigateToMap}
-                  className="px-4 py-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-sm transition inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Navigation className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span>Bản đồ GPS</span>
-                </button>
-              )}
-            </div>
+                {onNavigateToMap && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToMap}
+                    className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px] px-4 py-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-sm transition inline-flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Navigation className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span>Bản đồ GPS</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </header>
       </RevealOnScroll>
@@ -920,7 +927,7 @@ export const VaccinationView: React.FC<VaccinationViewProps> = ({
                                       }))
                                     }
                                     aria-expanded={isSchedExpanded}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition cursor-pointer"
+                                    className="w-full sm:w-auto min-h-[42px] sm:min-h-[36px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition cursor-pointer"
                                   >
                                     <Clock className="w-3.5 h-3.5 shrink-0" />
                                     <span>{isSchedExpanded ? 'Thu gọn' : 'Bấm xem chi tiết'}</span>
