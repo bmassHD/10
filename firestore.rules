@@ -1413,5 +1413,87 @@ service cloud.firestore {
       allow delete: if isValidId(caseId) && isStaff() && isNotBanned() &&
         (isAdmin() || resource.data.reportedByUid == request.auth.uid);
     }
+
+    function isValidQrDeviceMeta(device) {
+      return device is map &&
+        device.keys().hasAll(['deviceName', 'platform', 'os', 'browser', 'requestedAt']) &&
+        device.keys().hasOnly(['deviceName', 'platform', 'os', 'browser', 'requestedAt']) &&
+        device.deviceName is string && device.deviceName.size() >= 1 && device.deviceName.size() <= 128 &&
+        device.platform in ['desktop', 'tablet', 'mobile'] &&
+        device.os is string && device.os.size() >= 1 && device.os.size() <= 64 &&
+        device.browser is string && device.browser.size() >= 1 && device.browser.size() <= 64 &&
+        device.requestedAt is string && device.requestedAt.size() >= 1 && device.requestedAt.size() <= 64;
+    }
+
+    function isValidQrLoginSession(data, sessionId) {
+      return data.keys().hasAll(['sessionId', 'pairCode', 'pollSecretHash', 'publicKey', 'status', 'createdAtMs', 'expiresAtMs', 'pcDevice']) &&
+        data.keys().hasOnly([
+          'sessionId', 'pairCode', 'pollSecretHash', 'publicKey', 'status',
+          'createdAtMs', 'expiresAtMs', 'pcDevice',
+          'scannerDisplayName', 'scannerEmailMasked', 'scannerUid', 'encryptedAuthBundle'
+        ]) &&
+        data.sessionId is string && data.sessionId == sessionId && data.sessionId.size() >= 8 && data.sessionId.size() <= 128 &&
+        data.pairCode is string && data.pairCode.size() >= 6 && data.pairCode.size() <= 16 &&
+        data.pollSecretHash is string && data.pollSecretHash.size() == 64 &&
+        data.publicKey is string && data.publicKey.size() >= 32 && data.publicKey.size() <= 512 &&
+        data.status in ['pending', 'scanned', 'approved', 'rejected', 'expired', 'consumed'] &&
+        data.createdAtMs is int && data.createdAtMs > 0 &&
+        data.expiresAtMs is int && data.expiresAtMs > data.createdAtMs && data.expiresAtMs <= data.createdAtMs + 600000 &&
+        isValidQrDeviceMeta(data.pcDevice) &&
+        (!('scannerDisplayName' in data) || (data.scannerDisplayName is string && data.scannerDisplayName.size() <= 128)) &&
+        (!('scannerEmailMasked' in data) || (data.scannerEmailMasked is string && data.scannerEmailMasked.size() <= 128)) &&
+        (!('scannerUid' in data) || (data.scannerUid is string && data.scannerUid.size() <= 128)) &&
+        (!('encryptedAuthBundle' in data) || (data.encryptedAuthBundle is string && data.encryptedAuthBundle.size() <= 16000));
+    }
+
+    function isValidQrPairCode(data, pairCode) {
+      return data.keys().hasAll(['pairCode', 'sessionId', 'expiresAtMs']) &&
+        data.keys().hasOnly(['pairCode', 'sessionId', 'expiresAtMs']) &&
+        data.pairCode is string && data.pairCode == pairCode && data.pairCode.size() >= 6 && data.pairCode.size() <= 16 &&
+        data.sessionId is string && isValidId(data.sessionId) &&
+        data.expiresAtMs is int && data.expiresAtMs > 0;
+    }
+
+    // Cross-device QR login sessions (ECDH-encrypted payload; no list queries permitted)
+    match /qrLoginSessions/{sessionId} {
+      allow get: if isValidId(sessionId);
+      allow list: if false;
+      allow create: if isValidId(sessionId) &&
+        isValidQrLoginSession(request.resource.data, sessionId) &&
+        request.resource.data.status == 'pending' &&
+        !('encryptedAuthBundle' in request.resource.data) &&
+        !('scannerUid' in request.resource.data);
+      allow update: if isValidId(sessionId) &&
+        isValidQrLoginSession(request.resource.data, sessionId) &&
+        request.resource.data.sessionId == resource.data.sessionId &&
+        request.resource.data.pairCode == resource.data.pairCode &&
+        request.resource.data.pollSecretHash == resource.data.pollSecretHash &&
+        request.resource.data.publicKey == resource.data.publicKey &&
+        request.resource.data.createdAtMs == resource.data.createdAtMs &&
+        request.resource.data.expiresAtMs == resource.data.expiresAtMs &&
+        request.resource.data.pcDevice == resource.data.pcDevice && (
+          (
+            isSignedIn() &&
+            isNotBanned() &&
+            resource.data.status in ['pending', 'scanned'] &&
+            request.resource.data.status in ['scanned', 'approved', 'rejected'] &&
+            request.resource.data.get('scannerUid', '') == request.auth.uid
+          ) || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'encryptedAuthBundle']) &&
+            request.resource.data.status in ['consumed', 'expired'] &&
+            request.resource.data.get('encryptedAuthBundle', '') == ''
+          )
+        );
+      allow delete: if isValidId(sessionId) && isAdmin();
+    }
+
+    // Short-lived 6-char QR pair code lookup registry (signed-in mobile scanners only)
+    match /qrPairCodes/{pairCode} {
+      allow get: if isValidId(pairCode) && isSignedIn();
+      allow list: if false;
+      allow create: if isValidId(pairCode) && isValidQrPairCode(request.resource.data, pairCode);
+      allow update: if false;
+      allow delete: if isValidId(pairCode) && (isSignedIn() || isAdmin());
+    }
   }
 }

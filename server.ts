@@ -2132,10 +2132,11 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
   });
 
   // Cross-device PC QR Login Endpoints (scan & approve from signed-in mobile)
-  app.post('/api/auth/qr/create', (req, res) => {
+  app.post('/api/auth/qr/create', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
-      return res.json(createQrLoginSession(req));
+      const result = await createQrLoginSession(req);
+      return res.json(result);
     } catch (err: any) {
       return res.status(400).json({
         ok: false,
@@ -2168,10 +2169,11 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
     }
   });
 
-  app.post('/api/auth/qr/status', (req, res) => {
+  app.post('/api/auth/qr/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
-      return res.json(pollQrLoginSession(req));
+      const result = await pollQrLoginSession(req);
+      return res.json(result);
     } catch (err: any) {
       return res.status(400).json({
         ok: false,
