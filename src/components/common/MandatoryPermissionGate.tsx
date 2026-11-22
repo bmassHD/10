@@ -77,7 +77,7 @@ export const MandatoryPermissionGate: React.FC<MandatoryPermissionGateProps> = (
         if (!res.locationGranted) {
           const prefix = fromSwipeDown ? 'Đã kiểm tra lại sau khi vuốt xuống: ' : '';
           setRetryFeedback(
-            `${prefix}Chưa được cấp quyền Vị trí. Nếu đã chặn trước đó, hãy mở cài đặt trình duyệt (biểu tượng 🔒) để Cho phép, sau đó vuốt xuống lại.`
+            `${prefix}Chưa được cấp quyền Vị trí`
           );
         }
       })
