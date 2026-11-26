@@ -1,6 +1,10 @@
 import {
+  checkAdminOrderPayment,
   createAdminCustomOrder,
   createUserPaymentOrder,
+  deleteAdminOrder,
+  deleteAdminWebhookLog,
+  deleteUserOrder,
   getAdminSepayState,
   getPublicSepayConfig,
   getUserOrderStatus,
@@ -54,6 +58,16 @@ export default async function handler(req: any, res: any) {
       if (req.method === 'POST') {
         return res.status(200).json(await createUserPaymentOrder(req));
       }
+      if (req.method === 'DELETE') {
+        return res.status(200).json(await deleteUserOrder(req));
+      }
+    }
+    if (action === 'order-delete' && (req.method === 'POST' || req.method === 'DELETE')) {
+      return res.status(200).json(await deleteUserOrder(req));
+    }
+    if (action.startsWith('orders/') && !action.endsWith('/status') && req.method === 'DELETE') {
+      const orderCode = action.split('/')[1] || '';
+      return res.status(200).json(await deleteUserOrder(req, orderCode));
     }
     if (action.startsWith('orders/') && action.endsWith('/status') && req.method === 'GET') {
       const orderCode = action.split('/')[1] || '';
@@ -77,8 +91,25 @@ export default async function handler(req: any, res: any) {
     if (action === 'admin-order-update' && (req.method === 'PATCH' || req.method === 'POST')) {
       return res.status(200).json(await updateAdminOrder(req));
     }
+    if (action === 'admin-order-delete' && (req.method === 'POST' || req.method === 'DELETE')) {
+      return res.status(200).json(await deleteAdminOrder(req));
+    }
+    if (action.startsWith('admin/orders/') && req.method === 'DELETE') {
+      const orderCode = action.split('/')[2] || '';
+      return res.status(200).json(await deleteAdminOrder(req, orderCode));
+    }
     if (action === 'admin-vip' && req.method === 'POST') {
       return res.status(200).json(await updateAdminUserVip(req));
+    }
+    if (action === 'admin-order-check' && req.method === 'POST') {
+      return res.status(200).json(await checkAdminOrderPayment(req));
+    }
+    if (action === 'admin-webhook-delete' && (req.method === 'POST' || req.method === 'DELETE')) {
+      return res.status(200).json(await deleteAdminWebhookLog(req));
+    }
+    if (action.startsWith('admin/webhooks/') && req.method === 'DELETE') {
+      const logId = action.split('/')[2] || '';
+      return res.status(200).json(await deleteAdminWebhookLog(req, logId));
     }
     if (action === 'admin-test-webhook' && req.method === 'POST') {
       return res.status(200).json(await testAdminWebhookEndpoint(req));

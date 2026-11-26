@@ -1460,6 +1460,7 @@ export interface PaymentOrder {
   paidAmountVnd?: number;
   paidAt?: string;
   adminNote?: string;
+  fundId?: string;
   qrUrl?: string;
   createdAt: string;
   updatedAt: string;
@@ -1494,4 +1495,32 @@ export interface VipStatusInfo {
   vipOrderCode?: string;
   source?: 'sepay' | 'admin' | 'none';
 }
+
+export interface FundExpense {
+  id: string;
+  fundId: string;
+  purpose: string;
+  amountVnd: number;
+  expenseDate: string;
+  notes?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface DonationFund {
+  id: string;
+  name: string;
+  description: string;
+  targetAmountVnd: number;
+  usePresetSepayConfig: boolean;
+  bankCode?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountHolder?: string;
+  orderPrefix?: string;
+  expenses: FundExpense[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 

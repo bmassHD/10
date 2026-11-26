@@ -907,7 +907,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
         verificationPercent: vProgress.percent,
         verificationSummary: {
           completedCount: vProgress.completedCount,
-          totalCount: 4,
+          totalCount: vProgress.totalCount,
           isFullyVerified: vProgress.isFullyVerified,
         },
         emailVerified: vProgress.emailDone,
@@ -2103,7 +2103,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
                   <>
                     <span className="inline-flex items-center gap-1 text-emerald-200 tabular-nums">
                       <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>Xác minh: {verificationProgress.completedCount}/4 ({verificationPercent}%)</span>
+                      <span>Xác minh: {verificationProgress.completedCount}/{verificationProgress.totalCount} ({verificationPercent}%)</span>
                     </span>
                     <span className="inline-flex items-center gap-1 text-emerald-200">
                       <Lock className="w-3.5 h-3.5" />

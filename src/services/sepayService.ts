@@ -1,10 +1,11 @@
 import { auth } from '../firebase/config';
 import type {
+  DonationFund,
+  FundExpense,
   PaymentOrder,
   SepayAdminConfig,
   SepayAuthType,
   SepayBankTemplate,
-  SepayOrderStatus,
   SepayPublicConfig,
   SepayWebhookLog,
   VipPackageConfig,
@@ -96,27 +97,25 @@ export async function pollPaymentOrderStatus(orderCode: string): Promise<{
   return parseJsonResponse<{ ok: true; order: PaymentOrder; vipStatus: VipStatusInfo }>(resp);
 }
 
-export async function simulateSepayWebhookPayment(params: {
-  orderCode: string;
-  transferAmount?: number;
-}): Promise<{
-  webhookPayload: Record<string, any>;
-  webhookResponse: Record<string, any>;
-  vipStatus: VipStatusInfo;
-}> {
-  const headers = await getAuthHeaders();
-  const resp = await fetch('/api/sepay/demo-simulate', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(params),
-  });
-  return parseJsonResponse(resp);
+export interface SepayVipRecord {
+  uid: string;
+  userEmail?: string;
+  userName?: string;
+  isVip: boolean;
+  vipTier: string;
+  vipPackageName: string;
+  vipActivatedAt: string;
+  vipExpiresAt: string;
+  vipOrderCode?: string;
+  source: 'sepay' | 'admin';
+  updatedAt: string;
 }
 
 export async function fetchAdminSepayState(): Promise<{
   config: SepayAdminConfig;
   orders: PaymentOrder[];
   webhooks: SepayWebhookLog[];
+  vips: SepayVipRecord[];
 }> {
   const headers = await getAuthHeaders();
   const resp = await fetch('/api/sepay/admin-state', {
@@ -169,6 +168,7 @@ export async function createAdminCustomPaymentOrder(payload: {
   description?: string;
   adminNote?: string;
   orderCode?: string;
+  fundId?: string;
 }): Promise<PaymentOrder> {
   const headers = await getAuthHeaders();
   const resp = await fetch('/api/sepay/admin-orders', {
@@ -180,22 +180,21 @@ export async function createAdminCustomPaymentOrder(payload: {
   return data.order;
 }
 
-export async function updateAdminPaymentOrder(payload: {
-  orderCode: string;
-  amountVnd?: number;
-  status?: SepayOrderStatus;
-  packageName?: string;
-  description?: string;
-  adminNote?: string;
-}): Promise<PaymentOrder> {
+export async function checkAdminPaymentOrder(orderCode: string): Promise<{
+  ok: true;
+  order: PaymentOrder;
+  paid: boolean;
+  matched: boolean;
+  checkedAt: string;
+  message: string;
+}> {
   const headers = await getAuthHeaders();
-  const resp = await fetch('/api/sepay/admin-order-update', {
+  const resp = await fetch('/api/sepay/admin-order-check', {
     method: 'POST',
     headers,
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ orderCode }),
   });
-  const data = await parseJsonResponse<{ ok: true; order: PaymentOrder }>(resp);
-  return data.order;
+  return parseJsonResponse(resp);
 }
 
 export async function updateAdminUserVipStatus(payload: {
@@ -234,3 +233,108 @@ export async function runAdminSepayWebhookTest(payload?: {
   });
   return parseJsonResponse(resp);
 }
+
+export async function deleteMyPaymentOrder(orderCode: string): Promise<{
+  ok: true;
+  deletedOrderCode: string;
+}> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/order-delete', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ orderCode }),
+  });
+  return parseJsonResponse(resp);
+}
+
+export async function deleteAdminPaymentOrder(orderCode: string): Promise<{
+  ok: true;
+  deletedOrderCode: string;
+}> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-order-delete', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ orderCode }),
+  });
+  return parseJsonResponse(resp);
+}
+
+export async function deleteAdminWebhookLog(params: {
+  id?: string;
+  clearAll?: boolean;
+}): Promise<{
+  ok: true;
+  deletedId?: string;
+  clearedAll?: boolean;
+  remainingCount: number;
+}> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-webhook-delete', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(params),
+  });
+  return parseJsonResponse(resp);
+}
+
+export async function adminMarkOrderPaid(orderCode: string, adminNote?: string): Promise<PaymentOrder> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-order-mark-paid', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ orderCode, adminNote }),
+  });
+  const data = await parseJsonResponse<{ ok: true; order: PaymentOrder }>(resp);
+  return data.order;
+}
+
+export async function fetchAdminFunds(): Promise<DonationFund[]> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-funds', {
+    method: 'GET',
+    headers,
+    cache: 'no-store',
+  });
+  const data = await parseJsonResponse<{ ok: true; funds: DonationFund[] }>(resp);
+  return data.funds || [];
+}
+
+export async function saveAdminFund(payload: Partial<DonationFund>): Promise<DonationFund> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-funds', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse<{ ok: true; fund: DonationFund }>(resp);
+  return data.fund;
+}
+
+export async function deleteAdminFund(id: string): Promise<string> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch(`/api/sepay/admin-funds?id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers,
+  });
+  const data = await parseJsonResponse<{ ok: true; deletedId: string }>(resp);
+  return data.deletedId;
+}
+
+export async function addFundExpense(payload: {
+  fundId: string;
+  purpose: string;
+  amountVnd: number;
+  expenseDate: string;
+  notes?: string;
+}): Promise<DonationFund> {
+  const headers = await getAuthHeaders();
+  const resp = await fetch('/api/sepay/admin-funds/expense', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse<{ ok: true; fund: DonationFund }>(resp);
+  return data.fund;
+}
+

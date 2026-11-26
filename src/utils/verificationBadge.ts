@@ -22,14 +22,15 @@ export interface UserVerificationProgress {
   twoFactorDone: boolean;
   citizenIdDone: boolean;
   paidVerified: boolean;
+  securityCompletedCount: number;
   completedCount: number;
-  totalCount: 4;
+  totalCount: 5;
   percent: number;
   isFullyVerified: boolean;
 }
 
 export interface AccountSecuritySyncItem {
-  key: 'verify' | 'phone' | 'totp_2fa' | 'password' | 'cccd' | 'devices';
+  key: 'verify' | 'phone' | 'totp_2fa' | 'password' | 'paid_verify' | 'cccd' | 'devices';
   title: string;
   subtitle: string;
   done: boolean;
@@ -41,11 +42,12 @@ export interface AccountSecuritySyncItem {
 export const ACCOUNT_SECURITY_CARD_TITLE = 'Bảo mật & Xác minh tài khoản';
 
 /**
- * Evaluates the 4 verification pillars of an account:
+ * Evaluates the 5 verification conditions of an account:
  * 1. Gmail / Email verified (or linked Google provider)
  * 2. Phone number verified (or active SMS MFA)
  * 3. Password linked
  * 4. 2FA active (Authenticator TOTP or SMS MFA)
+ * 5. Active Verify package purchased via SePay (or granted by Admin)
  */
 export function getUserVerificationProgress(
   profile?: Partial<UserProfile> | null,
@@ -85,11 +87,13 @@ export function getUserVerificationProgress(
     profile?.isVip && (!paidExpiresMs || !Number.isFinite(paidExpiresMs) || paidExpiresMs > Date.now())
   );
 
-  const completedCount =
+  const securityCompletedCount =
     (emailDone ? 1 : 0) +
     (phoneDone ? 1 : 0) +
     (passwordDone ? 1 : 0) +
     (twoFactorDone ? 1 : 0);
+
+  const completedCount = securityCompletedCount + (paidVerified ? 1 : 0);
 
   return {
     emailDone,
@@ -98,10 +102,11 @@ export function getUserVerificationProgress(
     twoFactorDone,
     citizenIdDone,
     paidVerified,
+    securityCompletedCount,
     completedCount,
-    totalCount: 4,
-    percent: Math.round((completedCount / 4) * 100),
-    isFullyVerified: completedCount === 4 || paidVerified,
+    totalCount: 5,
+    percent: Math.round((completedCount / 5) * 100),
+    isFullyVerified: securityCompletedCount === 4 && paidVerified,
   };
 }
 
@@ -224,6 +229,21 @@ export function getAccountSecuritySyncItems(
       done: prog.passwordDone,
       statusLabel: prog.passwordDone ? 'Đã thiết lập' : 'Chưa đặt',
       tone: prog.passwordDone ? 'emerald' : 'slate',
+      isPillar: true,
+    },
+    {
+      key: 'paid_verify',
+      title: 'Gói Verify Tài Khoản',
+      subtitle: prog.paidVerified
+        ? `Đã kích hoạt${profile?.vipOrderCode ? ` · Mã ${profile.vipOrderCode}` : ''}${
+            profile?.vipExpiresAt
+              ? ` · HSD ${new Date(profile.vipExpiresAt).toLocaleDateString('vi-VN')}`
+              : ''
+          }`
+        : 'Mua gói Verify qua SePay để đủ điều kiện Đã xác minh',
+      done: prog.paidVerified,
+      statusLabel: prog.paidVerified ? 'Đã mua gói Verify' : 'Chưa mua',
+      tone: prog.paidVerified ? 'sky' : 'slate',
       isPillar: true,
     },
     {

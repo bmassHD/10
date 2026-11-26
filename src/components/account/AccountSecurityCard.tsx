@@ -26,6 +26,7 @@ import {
   CreditCard,
   LogOut,
   ExternalLink,
+  BadgeCheck,
 } from 'lucide-react';
 import { useAuth, isSyntheticZaloEmail } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -701,7 +702,7 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
                 {isFullyVerified && <VerifiedBlueTick size="sm" />}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5 tabular-nums">
-                Đã hoàn tất {verifiedCount}/4 lớp bảo vệ · {verifiedDevices.length} thiết bị
+                Đã hoàn tất {verifiedCount}/{verification.totalCount} điều kiện xác minh · {verifiedDevices.length} thiết bị
               </p>
             </div>
           </div>
@@ -1621,7 +1622,42 @@ export const AccountSecurityCard: React.FC<AccountSecurityCardProps> = ({
               )}
             </div>
 
-            {/* ITEM 5: ĐỊNH DANH CCCD / VNEID */}
+            {/* ITEM 5: GÓI VERIFY TÀI KHOẢN (SEPAY) */}
+            <div>
+              <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
+                    <BadgeCheck className="w-4.5 h-4.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                      {itemByKey.paid_verify.title}
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {itemByKey.paid_verify.subtitle}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <StatusTag
+                    done={itemByKey.paid_verify.done}
+                    label={itemByKey.paid_verify.statusLabel}
+                    tone={itemByKey.paid_verify.tone}
+                  />
+                  {setCurrentView && !itemByKey.paid_verify.done && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('vip_premium')}
+                      className="px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold cursor-pointer transition whitespace-nowrap"
+                    >
+                      Mua Verify
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ITEM 6: ĐỊNH DANH CCCD / VNEID */}
             <div>
               <div className="w-full min-h-[56px] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                 <button

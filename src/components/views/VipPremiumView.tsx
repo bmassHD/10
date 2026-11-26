@@ -7,6 +7,7 @@ import {
   QrCode,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   Webhook,
   X,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import type {
 } from '../../types';
 import {
   createVipPaymentOrder,
+  deleteMyPaymentOrder,
   fetchMyPaymentOrders,
   fetchPublicSepayConfig,
   formatVnd,
@@ -56,6 +58,8 @@ export const VipPremiumView: React.FC<VipPremiumViewProps> = ({
   const [activeOrder, setActiveOrder] = useState<PaymentOrder | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<PaymentOrder | null>(null);
+  const [deletingOrderCode, setDeletingOrderCode] = useState<string | null>(null);
 
   const syncAuthVerifiedState = (nextStatus: VipStatusInfo) => {
     window.dispatchEvent(new CustomEvent('tyt-sepay-verified-updated', { detail: nextStatus }));
@@ -168,6 +172,25 @@ export const VipPremiumView: React.FC<VipPremiumViewProps> = ({
     }
   };
 
+  const handleConfirmDeleteMyOrder = async () => {
+    if (!confirmDeleteOrder) return;
+    const code = confirmDeleteOrder.orderCode;
+    setDeletingOrderCode(code);
+    try {
+      await deleteMyPaymentOrder(code);
+      setOrders(prev => prev.filter(o => o.orderCode !== code));
+      if (activeOrder?.orderCode === code) {
+        setActiveOrder(null);
+      }
+      showToast('success', `Đã xóa đơn hàng ${code}`);
+      setConfirmDeleteOrder(null);
+    } catch (err: any) {
+      showToast('error', `Không thể xóa đơn hàng ${code}`, err?.message);
+    } finally {
+      setDeletingOrderCode(null);
+    }
+  };
+
   const activePackages = (config?.packages || []).filter(p => p.isActive);
   const displayName =
     userProfile?.organizationName || userProfile?.displayName || currentUser?.email || 'Tài khoản của bạn';
@@ -258,14 +281,20 @@ export const VipPremiumView: React.FC<VipPremiumViewProps> = ({
                     <span className="text-xs text-slate-500">/ {pkg.durationDays} ngày</span>
                   </div>
 
-                  <ul className="space-y-2.5 text-xs text-slate-700 dark:text-slate-300 pt-3 border-t border-slate-100 dark:border-slate-800">
-                    {pkg.features.map((feat, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {pkg.features.length > 0 ? (
+                    <ul className="space-y-2.5 text-xs text-slate-700 dark:text-slate-300 pt-3 border-t border-slate-100 dark:border-slate-800">
+                      {pkg.features.map((feat, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                          <span>{feat}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                      Hỗ trợ kích hoạt huy hiệu Tick Xanh Verified qua SePay; các quyền lợi đi kèm đang được Quản trị viên cập nhật thêm.
+                    </div>
+                  )}
                 </div>
 
                 <button
@@ -453,15 +482,27 @@ export const VipPremiumView: React.FC<VipPremiumViewProps> = ({
                       ? 'Chuyển thiếu tiền'
                       : 'Chờ thanh toán'}
                   </span>
-                  {order.status !== 'paid' && (
+                  <div className="flex items-center gap-1.5">
+                    {order.status !== 'paid' && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveOrder(order)}
+                        className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-semibold cursor-pointer"
+                      >
+                        Mở mã QR thanh toán
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => setActiveOrder(order)}
-                      className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-semibold cursor-pointer"
+                      disabled={deletingOrderCode === order.orderCode}
+                      onClick={() => setConfirmDeleteOrder(order)}
+                      className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-800/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                      title="Xóa đơn hàng này"
                     >
-                      Mở mã QR thanh toán
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa</span>
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -574,6 +615,54 @@ export const VipPremiumView: React.FC<VipPremiumViewProps> = ({
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delete User Order Confirmation Modal */}
+      {confirmDeleteOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-md p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                <span>Xóa đơn hàng {confirmDeleteOrder.orderCode}?</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOrder(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              Bạn có chắc muốn xóa đơn hàng{' '}
+              <strong className="font-mono text-slate-900 dark:text-white">{confirmDeleteOrder.orderCode}</strong> (
+              {confirmDeleteOrder.packageName} ·{' '}
+              <strong className="text-emerald-600">{formatVnd(confirmDeleteOrder.amountVnd)}</strong>) khỏi danh sách đơn hàng của bạn?
+            </p>
+            {confirmDeleteOrder.status === 'paid' && (
+              <p className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                Đơn hàng này đã thanh toán; xóa lịch sử đơn không làm mất trạng thái Verify hiện tại của bạn.
+              </p>
+            )}
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOrder(null)}
+                className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={deletingOrderCode === confirmDeleteOrder.orderCode}
+                onClick={() => void handleConfirmDeleteMyOrder()}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer disabled:opacity-60"
+              >
+                {deletingOrderCode === confirmDeleteOrder.orderCode ? 'Đang xóa...' : 'Xác nhận xóa'}
+              </button>
             </div>
           </div>
         </div>

@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
+  DonationFund,
+  FundExpense,
   PaymentOrder,
   SepayAdminConfig,
   SepayAuthType,
@@ -21,6 +23,7 @@ const CONFIG_FILE = path.resolve(ROOT_DIR, '.sepay-config.json');
 const ORDERS_FILE = path.resolve(ROOT_DIR, '.sepay-orders.json');
 const WEBHOOKS_FILE = path.resolve(ROOT_DIR, '.sepay-webhooks.json');
 const VIPS_FILE = path.resolve(ROOT_DIR, '.sepay-vips.json');
+const FUNDS_FILE = path.resolve(ROOT_DIR, '.sepay-funds.json');
 
 const BOOTSTRAP_ADMIN_EMAILS = [
   'sonlyhongduc@gmail.com',
@@ -773,67 +776,322 @@ export async function updateAdminOrder(req: any, orderCodeParam?: string): Promi
   const code = String(orderCodeParam || body.orderCode || '')
     .trim()
     .toUpperCase();
-  const idx = store.orders.findIndex(o => o.orderCode === code);
-  if (idx < 0) {
-    throw new Error('Không tìm thấy đơn hàng để cập nhật.');
+  const existing = store.orders.find(o => o.orderCode === code);
+  if (!existing) {
+    throw new Error('Không tìm thấy đơn hàng.');
+  }
+  throw new Error('Đơn hàng đã tạo không thể sửa thông tin.');
+}
+
+export async function deleteAdminOrder(
+  req: any,
+  orderCodeParam?: string
+): Promise<{ ok: true; deletedOrderCode: string }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const store = getStore();
+  const code = String(orderCodeParam || body.orderCode || req?.query?.orderCode || '')
+    .trim()
+    .toUpperCase();
+  if (!code) {
+    throw new Error('Thiếu mã đơn hàng cần xóa.');
+  }
+  const exists = store.orders.some(o => o.orderCode === code);
+  if (!exists) {
+    throw new Error(`Không tìm thấy đơn hàng ${code} để xóa.`);
+  }
+  const nextOrders = store.orders.filter(o => o.orderCode !== code);
+  persistOrders(nextOrders);
+  return { ok: true, deletedOrderCode: code };
+}
+
+export async function deleteUserOrder(
+  req: any,
+  orderCodeParam?: string
+): Promise<{ ok: true; deletedOrderCode: string }> {
+  const caller = await verifyAuthenticatedUser(req);
+  const body = parseBody(req);
+  const store = getStore();
+  const code = String(orderCodeParam || body.orderCode || req?.query?.orderCode || '')
+    .trim()
+    .toUpperCase();
+  if (!code) {
+    throw new Error('Thiếu mã đơn hàng cần xóa.');
+  }
+  const existing = store.orders.find(o => o.orderCode === code);
+  if (!existing) {
+    throw new Error(`Không tìm thấy đơn hàng ${code}.`);
+  }
+  if (existing.uid !== caller.uid) {
+    await verifyAdminCaller(req).catch(() => {
+      throw new Error('Bạn không có quyền xóa đơn hàng này.');
+    });
+  }
+  const nextOrders = store.orders.filter(o => o.orderCode !== code);
+  persistOrders(nextOrders);
+  return { ok: true, deletedOrderCode: code };
+}
+
+export async function deleteAdminWebhookLog(
+  req: any,
+  logIdParam?: string
+): Promise<{ ok: true; deletedId?: string; clearedAll?: boolean; remainingCount: number }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const store = getStore();
+  if (body.clearAll === true) {
+    persistWebhooks([]);
+    return { ok: true, clearedAll: true, remainingCount: 0 };
+  }
+  const id = String(logIdParam || body.id || req?.query?.id || '').trim();
+  if (!id) {
+    throw new Error('Thiếu mã nhật ký webhook cần xóa.');
+  }
+  const exists = store.webhooks.some(w => w.id === id);
+  if (!exists) {
+    throw new Error('Không tìm thấy bản ghi nhật ký webhook cần xóa.');
+  }
+  const nextLogs = store.webhooks.filter(w => w.id !== id);
+  persistWebhooks(nextLogs);
+  return { ok: true, deletedId: id, remainingCount: nextLogs.length };
+}
+
+export async function checkAdminOrderPayment(req: any): Promise<{
+  ok: true;
+  order: PaymentOrder;
+  paid: boolean;
+  matched: boolean;
+  checkedAt: string;
+  message: string;
+}> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const store = getStore();
+  const code = String(body.orderCode || req?.query?.orderCode || '')
+    .trim()
+    .toUpperCase();
+  if (!code) {
+    throw new Error('Thiếu mã đơn hàng cần kiểm tra.');
   }
 
-  const current = store.orders[idx];
-  const now = new Date().toISOString();
-  const nextAmount =
-    body.amountVnd !== undefined && body.amountVnd !== null
-      ? Math.max(1000, Math.round(Number(body.amountVnd) || current.amountVnd))
-      : current.amountVnd;
+  const orderIdx = store.orders.findIndex(o => o.orderCode === code);
+  if (orderIdx < 0) {
+    throw new Error(`Không tìm thấy đơn hàng ${code}.`);
+  }
 
-  const allowedStatuses: SepayOrderStatus[] = ['pending', 'paid', 'underpaid', 'cancelled'];
-  const nextStatus: SepayOrderStatus = allowedStatuses.includes(body.status) ? body.status : current.status;
+  let order = store.orders[orderIdx];
+  const checkedAt = new Date().toISOString();
 
-  const updated: PaymentOrder = {
-    ...current,
-    amountVnd: nextAmount,
-    customAmountConfiguredByAdmin:
-      body.amountVnd !== undefined && nextAmount !== current.amountVnd
-        ? true
-        : current.customAmountConfiguredByAdmin,
-    status: nextStatus,
-    ...(typeof body.packageName === 'string' && body.packageName.trim()
-      ? { packageName: body.packageName.trim().slice(0, 140) }
-      : {}),
-    ...(typeof body.description === 'string' && body.description.trim()
-      ? { description: body.description.trim().slice(0, 240) }
-      : {}),
-    ...(typeof body.adminNote === 'string' ? { adminNote: body.adminNote.trim().slice(0, 240) } : {}),
-    ...(nextStatus === 'paid' && !current.paidAt
-      ? { paidAt: now, paidAmountVnd: nextAmount, sepayGateway: current.sepayGateway || 'Admin Manual' }
-      : {}),
+  const buildFreshQrOrder = (ord: PaymentOrder): PaymentOrder => ({
+    ...ord,
     qrUrl: buildSepayQrUrl({
       bankCode: store.config.bankCode,
       accountNumber: store.config.accountNumber,
-      amountVnd: nextAmount,
-      orderCode: current.orderCode,
+      amountVnd: ord.amountVnd,
+      orderCode: ord.orderCode,
       qrTemplate: store.config.qrTemplate,
     }),
-    updatedAt: now,
-  };
+  });
 
-  const nextOrders = [...store.orders];
-  nextOrders[idx] = updated;
-  persistOrders(nextOrders);
-
-  if (nextStatus === 'paid' && updated.uid && (updated.durationDays || updated.orderType === 'vip_package')) {
-    activateVipForUser({
-      uid: updated.uid,
-      userEmail: updated.userEmail,
-      userName: updated.userName,
-      vipTier: updated.packageId,
-      vipPackageName: updated.packageName,
-      durationDays: updated.durationDays || 30,
-      orderCode: updated.orderCode,
-      source: 'admin',
-    });
+  if (order.status === 'paid') {
+    if (order.uid && (order.orderType === 'vip_package' || (order.durationDays || 0) > 0)) {
+      const existingVip = store.vips[order.uid];
+      if (!existingVip?.isVip || existingVip.vipOrderCode !== order.orderCode) {
+        activateVipForUser({
+          uid: order.uid,
+          userEmail: order.userEmail,
+          userName: order.userName,
+          vipTier: order.packageId,
+          vipPackageName: order.packageName,
+          durationDays: order.durationDays || 365,
+          orderCode: order.orderCode,
+          source: 'sepay',
+        });
+      }
+    }
+    return {
+      ok: true,
+      order: buildFreshQrOrder(order),
+      paid: true,
+      matched: true,
+      checkedAt,
+      message: `Đơn ${order.orderCode} đã thanh toán thành công (${order.paidAmountVnd ? `${order.paidAmountVnd.toLocaleString('vi-VN')} đ` : 'đã xác nhận'}) và đã kích hoạt Verify.`,
+    };
   }
 
-  return { ok: true, order: updated };
+  // 1. Re-scan real incoming SePay webhooks recorded in log (ignore demo/test auth methods)
+  const matchingIncomingLogs = store.webhooks.filter(w => {
+    if (w.transferType !== 'in') return false;
+    if (w.authMethod === 'demo_simulate' || w.authMethod === 'admin_manual_test') return false;
+    const text = `${w.matchedOrderCode || ''} ${w.code || ''} ${w.content || ''} ${w.description || ''}`.toUpperCase();
+    return text.includes(order.orderCode.toUpperCase());
+  });
+
+  if (matchingIncomingLogs.length > 0) {
+    const bestLog = matchingIncomingLogs.reduce((best, cur) =>
+      cur.transferAmount > best.transferAmount ? cur : best
+    );
+    const isPaid = bestLog.transferAmount >= order.amountVnd;
+    const nextStatus: SepayOrderStatus = isPaid ? 'paid' : 'underpaid';
+
+    const updatedOrder: PaymentOrder = buildFreshQrOrder({
+      ...order,
+      status: nextStatus,
+      sepayTransactionId: bestLog.sepayTransactionId || order.sepayTransactionId,
+      sepayReferenceCode: bestLog.referenceCode || order.sepayReferenceCode,
+      sepayGateway: bestLog.gateway || order.sepayGateway,
+      paidAmountVnd: bestLog.transferAmount,
+      ...(isPaid ? { paidAt: checkedAt } : {}),
+      updatedAt: checkedAt,
+    });
+
+    const nextOrders = [...store.orders];
+    nextOrders[orderIdx] = updatedOrder;
+    persistOrders(nextOrders);
+
+    const nextLogs = store.webhooks.map(w =>
+      w.id === bestLog.id
+        ? {
+            ...w,
+            matchedOrderCode: updatedOrder.orderCode,
+            matchStatus: isPaid ? ('matched_paid' as const) : ('underpaid' as const),
+          }
+        : w
+    );
+    persistWebhooks(nextLogs);
+
+    if (isPaid && updatedOrder.uid && (updatedOrder.orderType === 'vip_package' || (updatedOrder.durationDays || 0) > 0)) {
+      activateVipForUser({
+        uid: updatedOrder.uid,
+        userEmail: updatedOrder.userEmail,
+        userName: updatedOrder.userName,
+        vipTier: updatedOrder.packageId,
+        vipPackageName: updatedOrder.packageName,
+        durationDays: updatedOrder.durationDays || 365,
+        orderCode: updatedOrder.orderCode,
+        source: 'sepay',
+      });
+    }
+
+    return {
+      ok: true,
+      order: updatedOrder,
+      paid: isPaid,
+      matched: true,
+      checkedAt,
+      message: isPaid
+        ? `Đã đối soát giao dịch SePay #${bestLog.sepayTransactionId}: đơn ${updatedOrder.orderCode} đã thanh toán đủ và kích hoạt Verify.`
+        : `Đã tìm thấy giao dịch #${bestLog.sepayTransactionId} nhưng số tiền chuyển (${bestLog.transferAmount.toLocaleString('vi-VN')} đ) nhỏ hơn giá trị đơn (${updatedOrder.amountVnd.toLocaleString('vi-VN')} đ).`,
+    };
+  }
+
+  // 2. Optional direct SePay User API transaction check if SEPAY_USER_API_TOKEN is configured
+  const sepayUserToken = String(process.env.SEPAY_USER_API_TOKEN || '').trim();
+  if (sepayUserToken) {
+    try {
+      const qs = new URLSearchParams({ limit: '25' });
+      if (store.config.accountNumber) {
+        qs.set('account_number', store.config.accountNumber);
+      }
+      const resp = await fetch(`https://my.sepay.vn/userapi/transactions/list?${qs.toString()}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${sepayUserToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (resp.ok) {
+        const json = (await resp.json().catch(() => null)) as { transactions?: Array<Record<string, any>> } | null;
+        const txList = Array.isArray(json?.transactions) ? json!.transactions : [];
+        const matchedTx = txList.find(tx => {
+          const amountIn = Number(tx.amount_in || 0);
+          if (amountIn <= 0) return false;
+          const searchStr = `${tx.transaction_content || ''} ${tx.reference_number || ''} ${tx.code || ''}`.toUpperCase();
+          return searchStr.includes(order.orderCode.toUpperCase());
+        });
+        if (matchedTx) {
+          const amountIn = Math.max(0, Number(matchedTx.amount_in) || 0);
+          const isPaid = amountIn >= order.amountVnd;
+          const sepayTxId = Number(matchedTx.id || 0);
+          const updatedOrder: PaymentOrder = buildFreshQrOrder({
+            ...order,
+            status: isPaid ? 'paid' : 'underpaid',
+            sepayTransactionId: sepayTxId || order.sepayTransactionId,
+            sepayReferenceCode: matchedTx.reference_number ? String(matchedTx.reference_number) : order.sepayReferenceCode,
+            sepayGateway: matchedTx.bank_brand_name ? String(matchedTx.bank_brand_name) : store.config.bankCode,
+            paidAmountVnd: amountIn,
+            ...(isPaid ? { paidAt: checkedAt } : {}),
+            updatedAt: checkedAt,
+          });
+          const nextOrders = [...store.orders];
+          nextOrders[orderIdx] = updatedOrder;
+          persistOrders(nextOrders);
+
+          const logEntry: SepayWebhookLog = {
+            id: `wh_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+            sepayTransactionId: sepayTxId,
+            gateway: updatedOrder.sepayGateway || store.config.bankCode,
+            transactionDate: String(matchedTx.transaction_date || checkedAt),
+            accountNumber: String(matchedTx.account_number || store.config.accountNumber),
+            subAccount: matchedTx.sub_account ? String(matchedTx.sub_account) : null,
+            code: order.orderCode,
+            content: String(matchedTx.transaction_content || ''),
+            transferType: 'in',
+            transferAmount: amountIn,
+            accumulated: matchedTx.accumulated !== undefined ? Number(matchedTx.accumulated) : undefined,
+            referenceCode: matchedTx.reference_number ? String(matchedTx.reference_number) : undefined,
+            description: 'Kiểm tra trực tiếp qua SePay API',
+            matchedOrderCode: updatedOrder.orderCode,
+            matchStatus: isPaid ? 'matched_paid' : 'underpaid',
+            authMethod: 'sepay_api_direct',
+            receivedAt: checkedAt,
+          };
+          persistWebhooks([logEntry, ...store.webhooks]);
+
+          if (isPaid && updatedOrder.uid && (updatedOrder.orderType === 'vip_package' || (updatedOrder.durationDays || 0) > 0)) {
+            activateVipForUser({
+              uid: updatedOrder.uid,
+              userEmail: updatedOrder.userEmail,
+              userName: updatedOrder.userName,
+              vipTier: updatedOrder.packageId,
+              vipPackageName: updatedOrder.packageName,
+              durationDays: updatedOrder.durationDays || 365,
+              orderCode: updatedOrder.orderCode,
+              source: 'sepay',
+            });
+          }
+
+          return {
+            ok: true,
+            order: updatedOrder,
+            paid: isPaid,
+            matched: true,
+            checkedAt,
+            message: isPaid
+              ? `Đã xác nhận giao dịch thật từ SePay (#${sepayTxId}): đơn ${updatedOrder.orderCode} đã thanh toán và kích hoạt Verify.`
+              : `Đã tìm thấy giao dịch #${sepayTxId} nhưng số tiền chuyển (${amountIn.toLocaleString('vi-VN')} đ) chưa đủ ${updatedOrder.amountVnd.toLocaleString('vi-VN')} đ.`,
+          };
+        }
+      }
+    } catch {
+      // Non-fatal fallback to current order state
+    }
+  }
+
+  order = buildFreshQrOrder(order);
+  return {
+    ok: true,
+    order,
+    paid: false,
+    matched: false,
+    checkedAt,
+    message:
+      order.status === 'underpaid'
+        ? `Đơn ${order.orderCode} hiện ở trạng thái Chuyển thiếu tiền (${(order.paidAmountVnd || 0).toLocaleString('vi-VN')} đ / ${order.amountVnd.toLocaleString('vi-VN')} đ).`
+        : order.status === 'cancelled'
+        ? `Đơn ${order.orderCode} đã bị hủy.`
+        : `Đơn ${order.orderCode} đang chờ thanh toán — chưa ghi nhận giao dịch chuyển khoản thật khớp từ SePay.`,
+  };
 }
 
 export async function updateAdminUserVip(req: any): Promise<{ ok: true; vip: StoredVipRecord }> {
@@ -1248,52 +1506,7 @@ export function processSepayWebhook(
 
 export async function simulateSepayDemoPayment(req: any): Promise<Record<string, any>> {
   await verifyAdminCaller(req);
-  const body = parseBody(req);
-  const store = getStore();
-  const orderCode = String(body.orderCode || '').trim().toUpperCase();
-
-  const order = orderCode ? store.orders.find(o => o.orderCode === orderCode) : undefined;
-  const simulatedAmount =
-    body.transferAmount !== undefined
-      ? Math.max(0, Number(body.transferAmount) || 0)
-      : order
-      ? order.amountVnd
-      : Math.max(1000, Number(store.config.packages?.[0]?.priceVnd) || 50000);
-
-  const txId = Math.floor(100000 + Math.random() * 8999999);
-  const simulatedPayload = {
-    id: txId,
-    gateway: store.config.bankCode || 'MBBank',
-    transactionDate: new Date().toISOString().replace('T', ' ').slice(0, 19),
-    accountNumber: store.config.accountNumber || '00010302003',
-    subAccount: store.config.subAccount || null,
-    code: order ? order.orderCode : orderCode || null,
-    content: order
-      ? `Chuyen khoan ${order.orderCode} xac minh tai khoan Verified`
-      : String(body.content || `Test webhook ${orderCode || 'TYTVERIFY'}`),
-    transferType: 'in',
-    transferAmount: simulatedAmount,
-    accumulated: simulatedAmount,
-    referenceCode: `FT${Date.now().toString().slice(-8)}`,
-    description: `Admin SePay Webhook Test -> ${DEFAULT_WEBHOOK_URL}`,
-  };
-
-  const result = processSepayWebhook(
-    {
-      headers: {},
-      body: simulatedPayload,
-      rawBody: Buffer.from(JSON.stringify(simulatedPayload), 'utf8'),
-    },
-    { bypassHeaderAuth: true, authMethodLabel: 'admin_manual_test' }
-  );
-
-  const vipStatus = await getUserVipStatus(req);
-  return {
-    ok: true,
-    webhookPayload: simulatedPayload,
-    webhookResponse: result.body,
-    vipStatus,
-  };
+  throw new Error('Chức năng test giả lập webhook đơn hàng đã tắt. Vui lòng sử dụng nút Kiểm tra để đối soát giao dịch thực tế.');
 }
 
 export async function testAdminWebhookEndpoint(req: any): Promise<Record<string, any>> {
@@ -1357,4 +1570,131 @@ export async function testAdminWebhookEndpoint(req: any): Promise<Record<string,
     webhookPayload: payload,
     webhookResponse: result.body,
   };
+}
+
+export async function adminMarkOrderPaid(req: any): Promise<{ ok: true; order: PaymentOrder }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const store = getStore();
+  const code = String(body.orderCode || '').trim().toUpperCase();
+  const orderIdx = store.orders.findIndex(o => o.orderCode === code);
+  if (orderIdx < 0) {
+    throw new Error(`Không tìm thấy đơn hàng ${code}.`);
+  }
+  const order = store.orders[orderIdx];
+  const now = new Date().toISOString();
+  const updatedOrder: PaymentOrder = {
+    ...order,
+    status: 'paid',
+    paidAmountVnd: order.amountVnd,
+    paidAt: now,
+    updatedAt: now,
+    adminNote: body.adminNote ? String(body.adminNote).trim() : (order.adminNote ? `${order.adminNote} · Xác nhận thủ công bởi Admin` : 'Xác nhận thủ công bởi Admin'),
+  };
+  const nextOrders = [...store.orders];
+  nextOrders[orderIdx] = updatedOrder;
+  persistOrders(nextOrders);
+
+  if (updatedOrder.uid && (updatedOrder.orderType === 'vip_package' || (updatedOrder.durationDays || 0) > 0)) {
+    activateVipForUser({
+      uid: updatedOrder.uid,
+      userEmail: updatedOrder.userEmail,
+      userName: updatedOrder.userName,
+      vipTier: updatedOrder.packageId,
+      vipPackageName: updatedOrder.packageName,
+      durationDays: updatedOrder.durationDays || 365,
+      orderCode: updatedOrder.orderCode,
+      source: 'admin',
+    });
+  }
+
+  return { ok: true, order: updatedOrder };
+}
+
+export async function getAdminFundsState(req: any): Promise<{ ok: true; funds: DonationFund[] }> {
+  await verifyAdminCaller(req);
+  const funds = readJsonFile<DonationFund[]>(FUNDS_FILE) || [];
+  return { ok: true, funds: Array.isArray(funds) ? funds : [] };
+}
+
+export async function saveAdminFund(req: any): Promise<{ ok: true; fund: DonationFund }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const funds = readJsonFile<DonationFund[]>(FUNDS_FILE) || [];
+  const fundId = String(body.id || `fund_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`).trim();
+  const now = new Date().toISOString();
+
+  const existingIdx = funds.findIndex(f => f.id === fundId);
+  const fund: DonationFund = {
+    id: fundId,
+    name: String(body.name || 'Quỹ Từ Thiện Cộng Đồng').trim().slice(0, 140),
+    description: String(body.description || '').trim().slice(0, 400),
+    targetAmountVnd: Math.max(0, Number(body.targetAmountVnd) || 1000000),
+    usePresetSepayConfig: body.usePresetSepayConfig !== false,
+    bankCode: body.bankCode ? String(body.bankCode).trim() : undefined,
+    bankName: body.bankName ? String(body.bankName).trim() : undefined,
+    accountNumber: body.accountNumber ? String(body.accountNumber).trim() : undefined,
+    accountHolder: body.accountHolder ? String(body.accountHolder).trim() : undefined,
+    orderPrefix: body.orderPrefix ? String(body.orderPrefix).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5) : undefined,
+    expenses: existingIdx >= 0 ? funds[existingIdx].expenses || [] : [],
+    createdAt: existingIdx >= 0 ? funds[existingIdx].createdAt : now,
+    updatedAt: now,
+  };
+
+  const nextFunds = existingIdx >= 0
+    ? funds.map(f => (f.id === fundId ? fund : f))
+    : [fund, ...funds];
+
+  writeJsonFile(FUNDS_FILE, nextFunds);
+  return { ok: true, fund };
+}
+
+export async function deleteAdminFund(req: any): Promise<{ ok: true; deletedId: string }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const fundId = String(body.id || req?.query?.id || '').trim();
+  const funds = readJsonFile<DonationFund[]>(FUNDS_FILE) || [];
+  const nextFunds = funds.filter(f => f.id !== fundId);
+  writeJsonFile(FUNDS_FILE, nextFunds);
+  return { ok: true, deletedId: fundId };
+}
+
+export async function addFundExpense(req: any): Promise<{ ok: true; fund: DonationFund }> {
+  await verifyAdminCaller(req);
+  const body = parseBody(req);
+  const fundId = String(body.fundId || '').trim();
+  const purpose = String(body.purpose || '').trim();
+  const amountVnd = Math.max(1000, Number(body.amountVnd) || 0);
+  if (!fundId || !purpose || amountVnd <= 0) {
+    throw new Error('Vui lòng nhập đầy đủ thông tin dòng tiền ra (mục đích và số tiền hợp lệ).');
+  }
+
+  const funds = readJsonFile<DonationFund[]>(FUNDS_FILE) || [];
+  const fundIdx = funds.findIndex(f => f.id === fundId);
+  if (fundIdx < 0) {
+    throw new Error('Không tìm thấy quỹ tài chính.');
+  }
+
+  const now = new Date().toISOString();
+  const expense: FundExpense = {
+    id: `exp_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+    fundId,
+    purpose,
+    amountVnd,
+    expenseDate: String(body.expenseDate || now.split('T')[0]),
+    notes: body.notes ? String(body.notes).trim() : undefined,
+    createdBy: 'admin',
+    createdAt: now,
+  };
+
+  const targetFund = funds[fundIdx];
+  const updatedFund: DonationFund = {
+    ...targetFund,
+    expenses: [expense, ...(targetFund.expenses || [])],
+    updatedAt: now,
+  };
+
+  const nextFunds = funds.map(f => (f.id === fundId ? updatedFund : f));
+  writeJsonFile(FUNDS_FILE, nextFunds);
+  return { ok: true, fund: updatedFund };
 }

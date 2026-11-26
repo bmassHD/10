@@ -43,14 +43,23 @@ import {
   verifyBiometricRegistration,
 } from './src/server/biometricAuthService';
 import {
+  adminMarkOrderPaid,
+  addFundExpense,
+  checkAdminOrderPayment,
   createAdminCustomOrder,
   createUserPaymentOrder,
+  deleteAdminFund,
+  deleteAdminOrder,
+  deleteAdminWebhookLog,
+  deleteUserOrder,
+  getAdminFundsState,
   getAdminSepayState,
   getPublicSepayConfig,
   getUserOrderStatus,
   getUserVipStatus,
   listUserOrders,
   processSepayWebhook,
+  saveAdminFund,
   saveAdminSepayConfig,
   simulateSepayDemoPayment,
   testAdminWebhookEndpoint,
@@ -2445,10 +2454,127 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
     }
   });
 
+  app.post('/api/sepay/admin-order-check', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await checkAdminOrderPayment(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
   app.post('/api/sepay/admin-test-webhook', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
       return res.json(await testAdminWebhookEndpoint(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.delete('/api/sepay/orders/:orderCode', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteUserOrder(req, req.params.orderCode));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.delete('/api/sepay/orders', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteUserOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/order-delete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteUserOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.delete('/api/sepay/admin/orders/:orderCode', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteAdminOrder(req, req.params.orderCode));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-order-delete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteAdminOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.delete('/api/sepay/admin/webhooks/:id', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteAdminWebhookLog(req, req.params.id));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-webhook-delete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteAdminWebhookLog(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-order-mark-paid', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await adminMarkOrderPaid(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.get('/api/sepay/admin-funds', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await getAdminFundsState(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-funds', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await saveAdminFund(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.delete('/api/sepay/admin-funds', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await deleteAdminFund(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-funds/expense', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await addFundExpense(req));
     } catch (err) {
       return sendSepayError(res, err);
     }

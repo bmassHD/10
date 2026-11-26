@@ -2,14 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   BadgeCheck,
   Check,
-  CheckCircle2,
   Copy,
   CreditCard,
   DollarSign,
   ExternalLink,
   KeyRound,
   Landmark,
-  Pencil,
   Play,
   Plus,
   QrCode,
@@ -17,10 +15,17 @@ import {
   Save,
   Search,
   ShieldCheck,
+  Trash2,
   Webhook,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  PieChart,
   X,
 } from 'lucide-react';
 import type {
+  DonationFund,
+  FundExpense,
   PaymentOrder,
   SepayAdminConfig,
   SepayAuthType,
@@ -31,13 +36,19 @@ import type {
   VipPackageConfig,
 } from '../../types';
 import {
+  adminMarkOrderPaid,
+  addFundExpense,
+  checkAdminPaymentOrder,
   createAdminCustomPaymentOrder,
+  deleteAdminFund,
+  deleteAdminPaymentOrder,
+  deleteAdminWebhookLog,
+  fetchAdminFunds,
   fetchAdminSepayState,
   formatVnd,
   runAdminSepayWebhookTest,
+  saveAdminFund,
   saveAdminSepayConfig,
-  simulateSepayWebhookPayment,
-  updateAdminPaymentOrder,
 } from '../../services/sepayService';
 import { useToast } from '../../contexts/ToastContext';
 
@@ -102,18 +113,34 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
   const [customAmountVnd, setCustomAmountVnd] = useState('50000');
   const [customDurationDays, setCustomDurationDays] = useState('365');
   const [customNote, setCustomNote] = useState('');
+  const [customFundId, setCustomFundId] = useState('');
 
-  // Inline edit order amount modal state
-  const [editingOrder, setEditingOrder] = useState<PaymentOrder | null>(null);
-  const [editAmountVnd, setEditAmountVnd] = useState('');
-  const [editStatus, setEditStatus] = useState<SepayOrderStatus>('pending');
-  const [editAdminNote, setEditAdminNote] = useState('');
-  const [savingOrderEdit, setSavingOrderEdit] = useState(false);
-
-  // Preview QR modal
+  // Preview QR, direct order check & delete confirmation state
   const [previewQrOrder, setPreviewQrOrder] = useState<PaymentOrder | null>(null);
-  const [simulatingOrderCode, setSimulatingOrderCode] = useState<string | null>(null);
+  const [checkingOrderCode, setCheckingOrderCode] = useState<string | null>(null);
   const [testingWebhook, setTestingWebhook] = useState(false);
+  const [deletingOrderCode, setDeletingOrderCode] = useState<string | null>(null);
+  const [deletingWebhookId, setDeletingWebhookId] = useState<string | null>(null);
+  const [clearingWebhooks, setClearingWebhooks] = useState(false);
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<
+    | { type: 'order'; order: PaymentOrder }
+    | { type: 'webhook'; log: SepayWebhookLog }
+    | { type: 'clear_webhooks'; count: number }
+    | null
+  >(null);
+
+  const [funds, setFunds] = useState<DonationFund[]>([]);
+  const [fundModalOpen, setFundModalOpen] = useState(false);
+  const [savingFund, setSavingFund] = useState(false);
+  const [editingFund, setEditingFund] = useState<Partial<DonationFund> | null>(null);
+  const [expenseModalFund, setExpenseModalFund] = useState<DonationFund | null>(null);
+  const [submittingExpense, setSubmittingExpense] = useState(false);
+  const [expensePurpose, setExpensePurpose] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [expenseNotes, setExpenseNotes] = useState('');
+  const [fundStatsFilter, setFundStatsFilter] = useState<'all' | 'day' | 'month' | 'year'>('all');
+  const [markingPaidCode, setMarkingPaidCode] = useState<string | null>(null);
 
   const isAiStudioDevHost =
     typeof window !== 'undefined' &&
@@ -122,10 +149,14 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
   const loadState = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const data = await fetchAdminSepayState();
+      const [data, loadedFunds] = await Promise.all([
+        fetchAdminSepayState(),
+        fetchAdminFunds(),
+      ]);
       setConfig(data.config);
       setOrders(data.orders || []);
       setWebhooks(data.webhooks || []);
+      setFunds(loadedFunds || []);
       setEnabled(Boolean(data.config.enabled));
       setBankCode(data.config.bankCode || 'MBBank');
       setBankName(data.config.bankName || 'MB Bank (Ngân hàng Quân Đội)');
@@ -280,7 +311,7 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
   const handlePackageFieldChange = (
     idx: number,
     field: keyof VipPackageConfig,
-    value: string | number | boolean
+    value: string | number | boolean | string[]
   ) => {
     setPackages(prev =>
       prev.map((pkg, i) => (i === idx ? { ...pkg, [field]: value } : pkg))
@@ -315,10 +346,12 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
         amountVnd: amountNum,
         durationDays: Math.max(0, Math.round(Number(customDurationDays) || 0)),
         adminNote: customNote.trim() || undefined,
+        fundId: customFundId || undefined,
       });
       showToast('success', 'Đã tạo đơn hàng cấu hình số tiền riêng', formatVnd(amountNum));
       setCreateOrderOpen(false);
       setCustomNote('');
+      setCustomFundId('');
       await loadState(true);
     } catch (err: any) {
       showToast('error', 'Không thể tạo đơn hàng', err?.message);
@@ -327,49 +360,136 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
     }
   };
 
-  const openEditOrder = (order: PaymentOrder) => {
-    setEditingOrder(order);
-    setEditAmountVnd(String(order.amountVnd));
-    setEditStatus(order.status);
-    setEditAdminNote(order.adminNote || '');
-  };
-
-  const handleSaveOrderEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingOrder) return;
-    const nextAmount = Math.max(1000, Math.round(Number(editAmountVnd) || editingOrder.amountVnd));
-    setSavingOrderEdit(true);
+  const handleManualMarkPaid = async (orderCode: string) => {
+    setMarkingPaidCode(orderCode);
     try {
-      await updateAdminPaymentOrder({
-        orderCode: editingOrder.orderCode,
-        amountVnd: nextAmount,
-        status: editStatus,
-        adminNote: editAdminNote.trim(),
-      });
-      showToast(
-        'success',
-        `Đã cập nhật đơn ${editingOrder.orderCode}`,
-        `Số tiền: ${formatVnd(nextAmount)} · Trạng thái: ${editStatus}`
-      );
-      setEditingOrder(null);
+      const updated = await adminMarkOrderPaid(orderCode);
+      setOrders(prev => prev.map(o => (o.orderCode === orderCode ? updated : o)));
+      showToast('success', `Đã xác nhận thanh toán thủ công đơn ${orderCode}`);
       await loadState(true);
     } catch (err: any) {
-      showToast('error', 'Cập nhật đơn hàng thất bại', err?.message);
+      showToast('error', 'Không thể xác nhận thanh toán', err?.message);
     } finally {
-      setSavingOrderEdit(false);
+      setMarkingPaidCode(null);
     }
   };
 
-  const handleSimulateWebhook = async (orderCode: string) => {
-    setSimulatingOrderCode(orderCode);
+  const handleSaveFundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFund?.name?.trim()) {
+      showToast('warning', 'Vui lòng nhập tên quỹ tài chính');
+      return;
+    }
+    setSavingFund(true);
     try {
-      await simulateSepayWebhookPayment({ orderCode });
-      showToast('success', `Đã gửi Webhook SePay test cho đơn ${orderCode}`, 'Trạng thái đã chuyển Đã thanh toán & kích hoạt Verify (Tick Xanh).');
+      await saveAdminFund(editingFund);
+      showToast('success', 'Đã lưu thông tin quỹ tài chính');
+      setFundModalOpen(false);
+      setEditingFund(null);
+      const loaded = await fetchAdminFunds();
+      setFunds(loaded);
+    } catch (err: any) {
+      showToast('error', 'Không thể lưu quỹ', err?.message);
+    } finally {
+      setSavingFund(false);
+    }
+  };
+
+  const handleDeleteFundSubmit = async (fundId: string) => {
+    try {
+      await deleteAdminFund(fundId);
+      showToast('success', 'Đã xóa quỹ tài chính');
+      setFunds(prev => prev.filter(f => f.id !== fundId));
+    } catch (err: any) {
+      showToast('error', 'Không thể xóa quỹ', err?.message);
+    }
+  };
+
+  const handleAddExpenseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!expenseModalFund || !expensePurpose.trim() || !expenseAmount) return;
+    const amountNum = Math.max(1, Number(expenseAmount) || 0);
+    setSubmittingExpense(true);
+    try {
+      const updatedFund = await addFundExpense({
+        fundId: expenseModalFund.id,
+        purpose: expensePurpose.trim(),
+        amountVnd: amountNum,
+        expenseDate,
+        notes: expenseNotes.trim() || undefined,
+      });
+      showToast('success', 'Đã ghi nhận dòng tiền ra (chi quỹ)', formatVnd(amountNum));
+      setExpenseModalFund(null);
+      setExpensePurpose('');
+      setExpenseAmount('');
+      setExpenseNotes('');
+      setFunds(prev => prev.map(f => (f.id === updatedFund.id ? updatedFund : f)));
+    } catch (err: any) {
+      showToast('error', 'Không thể ghi nhận chi quỹ', err?.message);
+    } finally {
+      setSubmittingExpense(false);
+    }
+  };
+
+  const getFundCashInStats = (fund: DonationFund) => {
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const currentMonthStr = todayStr.slice(0, 7);
+    const currentYearStr = todayStr.slice(0, 4);
+
+    const fundOrders = orders.filter(
+      o =>
+        o.status === 'paid' &&
+        (o.fundId === fund.id || (fund.orderPrefix && o.orderCode.startsWith(fund.orderPrefix)))
+    );
+
+    let totalAll = 0;
+    let totalDay = 0;
+    let totalMonth = 0;
+    let totalYear = 0;
+
+    fundOrders.forEach(o => {
+      const amount = o.paidAmountVnd || o.amountVnd || 0;
+      const orderDateStr = (o.paidAt || o.createdAt || '').split('T')[0];
+      totalAll += amount;
+      if (orderDateStr === todayStr) totalDay += amount;
+      if (orderDateStr.startsWith(currentMonthStr)) totalMonth += amount;
+      if (orderDateStr.startsWith(currentYearStr)) totalYear += amount;
+    });
+
+    const totalExpense = (fund.expenses || []).reduce((sum, exp) => sum + (exp.amountVnd || 0), 0);
+    const balance = totalAll - totalExpense;
+    const progressPercent = fund.targetAmountVnd > 0 ? Math.min(100, Math.round((totalAll / fund.targetAmountVnd) * 100)) : 100;
+
+    return {
+      totalAll,
+      totalDay,
+      totalMonth,
+      totalYear,
+      totalExpense,
+      balance,
+      progressPercent,
+      ordersCount: fundOrders.length,
+    };
+  };
+
+  const handleCheckOrderPayment = async (orderCode: string) => {
+    setCheckingOrderCode(orderCode);
+    try {
+      const res = await checkAdminPaymentOrder(orderCode);
+      setOrders(prev => prev.map(o => (o.orderCode === orderCode ? res.order : o)));
+      if (res.paid) {
+        showToast('success', `Đơn ${orderCode} đã thanh toán!`, res.message);
+      } else if (res.matched) {
+        showToast('warning', `Đối soát đơn ${orderCode}`, res.message);
+      } else {
+        showToast('info', `Kiểm tra đơn ${orderCode}`, res.message);
+      }
       await loadState(true);
     } catch (err: any) {
-      showToast('error', 'Giả lập webhook thất bại', err?.message);
+      showToast('error', `Kiểm tra đơn ${orderCode} thất bại`, err?.message);
     } finally {
-      setSimulatingOrderCode(null);
+      setCheckingOrderCode(null);
     }
   };
 
@@ -387,6 +507,58 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
       showToast('error', 'Test Webhook thất bại', err?.message || 'Kiểm tra lại API Key / HMAC Secret đã lưu.');
     } finally {
       setTestingWebhook(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteTarget) return;
+    if (confirmDeleteTarget.type === 'order') {
+      const code = confirmDeleteTarget.order.orderCode;
+      setDeletingOrderCode(code);
+      try {
+        await deleteAdminPaymentOrder(code);
+        setOrders(prev => prev.filter(o => o.orderCode !== code));
+        if (previewQrOrder?.orderCode === code) {
+          setPreviewQrOrder(null);
+        }
+        showToast('success', `Đã xóa đơn hàng ${code}`);
+        setConfirmDeleteTarget(null);
+      } catch (err: any) {
+        showToast('error', `Không thể xóa đơn hàng ${code}`, err?.message);
+      } finally {
+        setDeletingOrderCode(null);
+      }
+      return;
+    }
+
+    if (confirmDeleteTarget.type === 'webhook') {
+      const logId = confirmDeleteTarget.log.id;
+      setDeletingWebhookId(logId);
+      try {
+        await deleteAdminWebhookLog({ id: logId });
+        setWebhooks(prev => prev.filter(w => w.id !== logId));
+        showToast('success', 'Đã xóa bản ghi nhật ký SePay Webhook');
+        setConfirmDeleteTarget(null);
+      } catch (err: any) {
+        showToast('error', 'Không thể xóa nhật ký webhook', err?.message);
+      } finally {
+        setDeletingWebhookId(null);
+      }
+      return;
+    }
+
+    if (confirmDeleteTarget.type === 'clear_webhooks') {
+      setClearingWebhooks(true);
+      try {
+        await deleteAdminWebhookLog({ clearAll: true });
+        setWebhooks([]);
+        showToast('success', 'Đã xóa toàn bộ nhật ký SePay Webhook');
+        setConfirmDeleteTarget(null);
+      } catch (err: any) {
+        showToast('error', 'Không thể xóa nhật ký webhook', err?.message);
+      } finally {
+        setClearingWebhooks(false);
+      }
     }
   };
 
@@ -811,6 +983,36 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
                     />
                   </div>
                 </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                      Quyền lợi khi mua (mỗi dòng 1 mục · có thể để trống để thiết lập sau)
+                    </label>
+                    {pkg.features.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handlePackageFieldChange(idx, 'features', [])}
+                        className="text-[11px] text-rose-600 hover:underline font-semibold cursor-pointer"
+                      >
+                        Xóa quyền lợi
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={pkg.features.join('\n')}
+                    onChange={e =>
+                      handlePackageFieldChange(
+                        idx,
+                        'features',
+                        e.target.value.split('\n').map(line => line.trim()).filter(Boolean)
+                      )
+                    }
+                    placeholder="Có thể để trống hoặc nhập danh sách quyền lợi khi mua (mỗi dòng 1 quyền lợi)..."
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs leading-relaxed"
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -829,7 +1031,7 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
               </span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Admin có thể sửa trực tiếp số tiền thanh toán (VND) của bất kỳ đơn hàng nào; mã QR SePay &amp; kiểm tra Webhook sẽ tự cập nhật theo số tiền mới.
+              Số tiền thanh toán được cấu hình cố định ngay khi tạo đơn hàng; đơn hàng đã tạo không thể sửa thông tin. Bấm &ldquo;Kiểm tra&rdquo; để đối soát trực tiếp giao dịch từ SePay.
             </p>
           </div>
 
@@ -899,11 +1101,11 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
                   <th className="py-2.5 text-right">Thao tác</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filteredOrders.map(order => (
-                  <tr key={order.orderCode} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                  <tr key={order.orderCode} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 whitespace-nowrap">
                     <td className="py-3 pr-3">
-                      <div className="font-mono font-bold text-slate-900 dark:text-white">{order.orderCode}</div>
+                      <div className="font-mono font-bold text-slate-900 dark:text-white">#{order.orderCode}</div>
                       <div className="text-[11px] text-slate-400">
                         {new Date(order.createdAt).toLocaleString('vi-VN')}
                       </div>
@@ -950,44 +1152,228 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
                           : 'Chờ thanh toán'}
                       </span>
                     </td>
-                    <td className="py-3 text-right">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => openEditOrder(order)}
-                          className="px-2.5 py-1.5 rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 font-semibold inline-flex items-center gap-1 cursor-pointer hover:bg-sky-100"
-                          title="Chỉnh số tiền & trạng thái đơn"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>Sửa số tiền</span>
-                        </button>
+                    <td className="py-3 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
                           onClick={() => setPreviewQrOrder(order)}
-                          className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold inline-flex items-center gap-1 cursor-pointer"
+                          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer transition"
                           title="Xem mã QR SePay"
                         >
-                          <QrCode className="w-3 h-3" />
-                          <span>QR</span>
+                          <QrCode className="w-4 h-4" />
                         </button>
                         {order.status !== 'paid' && (
-                          <button
-                            type="button"
-                            disabled={simulatingOrderCode === order.orderCode}
-                            onClick={() => void handleSimulateWebhook(order.orderCode)}
-                            className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
-                            title="Gửi Webhook SePay giả lập tới /hooks/sepay-payment"
-                          >
-                            <Play className="w-3 h-3" />
-                            <span>Test Webhook</span>
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              disabled={checkingOrderCode === order.orderCode}
+                              onClick={() => void handleCheckOrderPayment(order.orderCode)}
+                              className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition disabled:opacity-60"
+                              title="Kiểm tra đối soát SePay"
+                            >
+                              <RefreshCw
+                                className={`w-4 h-4 ${checkingOrderCode === order.orderCode ? 'animate-spin' : ''}`}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={markingPaidCode === order.orderCode}
+                              onClick={() => void handleManualMarkPaid(order.orderCode)}
+                              className="p-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white cursor-pointer transition disabled:opacity-60"
+                              title="Xác nhận thanh toán thủ công (Force Paid)"
+                            >
+                              <Check className={`w-4 h-4 ${markingPaidCode === order.orderCode ? 'animate-spin' : ''}`} />
+                            </button>
+                          </>
                         )}
+                        <button
+                          type="button"
+                          disabled={deletingOrderCode === order.orderCode}
+                          onClick={() => setConfirmDeleteTarget({ type: 'order', order })}
+                          className="p-1.5 rounded-lg border border-rose-200 dark:border-rose-800/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer transition disabled:opacity-60"
+                          title="Xóa đơn hàng này"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Quản Lý Quỹ Tài Chính & Từ Thiện */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Wallet className="w-5 h-5 text-emerald-600" />
+              <span>Quản Lý Quỹ Tài Chính &amp; Từ Thiện Cộng Đồng ({funds.length})</span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Admin có thể tạo nhiều quỹ, cấu hình SePay riêng hoặc dùng chung preset, theo dõi dòng tiền vào (theo ngày/tháng/năm/tất cả) và khai báo dòng tiền ra (chi quỹ).
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <select
+              value={fundStatsFilter}
+              onChange={e => setFundStatsFilter(e.target.value as any)}
+              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold"
+            >
+              <option value="all">Thống kê: Tất cả thời gian</option>
+              <option value="day">Thống kê: Hôm nay</option>
+              <option value="month">Thống kê: Tháng này</option>
+              <option value="year">Thống kê: Năm nay</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingFund({ name: '', description: '', targetAmountVnd: 5000000, usePresetSepayConfig: true });
+                setFundModalOpen(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tạo quỹ mới</span>
+            </button>
+          </div>
+        </div>
+
+        {funds.length === 0 ? (
+          <div className="py-8 text-center text-xs text-slate-500">
+            Chưa có quỹ tài chính nào được tạo. Nhấn &ldquo;Tạo quỹ mới&rdquo; để bắt đầu quản lý đóng góp và chi tiêu quỹ.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {funds.map(fund => {
+              const stats = getFundCashInStats(fund);
+              const activeStatsTotal =
+                fundStatsFilter === 'day'
+                  ? stats.totalDay
+                  : fundStatsFilter === 'month'
+                  ? stats.totalMonth
+                  : fundStatsFilter === 'year'
+                  ? stats.totalYear
+                  : stats.totalAll;
+
+              return (
+                <div
+                  key={fund.id}
+                  className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">{fund.name}</h4>
+                      {fund.description && (
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">{fund.description}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setExpenseModalFund(fund)}
+                        className="p-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white cursor-pointer transition"
+                        title="Khai báo dòng tiền ra (Chi quỹ)"
+                      >
+                        <TrendingDown className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingFund(fund);
+                          setFundModalOpen(true);
+                        }}
+                        className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer transition"
+                        title="Chỉnh sửa quỹ"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteFundSubmit(fund.id)}
+                        className="p-1.5 rounded-lg border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer transition"
+                        title="Xóa quỹ"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Financial Metrics */}
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                        <TrendingUp className="w-3 h-3 text-emerald-600" />
+                        <span>Tiền vào ({fundStatsFilter})</span>
+                      </div>
+                      <div className="font-mono font-extrabold text-emerald-700 dark:text-emerald-300 mt-1 text-sm">
+                        {formatVnd(activeStatsTotal)}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                        <TrendingDown className="w-3 h-3 text-rose-600" />
+                        <span>Tổng chi (Dòng tiền ra)</span>
+                      </div>
+                      <div className="font-mono font-extrabold text-rose-700 dark:text-rose-300 mt-1 text-sm">
+                        {formatVnd(stats.totalExpense)}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
+                      <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                        <PieChart className="w-3 h-3 text-sky-600" />
+                        <span>Số dư quỹ thực tế</span>
+                      </div>
+                      <div className={`font-mono font-extrabold mt-1 text-sm ${stats.balance >= 0 ? 'text-sky-700 dark:text-sky-300' : 'text-rose-600'}`}>
+                        {formatVnd(stats.balance)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Line */}
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between font-semibold text-slate-600 dark:text-slate-400">
+                      <span>Mục tiêu: {formatVnd(fund.targetAmountVnd)}</span>
+                      <span>{stats.progressPercent}% mục tiêu</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-600 transition-all duration-300"
+                        style={{ width: `${stats.progressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Recent Expenses List */}
+                  {fund.expenses && fund.expenses.length > 0 && (
+                    <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70 space-y-1.5 text-[11px]">
+                      <div className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                        <span>Nhật ký dòng tiền ra gần nhất ({fund.expenses.length})</span>
+                      </div>
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {fund.expenses.map(exp => (
+                          <div key={exp.id} className="p-2 rounded-lg bg-white dark:bg-slate-900/60 flex items-center justify-between gap-2">
+                            <div>
+                              <div className="font-semibold text-slate-800 dark:text-slate-200">{exp.purpose}</div>
+                              <div className="text-[10px] text-slate-400">{exp.expenseDate} {exp.notes ? `· ${exp.notes}` : ''}</div>
+                            </div>
+                            <div className="font-mono font-bold text-rose-600 shrink-0">
+                              -{formatVnd(exp.amountVnd)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1036,6 +1422,18 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
               <option value="duplicate_ignored">Trùng lặp</option>
               <option value="ignored_out">Tiền ra</option>
             </select>
+            {webhooks.length > 0 && (
+              <button
+                type="button"
+                disabled={clearingWebhooks}
+                onClick={() => setConfirmDeleteTarget({ type: 'clear_webhooks', count: webhooks.length })}
+                className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-800/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 shrink-0"
+                title="Xóa toàn bộ nhật ký SePay Webhook"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa tất cả</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1083,33 +1481,44 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
                     Nội dung: {log.content || '—'} {log.referenceCode ? `· Ref: ${log.referenceCode}` : ''}
                   </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <span
-                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      log.matchStatus === 'matched_paid'
-                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <div className="text-right">
+                    <span
+                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        log.matchStatus === 'matched_paid'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                          : log.matchStatus === 'underpaid'
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                          : log.matchStatus === 'unmatched'
+                          ? 'bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300'
+                          : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      {log.matchStatus === 'matched_paid'
+                        ? 'Khớp đơn · Đã thanh toán'
                         : log.matchStatus === 'underpaid'
-                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                        ? 'Chuyển thiếu tiền'
                         : log.matchStatus === 'unmatched'
-                        ? 'bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300'
-                        : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                    }`}
-                  >
-                    {log.matchStatus === 'matched_paid'
-                      ? 'Khớp đơn · Đã thanh toán'
-                      : log.matchStatus === 'underpaid'
-                      ? 'Chuyển thiếu tiền'
-                      : log.matchStatus === 'unmatched'
-                      ? 'Chưa khớp đơn (Test/Khác)'
-                      : log.matchStatus === 'duplicate_ignored'
-                      ? 'Trùng lặp (Đã bỏ qua)'
-                      : log.matchStatus === 'ignored_out'
-                      ? 'Tiền ra (Bỏ qua)'
-                      : log.matchStatus}
-                  </span>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    {new Date(log.receivedAt).toLocaleString('vi-VN')} · {log.authMethod}
+                        ? 'Chưa khớp đơn (Test/Khác)'
+                        : log.matchStatus === 'duplicate_ignored'
+                        ? 'Trùng lặp (Đã bỏ qua)'
+                        : log.matchStatus === 'ignored_out'
+                        ? 'Tiền ra (Bỏ qua)'
+                        : log.matchStatus}
+                    </span>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      {new Date(log.receivedAt).toLocaleString('vi-VN')} · {log.authMethod}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    disabled={deletingWebhookId === log.id}
+                    onClick={() => setConfirmDeleteTarget({ type: 'webhook', log })}
+                    className="p-2 rounded-lg border border-rose-200 dark:border-rose-800/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer disabled:opacity-60"
+                    title="Xóa bản ghi nhật ký này"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -1274,91 +1683,6 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
         </div>
       )}
 
-      {/* Edit Order Amount Modal */}
-      {editingOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-lg md:max-w-xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Cấu Hình Số Tiền Đơn Hàng {editingOrder.orderCode}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEditingOrder(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveOrderEdit} className="space-y-3.5 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Số tiền thanh toán (VND) *
-                  </label>
-                  <input
-                    type="number"
-                    min={1000}
-                    step={1000}
-                    required
-                    value={editAmountVnd}
-                    onChange={e => setEditAmountVnd(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50/40 dark:bg-emerald-950/30 font-mono font-bold text-emerald-700 dark:text-emerald-300"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Trạng thái đơn hàng
-                  </label>
-                  <select
-                    value={editStatus}
-                    onChange={e => setEditStatus(e.target.value as SepayOrderStatus)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold"
-                  >
-                    <option value="pending">Chờ thanh toán (pending)</option>
-                    <option value="paid">Đã thanh toán &amp; Kích hoạt Verify (paid)</option>
-                    <option value="underpaid">Chuyển thiếu tiền (underpaid)</option>
-                    <option value="cancelled">Đã hủy (cancelled)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Ghi chú điều chỉnh giá / thanh toán
-                </label>
-                <input
-                  type="text"
-                  value={editAdminNote}
-                  onChange={e => setEditAdminNote(e.target.value)}
-                  placeholder="Lý do điều chỉnh số tiền đơn hàng..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setEditingOrder(null)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer"
-                >
-                  Đóng
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingOrderEdit}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{savingOrderEdit ? 'Đang lưu...' : 'Lưu số tiền & trạng thái'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* QR Preview Modal */}
       {previewQrOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
@@ -1407,6 +1731,82 @@ export const SepayPaymentManager: React.FC<SepayPaymentManagerProps> = ({ users 
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-md p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                <span>
+                  {confirmDeleteTarget.type === 'order'
+                    ? `Xóa đơn hàng ${confirmDeleteTarget.order.orderCode}?`
+                    : confirmDeleteTarget.type === 'webhook'
+                    ? 'Xóa bản ghi nhật ký SePay Webhook?'
+                    : `Xóa toàn bộ ${confirmDeleteTarget.count} nhật ký SePay Webhook?`}
+                </span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteTarget(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {confirmDeleteTarget.type === 'order' && (
+              <div className="space-y-2 text-slate-600 dark:text-slate-300">
+                <p>
+                  Bạn có chắc muốn xóa đơn hàng{' '}
+                  <strong className="font-mono text-slate-900 dark:text-white">
+                    {confirmDeleteTarget.order.orderCode}
+                  </strong>{' '}
+                  ({confirmDeleteTarget.order.userName} ·{' '}
+                  <strong className="text-emerald-600">{formatVnd(confirmDeleteTarget.order.amountVnd)}</strong>)?
+                </p>
+                {confirmDeleteTarget.order.status === 'paid' && (
+                  <p className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                    Lưu ý: Đơn này đã thanh toán. Việc xóa đơn hàng chỉ xóa lịch sử đơn và không tự động thu hồi trạng thái Verify đã cấp trước đó.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {confirmDeleteTarget.type === 'webhook' && (
+              <p className="text-slate-600 dark:text-slate-300">
+                Xóa bản ghi giao dịch{' '}
+                <strong className="font-mono">#{confirmDeleteTarget.log.sepayTransactionId || 'N/A'}</strong> (+
+                {formatVnd(confirmDeleteTarget.log.transferAmount)}) khỏi nhật ký webhook? Thao tác này không thể hoàn tác.
+              </p>
+            )}
+
+            {confirmDeleteTarget.type === 'clear_webhooks' && (
+              <p className="text-slate-600 dark:text-slate-300">
+                Toàn bộ <strong>{confirmDeleteTarget.count}</strong> bản ghi trong Nhật Ký SePay Webhook Gần Nhất sẽ bị xóa vĩnh viễn.
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteTarget(null)}
+                className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingOrderCode || deletingWebhookId || clearingWebhooks)}
+                onClick={() => void handleConfirmDelete()}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer disabled:opacity-60"
+              >
+                {deletingOrderCode || deletingWebhookId || clearingWebhooks ? 'Đang xóa...' : 'Xác nhận xóa'}
+              </button>
             </div>
           </div>
         </div>
