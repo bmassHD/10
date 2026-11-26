@@ -31,10 +31,12 @@ import { BusinessTripView } from './components/views/BusinessTripView';
 import { BhxhLookupView } from './components/views/BhxhLookupView';
 import { AppsLauncherView } from './components/views/AppsLauncherView';
 import { OfflineEmergencyView } from './components/views/OfflineEmergencyView';
+import { VipPremiumView } from './components/views/VipPremiumView';
 import { NotFoundView } from './components/views/NotFoundView';
 import { ShieldAlert, LogIn, Wrench, EyeOff, Phone, ArrowLeft, Building2, MapPin, UserCheck, FolderGit2, RefreshCw, Ban, MonitorSmartphone, Clock, LogOut, Lock } from 'lucide-react';
 import { evaluateAccessRestriction, detectClientEnvironment } from './utils/deviceAccessDetector';
 import { getBannedUntilMs, formatBanTimestampVi, formatBanRemainingVi } from './utils/userBan';
+import { GitHubService } from './services/githubService';
 
 import { AdminSetupWizard } from './components/modals/AdminSetupWizard';
 import { FeedbackModal } from './components/portal/FeedbackModal';
@@ -107,6 +109,7 @@ const VIEW_TO_HASH: Record<string, string> = {
   telehealth: 'bac-si-cho-moi-nha',
   feedback_tracking: 'phan-anh',
   admin: 'quan-tri',
+  vip_premium: 'xac-minh-tai-khoan',
   account: 'tai-khoan',
   account_devices: 'tai-khoan/thiet-bi',
   offline_emergency: 'ngoai-tuyen',
@@ -124,6 +127,11 @@ const HASH_TO_VIEW: Record<string, string> = {
   'khoa-phong': 'personnel_directory',
   'tra-cuu-bhyt': 'bhyt_lookup',
   bhyt: 'bhyt_lookup',
+  'goi-vip': 'vip_premium',
+  verify: 'vip_premium',
+  'xac-minh': 'vip_premium',
+  vip: 'vip_premium',
+  sepay: 'vip_premium',
   'gop-y-tra-cuu': 'feedback_tracking',
   'tra-cuu': 'feedback_tracking',
   'gop-y': 'feedback_tracking',
@@ -493,7 +501,11 @@ function MainApp() {
       'Cổng thông tin điện tử chính thức Trạm Y tế: tra cứu lịch trực 24/7, bản đồ mạng lưới y tế, lịch tiêm chủng, văn bản chỉ đạo và phản ánh trực tuyến.';
     const origin = window.location.origin;
     const pageUrl = `${origin}${window.location.pathname}`;
-    const seoImageUrl = `${origin}/seoapp.jpg`;
+    const rawCover = settings.coverImageUrl?.trim() || '';
+    const seoImageUrl =
+      rawCover && /^https?:\/\//i.test(rawCover)
+        ? GitHubService.toRawGitHubUrl(rawCover)
+        : `${origin}/seoapp.jpg`;
 
     document.title = title;
     const setMeta = (selector: string, content: string) => {
@@ -524,7 +536,7 @@ function MainApp() {
     setMeta('meta[name="twitter:image:alt"]', title);
     setHref('link[rel="canonical"]', pageUrl);
     setHref('link[rel="image_src"]', seoImageUrl);
-  }, [settingsLoaded, settings.stationName, settings.subTitle]);
+  }, [settingsLoaded, settings.stationName, settings.subTitle, settings.coverImageUrl]);
 
   // Minute ticker for 03:00 AM daily GitHub auto-backup & overdue reminder check
   useEffect(() => {
@@ -1935,6 +1947,13 @@ function MainApp() {
                 initialSubTab={adminRequestedSubTab}
               />
             )
+          )}
+
+          {currentView === 'vip_premium' && (
+            <VipPremiumView
+              settings={settings}
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
+            />
           )}
 
           {currentView === 'account' && (

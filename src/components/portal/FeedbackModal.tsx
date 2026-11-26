@@ -247,7 +247,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ isOpen, onClose, s
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
-      <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+      <div className="relative w-full max-w-lg md:max-w-2xl lg:max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-teal-700 to-emerald-700 px-6 py-4 text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -362,7 +362,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ isOpen, onClose, s
 
               {/* Citizen info if not anonymous */}
               {!isAnonymous && (
-                <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Họ và tên của quý vị <span className="text-rose-500">*</span>
@@ -379,40 +379,38 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ isOpen, onClose, s
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Số điện thoại liên hệ
-                      </label>
-                      <div className="relative">
-                        <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                        <input
-                          type="tel"
-                          inputMode="numeric"
-                          maxLength={10}
-                          placeholder="Số điện thoại (10 số)"
-                          value={phone}
-                          onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                          className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500 font-mono"
-                        />
-                      </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Số điện thoại liên hệ
+                    </label>
+                    <div className="relative">
+                      <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={10}
+                        placeholder="Số điện thoại (10 số)"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500 font-mono"
+                      />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Địa chỉ Email nhận phản hồi
-                      </label>
-                      <div className="relative">
-                        <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                        <input
-                          type="text"
-                          inputMode="email"
-                          placeholder="Tên Gmail hoặc email@gmail.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          onBlur={() => setEmail((v) => autoCompleteGmail(v))}
-                          className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
-                        />
-                      </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Địa chỉ Email nhận phản hồi
+                    </label>
+                    <div className="relative">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        inputMode="email"
+                        placeholder="Tên Gmail hoặc email@gmail.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        onBlur={() => setEmail((v) => autoCompleteGmail(v))}
+                        className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
+                      />
                     </div>
                   </div>
                 </div>

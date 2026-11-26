@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "bankCode": "MBBank",
+  "bankName": "MB Bank (Ngân hàng Quân Đội)",
+  "accountNumber": "00010302003",
+  "accountHolder": "SON LY HONG DUC",
+  "subAccount": "",
+  "orderPrefix": "TYT",
+  "orderSuffixMinLength": 2,
+  "orderSuffixMaxLength": 8,
+  "orderSuffixType": "integer",
+  "webhookUrl": "https://tyt.slhd.id.vn/hooks/sepay-payment",
+  "qrTemplate": "compact2",
+  "packages": [
+    {
+      "id": "account_verify",
+      "name": "Xác Minh Tài Khoản Chính Thức (Verified)",
+      "subtitle": "Cấp trạng thái Tick Xanh Verified chính thức cho tài khoản Cá nhân hoặc Doanh nghiệp / Tổ chức",
+      "priceVnd": 50000,
+      "durationDays": 365,
+      "badgeText": "Tick Xanh Verified",
+      "isPopular": true,
+      "isActive": true,
+      "features": [
+        "Hiển thị huy hiệu Tick Xanh (Verified) cạnh tên tài khoản trên toàn hệ thống",
+        "Xác thực độ tin cậy hồ sơ công dân, doanh nghiệp và đơn vị liên kết",
+        "Kích hoạt tự động tức thì ngay sau khi SePay ghi nhận chuyển khoản thành công",
+        "Lưu trữ mã đơn hàng đối soát thanh toán SePay minh bạch"
+      ]
+    }
+  ],
+  "authType": "api_key",
+  "apiKey": "iaiQa9fwpK@V6Kk",
+  "hmacSecret": "",
+  "updatedAt": "2026-11-26T16:08:14.333Z"
+}

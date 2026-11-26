@@ -62,7 +62,7 @@ export const NewsView: React.FC<NewsViewProps> = ({
   const { showToast, showConfirm } = useToast();
 
   // Active News Stream Tab: 'station' (Trạm đăng) | 'api' (Bảng tin RSS Y tế)
-  const [activeTab, setActiveTab] = useState<'station' | 'api'>(initialTab || 'api');
+  const [activeTab, setActiveTab] = useState<'station' | 'api'>(initialTab || 'station');
 
   useEffect(() => {
     if (initialTab === 'station' || initialTab === 'api') {
@@ -485,18 +485,6 @@ export const NewsView: React.FC<NewsViewProps> = ({
           <div className="grid grid-cols-2 sm:flex items-center p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl text-xs font-semibold">
             <button
               type="button"
-              onClick={() => setActiveTab('api')}
-              className={`px-3.5 py-2 rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-                activeTab === 'api'
-                  ? 'bg-emerald-700 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              <Globe className="w-4 h-4 shrink-0" />
-              <span>Báo Y tế ({rssNews.length})</span>
-            </button>
-            <button
-              type="button"
               onClick={() => setActiveTab('station')}
               className={`px-3.5 py-2 rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                 activeTab === 'station'
@@ -506,6 +494,18 @@ export const NewsView: React.FC<NewsViewProps> = ({
             >
               <Building2 className="w-4 h-4 shrink-0" />
               <span>Tin Trạm ({posts.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('api')}
+              className={`px-3.5 py-2 rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'api'
+                  ? 'bg-emerald-700 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <Globe className="w-4 h-4 shrink-0" />
+              <span>Báo Y tế ({rssNews.length})</span>
             </button>
           </div>
 

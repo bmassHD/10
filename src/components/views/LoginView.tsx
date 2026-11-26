@@ -3,6 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
+import { ImageCropModal, ImageCropResult } from '../common/ImageCropModal';
 import { AuthProviderId, SystemSettings, UserProfile } from '../../types';
 import {
   ShieldCheck,
@@ -24,6 +25,7 @@ import {
   Send,
   Ticket,
   Wrench,
+  Building2,
 } from 'lucide-react';
 import {
   getPendingReferralCode,
@@ -80,34 +82,15 @@ function loadRememberedCredentials(): RememberedCredentials {
   }
 }
 
-async function compressImageToAvatarDataUrl(file: File): Promise<string> {
+function readImageFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Vui lòng chọn tệp hình ảnh hợp lệ (JPG, PNG, WebP...).'));
+      return;
+    }
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Không thể đọc tệp ảnh'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Định dạng ảnh không hợp lệ'));
-      img.onload = () => {
-        const size = 220;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Trình duyệt không hỗ trợ xử lý ảnh'));
-          return;
-        }
-        // Center-crop square
-        const minSide = Math.min(img.width, img.height);
-        const sx = (img.width - minSide) / 2;
-        const sy = (img.height - minSide) / 2;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, size, size);
-        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = String(reader.result);
-    };
+    reader.onerror = () => reject(new Error('Không thể đọc tệp ảnh từ thiết bị.'));
+    reader.onload = () => resolve(String(reader.result || ''));
     reader.readAsDataURL(file);
   });
 }
@@ -138,6 +121,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
   const [regName, setRegName] = useState('');
   const [regPhone, setRegPhone] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [accountKind, setAccountKind] = useState<'personal' | 'organization'>('personal');
+  const [orgName, setOrgName] = useState('');
+  const [orgType, setOrgType] = useState<'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other'>('enterprise');
+  const [orgTaxCode, setOrgTaxCode] = useState('');
+  const [orgAddress, setOrgAddress] = useState('');
+  const [orgPhone, setOrgPhone] = useState('');
   const [referralCode, setReferralCode] = useState(initialRefCode);
   const [rememberMe, setRememberMe] = useState(savedCreds.remember);
   const [showPassword, setShowPassword] = useState(false);
@@ -164,6 +153,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
   const [resetCheckName, setResetCheckName] = useState('');
 
   const [savingAvatar, setSavingAvatar] = useState(false);
+  const [avatarCropSrc, setAvatarCropSrc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Profile completion state for authenticated users
@@ -244,7 +234,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName.trim()) {
+    const isOrg = accountKind === 'organization';
+    if (isOrg) {
+      if (!orgName.trim()) {
+        showToast('warning', 'Thiếu tên Doanh nghiệp / Tổ chức');
+        return;
+      }
+    } else if (!regName.trim()) {
       showToast('warning', 'Thiếu họ và tên');
       return;
     }
@@ -254,7 +250,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
       showToast('warning', 'Email không hợp lệ', 'Vui lòng nhập Gmail hoặc địa chỉ email hợp lệ.');
       return;
     }
-    const trimmedPhone = regPhone.trim();
+    const trimmedPhone = (isOrg ? orgPhone : regPhone).trim();
     if (trimmedPhone && !normalizeAndValidatePhone(trimmedPhone)) {
       showToast('warning', 'Số điện thoại không hợp lệ', 'Số điện thoại bắt buộc phải gồm đúng 10 chữ số (VD: 0912345678).');
       return;
@@ -272,14 +268,26 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
       await registerWithEmail(
         cleanEmail,
         password,
-        regName.trim(),
+        isOrg ? orgName.trim() : regName.trim(),
         trimmedPhone || undefined,
-        referralCode.trim() || undefined
+        referralCode.trim() || undefined,
+        isOrg
+          ? {
+              isOrganization: true,
+              organizationName: orgName.trim(),
+              organizationType: orgType,
+              taxCode: orgTaxCode.trim() || undefined,
+              organizationAddress: orgAddress.trim() || undefined,
+              organizationPhone: trimmedPhone || undefined,
+            }
+          : undefined
       );
       showToast(
         'success',
-        'Đăng ký thành công!',
-        'Tiếp tục xác minh Gmail và xác nhận Số điện thoại trong mục Tài khoản.'
+        isOrg ? 'Đăng ký Doanh nghiệp thành công!' : 'Đăng ký thành công!',
+        isOrg
+          ? 'Tài khoản Doanh nghiệp / Tổ chức đã được liên kết và kích hoạt.'
+          : 'Tiếp tục xác minh Gmail và xác nhận Số điện thoại trong mục Tài khoản.'
       );
       if (onSuccessNavigate) {
         onSuccessNavigate('account');
@@ -444,17 +452,27 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setSavingAvatar(true);
     try {
-      const dataUrl = await compressImageToAvatarDataUrl(file);
-      setProfileForm(prev => ({ ...prev, avatarUrl: dataUrl }));
-      await updateProfileData({ avatarUrl: dataUrl });
-      showToast('success', 'Đã cập nhật ảnh đại diện', 'Ảnh đại diện mới đã được lưu vào hồ sơ.');
+      const rawDataUrl = await readImageFileAsDataUrl(file);
+      setAvatarCropSrc(rawDataUrl);
     } catch (err: any) {
       showToast('error', 'Lỗi xử lý ảnh', err?.message);
     } finally {
-      setSavingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmAvatarCrop = async (result: ImageCropResult) => {
+    setSavingAvatar(true);
+    try {
+      setProfileForm(prev => ({ ...prev, avatarUrl: result.dataUrl }));
+      await updateProfileData({ avatarUrl: result.dataUrl });
+      setAvatarCropSrc(null);
+      showToast('success', 'Đã cập nhật ảnh đại diện', 'Ảnh đại diện mới đã được cắt và lưu vào hồ sơ.');
+    } catch (err: any) {
+      showToast('error', 'Lỗi lưu ảnh đại diện', err?.message);
+    } finally {
+      setSavingAvatar(false);
     }
   };
 
@@ -961,20 +979,35 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
             </div>
           </form>
         </div>
+
+        <ImageCropModal
+          isOpen={Boolean(avatarCropSrc)}
+          imageSrc={avatarCropSrc}
+          mode="avatar"
+          isSubmitting={savingAvatar}
+          onCancel={() => {
+            if (!savingAvatar) setAvatarCropSrc(null);
+          }}
+          onConfirm={handleConfirmAvatarCrop}
+        />
       </div>
     );
   }
 
   // Not logged in: Show Login card (with Remember Me & Forgot Password)
   return (
-    <div className="max-w-md mx-auto py-12 px-4 animate-in fade-in duration-200">
-      <div className="text-center mb-8">
+    <div
+      className={`mx-auto py-10 px-4 animate-in fade-in duration-200 ${
+        authMode === 'register' && !forgotMode ? 'max-w-md md:max-w-2xl' : 'max-w-md md:max-w-lg'
+      }`}
+    >
+      <div className="text-center mb-7">
         <StationLogo size={68} className="mx-auto mb-3" />
         <h1 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
           Cổng Xác Thực & Đăng Nhập
         </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs mx-auto">
-          Đăng nhập dành cho Cán bộ Y tế & Quản trị viên hệ thống Trạm Y tế
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+          Đăng nhập dành cho Người dùng, Doanh nghiệp / Tổ chức &amp; Quản trị viên hệ thống Trạm Y tế
         </p>
       </div>
 
@@ -1211,91 +1244,186 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
               </form>
             ) : (
               <form onSubmit={handleRegisterSubmit} className="space-y-3 text-xs">
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    required
-                    value={regName}
-                    onChange={e => setRegName(e.target.value)}
-                    placeholder="Họ và tên *"
-                    className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    inputMode="email"
-                    required
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    onBlur={() => setEmail(v => autoCompleteGmail(v))}
-                    placeholder="Gmail (tự thêm @gmail.com khi nhập tên) *"
-                    className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="relative">
-                  <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="tel"
-                    inputMode="numeric"
-                    maxLength={10}
-                    value={regPhone}
-                    onChange={e => setRegPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    placeholder="Số điện thoại 10 số (tuỳ chọn)"
-                    className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="relative">
-                  <Ticket className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    value={referralCode}
-                    onChange={e => {
-                      const val = e.target.value.toUpperCase();
-                      setReferralCode(val);
-                      setPendingReferralCode(val);
-                    }}
-                    placeholder="Mã giới thiệu Cán bộ Y tế (tuỳ chọn)"
-                    className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono uppercase focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Mật khẩu (>= 6 ký tự) *"
-                    className="w-full min-h-[44px] pl-9 pr-9 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+                {/* Account Kind Selector: Personal vs Organization */}
+                <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
                   <button
                     type="button"
-                    onClick={() => setShowPassword(v => !v)}
-                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    onClick={() => setAccountKind('personal')}
+                    className={`min-h-[38px] rounded-xl font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                      accountKind === 'personal'
+                        ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    <User className="w-3.5 h-3.5" />
+                    <span>Cá nhân (User)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccountKind('organization')}
+                    className={`min-h-[38px] rounded-xl font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                      accountKind === 'organization'
+                        ? 'bg-white dark:bg-slate-900 text-sky-700 dark:text-sky-300 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>Doanh nghiệp / Tổ chức</span>
                   </button>
                 </div>
 
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={regConfirmPassword}
-                    onChange={e => setRegConfirmPassword(e.target.value)}
-                    placeholder="Nhập lại mật khẩu *"
-                    className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+                {accountKind === 'organization' ? (
+                  <div className="space-y-2.5 p-3 rounded-2xl bg-sky-50/70 dark:bg-sky-950/25 border border-sky-200 dark:border-sky-800/70">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      <div className="relative">
+                        <Building2 className="w-4 h-4 text-sky-600 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          required
+                          value={orgName}
+                          onChange={e => setOrgName(e.target.value)}
+                          placeholder="Tên Doanh nghiệp / Tổ chức *"
+                          className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-sky-200 dark:border-sky-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        />
+                      </div>
+                      <select
+                        value={orgType}
+                        onChange={e => setOrgType(e.target.value as any)}
+                        className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-sky-200 dark:border-sky-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="enterprise">Doanh nghiệp / Công ty</option>
+                        <option value="clinic">Phòng khám / Cơ sở y tế</option>
+                        <option value="pharmacy">Nhà thuốc</option>
+                        <option value="school">Trường học</option>
+                        <option value="agency">Cơ quan / Đơn vị hành chính</option>
+                        <option value="other">Tổ chức khác</option>
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      <input
+                        type="text"
+                        value={orgTaxCode}
+                        onChange={e => setOrgTaxCode(e.target.value)}
+                        placeholder="Mã số thuế (tuỳ chọn)"
+                        className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-sky-200 dark:border-sky-800 bg-white dark:bg-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                      <div className="relative">
+                        <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          maxLength={10}
+                          value={orgPhone}
+                          onChange={e => setOrgPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                          placeholder="SĐT Doanh nghiệp (10 số)"
+                          className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-sky-200 dark:border-sky-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <MapPin className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        value={orgAddress}
+                        onChange={e => setOrgAddress(e.target.value)}
+                        placeholder="Địa chỉ trụ sở (tuỳ chọn)"
+                        className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-sky-200 dark:border-sky-800 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        required
+                        value={regName}
+                        onChange={e => setRegName(e.target.value)}
+                        placeholder="Họ và tên *"
+                        className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    <div className="relative">
+                      <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={10}
+                        value={regPhone}
+                        onChange={e => setRegPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        placeholder="Số điện thoại 10 số (tuỳ chọn)"
+                        className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      inputMode="email"
+                      required
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      onBlur={() => setEmail(v => autoCompleteGmail(v))}
+                      placeholder="Gmail (tự thêm @gmail.com khi nhập tên) *"
+                      className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  <div className="relative">
+                    <Ticket className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      value={referralCode}
+                      onChange={e => {
+                        const val = e.target.value.toUpperCase();
+                        setReferralCode(val);
+                        setPendingReferralCode(val);
+                      }}
+                      placeholder="Mã giới thiệu (nếu có)"
+                      className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono uppercase focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="Mật khẩu (>= 6 ký tự) *"
+                      className="w-full min-h-[44px] pl-9 pr-9 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(v => !v)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={regConfirmPassword}
+                      onChange={e => setRegConfirmPassword(e.target.value)}
+                      placeholder="Nhập lại mật khẩu *"
+                      className="w-full min-h-[44px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
                 </div>
 
                 <button
@@ -1303,7 +1431,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccessNavigate, setting
                   disabled={submitting}
                   className="w-full min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md transition cursor-pointer"
                 >
-                  {submitting ? 'Đang tạo tài khoản...' : 'Đăng ký & Xác minh'}
+                  {submitting
+                    ? 'Đang tạo tài khoản...'
+                    : accountKind === 'organization'
+                    ? 'Đăng ký Doanh nghiệp / Tổ chức'
+                    : 'Đăng ký & Xác minh'}
                 </button>
               </form>
             )}

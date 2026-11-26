@@ -481,21 +481,7 @@ export const HomeNewsCarousel: React.FC<HomeNewsCarouselProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Row 1: External API / Báo Y Tế */}
-      <CarouselRow
-        title="Tin Y Tế Trực Tuyến"
-        subtitle="Báo Sức Khỏe & Đời Sống"
-        icon={Globe}
-        slides={apiSlides}
-        loading={loadingRss}
-        emptyText="Đang đồng bộ tin tức từ Báo Sức Khỏe & Đời Sống."
-        autoScrollOffsetMs={0}
-        onOpenAll={() => onOpenAllNews('api')}
-        onSelectPost={onSelectPost}
-        allDisabled={allNewsDisabled}
-      />
-
-      {/* Row 2: Station Internal Posts */}
+      {/* Row 1: Station Internal Posts */}
       <CarouselRow
         title="Tin Hoạt Động Trạm Y Tế"
         subtitle="Bài viết, truyền thông giáo dục sức khỏe của Trạm"
@@ -503,8 +489,22 @@ export const HomeNewsCarousel: React.FC<HomeNewsCarouselProps> = ({
         slides={stationSlides}
         loading={loadingPosts}
         emptyText="Chưa có bài viết mới từ Trạm Y tế."
-        autoScrollOffsetMs={1800}
+        autoScrollOffsetMs={0}
         onOpenAll={() => onOpenAllNews('station')}
+        onSelectPost={onSelectPost}
+        allDisabled={allNewsDisabled}
+      />
+
+      {/* Row 2: External API / Báo Y Tế */}
+      <CarouselRow
+        title="Tin Y Tế Trực Tuyến"
+        subtitle="Báo Sức Khỏe & Đời Sống"
+        icon={Globe}
+        slides={apiSlides}
+        loading={loadingRss}
+        emptyText="Đang đồng bộ tin tức từ Báo Sức Khỏe & Đời Sống."
+        autoScrollOffsetMs={1800}
+        onOpenAll={() => onOpenAllNews('api')}
         onSelectPost={onSelectPost}
         allDisabled={allNewsDisabled}
       />

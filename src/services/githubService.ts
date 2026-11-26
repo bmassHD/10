@@ -104,12 +104,20 @@ export class GitHubService {
    * Convert any standard GitHub file URL (/blob/ or /raw/ or ?raw=true) into a direct raw.githubusercontent.com link
    */
   public static toRawGitHubUrl(inputUrl: string): string {
-    const trimmed = (inputUrl || '').trim();
+    let trimmed = (inputUrl || '')
+      .trim()
+      .replace(/^["'<]+|[">']+$/g, '')
+      .trim();
     if (!trimmed) return '';
 
-    // Base64 Data URL or Blob URL
-    if (/^(data:|blob:)/i.test(trimmed)) {
+    // Base64 Data URL, Blob URL, or local relative path
+    if (/^(data:|blob:|\/(?!\/))/i.test(trimmed)) {
       return trimmed;
+    }
+
+    // Protocol-relative URL -> HTTPS
+    if (trimmed.startsWith('//')) {
+      trimmed = `https:${trimmed}`;
     }
 
     // Already a raw.githubusercontent.com URL
@@ -126,7 +134,7 @@ export class GitHubService {
       return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
     }
 
-    // Match Google Drive share links -> direct lh3 image link
+    // Match Google Drive share/view/uc/thumbnail links -> direct lh3 image link
     const driveFileMatch = trimmed.match(
       /^https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i
     );
@@ -134,13 +142,23 @@ export class GitHubService {
       return `https://lh3.googleusercontent.com/d/${driveFileMatch[1]}`;
     }
     const driveQueryMatch = trimmed.match(
-      /^https?:\/\/drive\.google\.com\/(?:open|uc)\?(?:.*&)?id=([a-zA-Z0-9_-]+)/i
+      /^https?:\/\/(?:drive\.google\.com|drive\.usercontent\.google\.com)\/(?:open|uc|thumbnail|download)\?(?:.*&)?id=([a-zA-Z0-9_-]+)/i
     );
     if (driveQueryMatch) {
       return `https://lh3.googleusercontent.com/d/${driveQueryMatch[1]}`;
     }
 
     return trimmed;
+  }
+
+  /**
+   * Build same-origin /api/image-proxy URL for HTTP(S) images blocked by Referer/CORS/hotlink protection
+   */
+  public static toImageProxyUrl(inputUrl: string): string {
+    const normalized = this.toRawGitHubUrl(inputUrl);
+    if (!/^https?:\/\//i.test(normalized)) return normalized;
+    if (normalized.includes('/api/image-proxy?')) return normalized;
+    return `/api/image-proxy?url=${encodeURIComponent(normalized)}`;
   }
 
   private static getHeaders(token: string) {
@@ -502,9 +520,12 @@ export class GitHubService {
         .map(seg => encodeURIComponent(seg))
         .join('/');
       const fallbackRawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(finalBranch)}/${encodedTargetPath}`;
-      const rawUrl = resData.content?.download_url
+      const rawUrlCandidate = resData.content?.download_url
         ? this.toRawGitHubUrl(resData.content.download_url)
         : fallbackRawUrl;
+      const rawUrl = isPrivate
+        ? rawUrlCandidate
+        : rawUrlCandidate.split('?')[0] || fallbackRawUrl;
 
       const fileItem: UploadedFileItem = {
         id: targetPath,

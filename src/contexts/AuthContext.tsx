@@ -44,6 +44,7 @@ import {
   UserTotpSecurityDoc,
   UserVerifiedDevice,
   AuthProviderId,
+  VipStatusInfo,
 } from '../types';
 import { verifyTotpToken, normalizeRecoveryCode } from '../utils/totp';
 import { normalizeVietnamPhoneToE164, isValidE164Phone } from '../utils/smsMfaUtils';
@@ -84,6 +85,7 @@ import {
   markFirestoreWriteQuotaExceededIfMatch,
 } from '../utils/firestoreQuotaGuard';
 import { getBannedUntilMs, isUserActivelyBanned } from '../utils/userBan';
+import { fetchMyVipStatus } from '../services/sepayService';
 
 export const PRIMARY_ADMIN_EMAIL = 'sonlyhongduc@gmail.com';
 export const BOOTSTRAP_ADMIN_EMAILS = [
@@ -397,8 +399,8 @@ function buildInitialZaloOnlyUserProfile(
     ...(profile.avatarUrl || existing?.avatarUrl
       ? { avatarUrl: profile.avatarUrl || existing?.avatarUrl }
       : {}),
-    role: existing?.role || 'citizen',
-    accountType: existing?.accountType || 'citizen',
+    role: existing?.role || 'user',
+    accountType: existing?.accountType || 'user',
     status: existing?.status || 'active',
     hasPasswordLinked: false,
     googleLinked: false,
@@ -582,7 +584,15 @@ interface AuthContextType {
     pass: string,
     displayName: string,
     phone?: string,
-    referralCode?: string
+    referralCode?: string,
+    organizationData?: {
+      isOrganization?: boolean;
+      organizationName?: string;
+      organizationType?: 'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other';
+      taxCode?: string;
+      organizationAddress?: string;
+      organizationPhone?: string;
+    }
   ) => Promise<void>;
   logout: () => Promise<void>;
   switchPreviewRole: (role: RoleType, accountType: AccountType) => void;
@@ -1421,16 +1431,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
               }
 
-              let resolvedRole: RoleType = isTargetAdmin ? 'super_admin' : 'citizen';
-              let resolvedAccountType: AccountType = isTargetAdmin ? 'admin' : 'citizen';
+              let resolvedRole: RoleType = isTargetAdmin ? 'super_admin' : 'user';
+              let resolvedAccountType: AccountType = isTargetAdmin ? 'admin' : 'user';
               let usedReferralCode = '';
               if (!isTargetAdmin) {
                 const pendingRef = getPendingReferralCode();
                 if (pendingRef) {
                   const roleCheck = await validateReferralCode(pendingRef);
                   if (roleCheck.valid && roleCheck.item) {
-                    resolvedRole = roleCheck.item.targetRole || 'staff';
-                    resolvedAccountType = roleCheck.item.targetAccountType || 'employee';
+                    resolvedRole = roleCheck.item.targetRole || 'user';
+                    resolvedAccountType = roleCheck.item.targetAccountType || resolvedRole;
                     usedReferralCode = roleCheck.item.code;
                   }
                 }
@@ -2465,7 +2475,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     pass: string,
     displayName: string,
     phone?: string,
-    referralCode?: string
+    referralCode?: string,
+    organizationData?: {
+      isOrganization?: boolean;
+      organizationName?: string;
+      organizationType?: 'clinic' | 'pharmacy' | 'school' | 'enterprise' | 'agency' | 'other';
+      taxCode?: string;
+      organizationAddress?: string;
+      organizationPhone?: string;
+    }
   ) => {
     const cleanEmail = autoCompleteGmail(email);
     if (!isValidEmailAddress(cleanEmail)) {
@@ -2480,9 +2498,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const isTargetAdmin = isBootstrapAdminEmail(cleanEmail);
+    const isOrg = Boolean(organizationData?.isOrganization);
     const effectiveReferral = normalizeReferralCode(referralCode || getPendingReferralCode());
-    let validatedRefRole: RoleType = 'citizen';
-    let validatedAccountType: AccountType = 'citizen';
+    let validatedRefRole: RoleType = isOrg ? 'organization' : 'user';
+    let validatedAccountType: AccountType = isOrg ? 'organization' : 'user';
     let usedReferralCode = '';
 
     if (!isTargetAdmin && effectiveReferral) {
@@ -2490,8 +2509,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!roleCheck.valid || !roleCheck.item) {
         throw new Error(roleCheck.error || 'Mã giới thiệu không hợp lệ, không tồn tại hoặc đã ngừng hoạt động.');
       }
-      validatedRefRole = roleCheck.item.targetRole || 'staff';
-      validatedAccountType = roleCheck.item.targetAccountType || 'employee';
+      validatedRefRole = roleCheck.item.targetRole || (isOrg ? 'organization' : 'user');
+      validatedAccountType = roleCheck.item.targetAccountType || validatedRefRole;
       usedReferralCode = roleCheck.item.code;
     }
 
@@ -2555,14 +2574,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       phoneLocked = lockRes.ok;
     }
 
+    const effectiveRole: RoleType = isTargetAdmin ? 'super_admin' : validatedRefRole;
+    const effectiveAccountType: AccountType = isTargetAdmin ? 'admin' : validatedAccountType;
+
     const profile: UserProfile = {
       uid: res.user.uid,
       email: cleanEmail,
-      displayName: cleanName || cleanEmail.split('@')[0],
+      displayName: isOrg
+        ? organizationData?.organizationName?.trim() || cleanName || 'Doanh nghiệp / Tổ chức'
+        : cleanName || cleanEmail.split('@')[0],
       phoneNumber: phoneLocked ? normalizedPhone : '',
-      role: isTargetAdmin ? 'super_admin' : validatedRefRole,
-      accountType: isTargetAdmin ? 'admin' : validatedAccountType,
+      role: effectiveRole,
+      accountType: effectiveAccountType,
       ...(usedReferralCode ? { referralCodeUsed: usedReferralCode } : {}),
+      ...(isOrg || effectiveRole === 'organization'
+        ? {
+            organizationName: organizationData?.organizationName?.trim() || cleanName || 'Doanh nghiệp / Tổ chức',
+            organizationType: organizationData?.organizationType || 'enterprise',
+            taxCode: organizationData?.taxCode?.trim() || undefined,
+            organizationAddress: organizationData?.organizationAddress?.trim() || undefined,
+            organizationPhone: organizationData?.organizationPhone?.trim() || normalizedPhone || undefined,
+            organizationEmail: cleanEmail,
+          }
+        : {}),
       status: 'active',
       hasPasswordLinked: true,
       emailVerified: Boolean(res.user.emailVerified),
@@ -4052,11 +4086,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setRemoteRevokedNotice(false);
   }, []);
 
+  const [sepayVerifiedInfo, setSepayVerifiedInfo] = useState<VipStatusInfo | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!currentUser?.uid) {
+      setSepayVerifiedInfo(null);
+      return;
+    }
+    fetchMyVipStatus()
+      .then((info) => {
+        if (active) setSepayVerifiedInfo(info);
+      })
+      .catch(() => {
+        // non-blocking
+      });
+
+    const handleVerifiedUpdate = (ev: Event) => {
+      const detail = (ev as CustomEvent<VipStatusInfo>)?.detail;
+      if (detail) {
+        setSepayVerifiedInfo(detail);
+      } else {
+        fetchMyVipStatus()
+          .then((info) => {
+            if (active) setSepayVerifiedInfo(info);
+          })
+          .catch(() => {});
+      }
+    };
+    window.addEventListener('tyt-sepay-verified-updated', handleVerifiedUpdate);
+    return () => {
+      active = false;
+      window.removeEventListener('tyt-sepay-verified-updated', handleVerifiedUpdate);
+    };
+  }, [currentUser?.uid]);
+
+  const effectiveUserProfile = useMemo<UserProfile | null>(() => {
+    if (!userProfile) return null;
+    if (!sepayVerifiedInfo || !sepayVerifiedInfo.isVip) return userProfile;
+    return {
+      ...userProfile,
+      isVip: true,
+      vipTier: sepayVerifiedInfo.vipTier || userProfile.vipTier,
+      vipPackageName: sepayVerifiedInfo.vipPackageName || userProfile.vipPackageName,
+      vipActivatedAt: sepayVerifiedInfo.vipActivatedAt || userProfile.vipActivatedAt,
+      vipExpiresAt: sepayVerifiedInfo.vipExpiresAt || userProfile.vipExpiresAt,
+      vipOrderCode: sepayVerifiedInfo.vipOrderCode || userProfile.vipOrderCode,
+    };
+  }, [userProfile, sepayVerifiedInfo]);
+
   return (
     <AuthContext.Provider
       value={{
         currentUser,
-        userProfile,
+        userProfile: effectiveUserProfile,
         loading,
         activeRole,
         activeAccountType,

@@ -44,6 +44,7 @@ import {
   QrCode,
   FolderOpen,
   Trash2,
+  BadgeCheck,
 } from 'lucide-react';
 import { useAuth, PRIMARY_ADMIN_EMAIL } from '../../contexts/AuthContext';
 import { SystemSettings, RoleType, AccountType, VaccinationScheduleItem, HolidayScheduleItem, WorkSchedule } from '../../types';
@@ -139,12 +140,14 @@ const PUBLIC_VIEW_KEYWORDS: Record<string, string[]> = {
   news: ['tin tức', 'media', 'truyền thông', 'bài viết', 'thông báo'],
   documents: ['văn bản', 'biểu mẫu', 'tài liệu', 'tải về', 'quyết định'],
   admin: ['quản trị', 'admin', 'cấu hình', 'bảng điều khiển'],
+  vip_premium: ['verify', 'xác minh', 'tick xanh', 'verified', 'sepay', 'thanh toán', 'vietqr'],
   account: ['tài khoản', 'đăng nhập', 'thiết bị', 'hồ sơ', 'mật khẩu', '2fa'],
 };
 
 interface AppShellProps {
   currentView: string;
-  setCurrentView: (view: string) => void;
+  routeQuery?: string;
+  setCurrentView: (view: string, extraQuery?: string) => void;
   settings: SystemSettings;
   settingsLoaded?: boolean;
   hasTodayEvent?: boolean;
@@ -157,6 +160,7 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({
   currentView,
+  routeQuery = '',
   setCurrentView,
   settings,
   settingsLoaded = true,
@@ -684,6 +688,8 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   interface NavItem {
     id: string;
+    itemKey?: string;
+    extraQuery?: string;
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: string;
@@ -825,6 +831,12 @@ export const AppShell: React.FC<AppShellProps> = ({
     });
   }
   systemItems.push({
+    id: 'vip_premium',
+    label: 'Xác minh Tài khoản',
+    icon: BadgeCheck,
+    badge: userProfile?.isVip ? 'Verified' : 'SePay',
+  });
+  systemItems.push({
     id: 'account',
     label: currentUser ? 'Tài khoản' : 'Đăng nhập',
     icon: User,
@@ -947,7 +959,8 @@ export const AppShell: React.FC<AppShellProps> = ({
     groupId: string,
     kind: 'item' | 'category' | 'app',
     label: string,
-    subLabel?: string
+    subLabel?: string,
+    extraQuery?: string
   ) => {
     if (isTabDisabledByMaintenance(viewId)) return;
     const nextGroups = { [groupId]: true };
@@ -962,7 +975,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     setMobileSearchOpen(false);
     setMobileDrawerOpen(false);
     setSearchQuery('');
-    setCurrentView(viewId);
+    setCurrentView(viewId, extraQuery);
   };
 
   const publicGroupColorMap: Record<
@@ -1232,12 +1245,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                   >
                     {group.items.map(item => {
                       const Icon = item.icon;
-                      const isActive = currentView === item.id;
+                      const isActive = item.extraQuery
+                        ? currentView === item.id && routeQuery === item.extraQuery
+                        : currentView === item.id;
                       const isDisabled = Boolean(item.disabled);
 
                       return (
                         <button
-                          key={item.id}
+                          key={item.itemKey || item.id}
                           type="button"
                           disabled={isDisabled}
                           aria-disabled={isDisabled || undefined}
@@ -1245,7 +1260,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                           onClick={() => {
                             if (isDisabled) return;
                             setHoveredNav(null);
-                            setCurrentView(item.id);
+                            setCurrentView(item.id, item.extraQuery);
                           }}
                           onMouseEnter={e => {
                             if (!sidebarCollapsed) return;
@@ -1491,18 +1506,20 @@ export const AppShell: React.FC<AppShellProps> = ({
                       >
                         {group.items.map(item => {
                           const Icon = item.icon;
-                          const isActive = currentView === item.id;
+                          const isActive = item.extraQuery
+                            ? currentView === item.id && routeQuery === item.extraQuery
+                            : currentView === item.id;
                           const isDisabled = Boolean(item.disabled);
                           return (
                             <button
-                              key={item.id}
+                              key={item.itemKey || item.id}
                               type="button"
                               disabled={isDisabled}
                               aria-disabled={isDisabled || undefined}
                               title={isDisabled ? `${item.label} đang bảo trì - tạm khóa truy cập` : undefined}
                               onClick={() => {
                                 if (isDisabled) return;
-                                setCurrentView(item.id);
+                                setCurrentView(item.id, item.extraQuery);
                                 setMobileDrawerOpen(false);
                               }}
                               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-semibold text-left ${
@@ -1937,7 +1954,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                                   const isDisabled = Boolean(item.disabled);
                                   return (
                                     <button
-                                      key={item.id}
+                                      key={item.itemKey || item.id}
                                       type="button"
                                       disabled={isDisabled}
                                       aria-disabled={isDisabled || undefined}
@@ -1948,7 +1965,8 @@ export const AppShell: React.FC<AppShellProps> = ({
                                           group.id,
                                           'item',
                                           item.label,
-                                          group.title
+                                          group.title,
+                                          item.extraQuery
                                         );
                                       }}
                                       className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs text-left transition ${
@@ -2196,13 +2214,13 @@ export const AppShell: React.FC<AppShellProps> = ({
                             const isDisabled = Boolean(item.disabled);
                             return (
                               <button
-                                key={item.id}
+                                key={item.itemKey || item.id}
                                 type="button"
                                 disabled={isDisabled}
                                 aria-disabled={isDisabled || undefined}
                                 onClick={() => {
                                   if (isDisabled) return;
-                                  handleJumpFromSearch(item.id, group.id, 'item', item.label, group.title);
+                                  handleJumpFromSearch(item.id, group.id, 'item', item.label, group.title, item.extraQuery);
                                 }}
                                 className={`w-full px-2.5 py-2 rounded-xl flex items-center gap-2.5 text-xs text-left ${
                                   isDisabled

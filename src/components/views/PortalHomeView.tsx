@@ -52,6 +52,19 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
   const [loadingPosts, setLoadingPosts] = useState(true);
   const [loadingRss, setLoadingRss] = useState(true);
   const [readingPost, setReadingPost] = useState<Post | null>(null);
+  const [coverImgError, setCoverImgError] = useState(false);
+  const [coverUseProxy, setCoverUseProxy] = useState(false);
+
+  const rawCoverUrl = settings.coverImageUrl?.trim() || '';
+  const coverImageSrc = rawCoverUrl ? GitHubService.toRawGitHubUrl(rawCoverUrl) : '';
+  const isHttpCover = /^https?:\/\//i.test(coverImageSrc);
+  const displayCoverSrc =
+    coverUseProxy && isHttpCover ? GitHubService.toImageProxyUrl(coverImageSrc) : coverImageSrc;
+
+  useEffect(() => {
+    setCoverImgError(false);
+    setCoverUseProxy(false);
+  }, [rawCoverUrl]);
 
   useEffect(() => {
     const unsubPosts = onSnapshot(
@@ -96,6 +109,24 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
           <BannerSkeleton />
         ) : (
           <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+            {displayCoverSrc && !coverImgError && (
+              <div className="relative w-full h-40 sm:h-56 md:h-64 bg-slate-900 overflow-hidden border-b border-slate-200/80 dark:border-slate-800">
+                <img
+                  src={displayCoverSrc}
+                  alt={isConfigured ? `Ảnh bìa ${settings.stationName}` : 'Ảnh bìa Trạm Y Tế'}
+                  referrerPolicy="no-referrer"
+                  onError={() => {
+                    if (!coverUseProxy && isHttpCover) {
+                      setCoverUseProxy(true);
+                      return;
+                    }
+                    setCoverImgError(true);
+                  }}
+                  className="w-full h-full object-cover"
+                />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950/45 via-slate-950/15 to-transparent" />
+              </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
               {/* Left Column: Station Identity & 2 Symmetrical Primary Buttons */}
               <div className="lg:col-span-7 p-4 sm:p-7 flex flex-col justify-between gap-4 sm:gap-5 bg-gradient-to-br from-emerald-800 via-teal-800 to-slate-900 text-white">

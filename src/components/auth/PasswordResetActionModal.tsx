@@ -99,7 +99,7 @@ export const PasswordResetActionModal: React.FC<PasswordResetActionModalProps> =
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-      <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md md:max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
         <div className="bg-gradient-to-r from-emerald-800 to-teal-700 p-6 text-white text-center space-y-2">
           <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-md mx-auto flex items-center justify-center text-white shadow-inner">
             {mode === 'verifyEmail' ? <Mail className="w-7 h-7" /> : <KeyRound className="w-7 h-7" />}

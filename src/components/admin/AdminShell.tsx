@@ -72,6 +72,7 @@ export type AdminSubTab =
   | 'audit'
   | 'system_control'
   | 'bhxh_api'
+  | 'sepay_payment'
   | 'ai_automation'
   | 'diagnostics'
   | 'firebase_config';
@@ -188,7 +189,7 @@ export function buildAdminNavGroups(counts?: {
           label: 'Thông tin Đơn vị & Cấp cứu',
           shortLabel: 'Thông tin trạm',
           icon: Building,
-          keywords: ['tên trạm', 'địa chỉ', 'hotline', 'cấp cứu', 'số điện thoại', 'logo'],
+          keywords: ['tên trạm', 'địa chỉ', 'hotline', 'cấp cứu', 'số điện thoại', 'logo', 'ảnh bìa', 'cover', 'banner'],
         },
         {
           id: 'org_personnel',
@@ -348,6 +349,14 @@ export function buildAdminNavGroups(counts?: {
           icon: CreditCard,
           adminOnly: true,
           keywords: ['bhxh', 'bhyt', 'bảo hiểm y tế', 'cổng giám định'],
+        },
+        {
+          id: 'sepay_payment',
+          label: 'Thanh toán SePay & Verify',
+          shortLabel: 'SePay & Verify',
+          icon: CreditCard,
+          adminOnly: true,
+          keywords: ['sepay', 'verify', 'xác minh', 'tick xanh', 'thanh toán', 'webhook', 'vietqr', 'đơn hàng', 'số tiền'],
         },
         {
           id: 'diagnostics',

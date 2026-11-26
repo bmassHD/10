@@ -167,7 +167,7 @@ export const TwoFactorGateModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in">
-      <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md md:max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Top Security Banner */}
         <div className="p-5 bg-gradient-to-br from-emerald-800 via-teal-800 to-slate-900 text-white">
           <div className="flex items-center gap-3.5">

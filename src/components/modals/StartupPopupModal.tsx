@@ -222,7 +222,7 @@ export const StartupPopupModal: React.FC<StartupPopupModalProps> = ({
         if (e.target === e.currentTarget) handleClose();
       }}
     >
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-lg max-h-[92vh] flex flex-col overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-lg md:max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div
           className={`px-5 py-3.5 shrink-0 ${typeMeta.headerBg} text-white flex items-start justify-between gap-3`}

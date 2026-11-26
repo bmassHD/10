@@ -42,6 +42,21 @@ import {
   verifyBiometricAuthentication,
   verifyBiometricRegistration,
 } from './src/server/biometricAuthService';
+import {
+  createAdminCustomOrder,
+  createUserPaymentOrder,
+  getAdminSepayState,
+  getPublicSepayConfig,
+  getUserOrderStatus,
+  getUserVipStatus,
+  listUserOrders,
+  processSepayWebhook,
+  saveAdminSepayConfig,
+  simulateSepayDemoPayment,
+  testAdminWebhookEndpoint,
+  updateAdminOrder,
+  updateAdminUserVip,
+} from './src/server/sepayService';
 
 dotenv.config();
 
@@ -123,7 +138,14 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.APP_PORT || process.env.DEFAULT_APP_PORT || 3000);
 
-  app.use(express.json({ limit: '10mb' }));
+  app.use(
+    express.json({
+      limit: '10mb',
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
 
   const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
 
@@ -1508,6 +1530,18 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
     }
   });
 
+  // Safe image proxy for external cover URLs, Drive links, and CORS-clean canvas cropping
+  app.get('/api/image-proxy', async (req, res) => {
+    try {
+      const { default: imageProxyHandler } = await import('./api/image-proxy');
+      return imageProxyHandler(req, res);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: err?.message || 'Lỗi máy chủ proxy hình ảnh',
+      });
+    }
+  });
+
   // API endpoint for fetching health news RSS from suckhoedoisong.vn/y-te.rss
   app.get('/api/health-news-rss', async (_req, res) => {
     try {
@@ -2260,6 +2294,166 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
     }
   });
 
+  // SePay Webhook Endpoints (Primary URL: https://tyt.slhd.id.vn/hooks/sepay-payment)
+  const handleSepayWebhookHttp = (req: express.Request, res: express.Response) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        success: true,
+        service: 'SePay Payment Webhook Endpoint',
+        webhookUrl: 'https://tyt.slhd.id.vn/hooks/sepay-payment',
+        status: 'ready',
+      });
+    }
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, message: 'Method Not Allowed' });
+    }
+    try {
+      const result = processSepayWebhook(req);
+      return res.status(result.statusCode).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        message: err?.message || 'Lỗi xử lý SePay Webhook.',
+      });
+    }
+  };
+
+  app.all('/hooks/sepay-payment', handleSepayWebhookHttp);
+  app.all('/api/hooks/sepay-payment', handleSepayWebhookHttp);
+
+  const sendSepayError = (res: express.Response, err: any) => {
+    const msg = err?.message || 'Lỗi xử lý yêu cầu SePay.';
+    const status = msg.includes('đăng nhập') || msg.includes('hết hạn') ? 401 : msg.includes('quyền') ? 403 : 400;
+    return res.status(status).json({ ok: false, error: msg });
+  };
+
+  app.get('/api/sepay/public-config', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, config: getPublicSepayConfig() });
+  });
+
+  app.get('/api/sepay/my-vip-status', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const vipStatus = await getUserVipStatus(req);
+      return res.json({ ok: true, vipStatus });
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.get('/api/sepay/orders', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await listUserOrders(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/orders', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await createUserPaymentOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.get('/api/sepay/orders/:orderCode/status', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await getUserOrderStatus(req, req.params.orderCode));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.get('/api/sepay/order-status', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await getUserOrderStatus(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/demo-simulate', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await simulateSepayDemoPayment(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.get('/api/sepay/admin-state', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await getAdminSepayState(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post(['/api/sepay/admin-config', '/api/sepay/admin/config'], async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await saveAdminSepayConfig(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post(['/api/sepay/admin-orders', '/api/sepay/admin/orders'], async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await createAdminCustomOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.patch('/api/sepay/admin/orders/:orderCode', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await updateAdminOrder(req, req.params.orderCode));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-order-update', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await updateAdminOrder(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post(['/api/sepay/admin-vip', '/api/sepay/admin/vip'], async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await updateAdminUserVip(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
+  app.post('/api/sepay/admin-test-webhook', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return res.json(await testAdminWebhookEndpoint(req));
+    } catch (err) {
+      return sendSepayError(res, err);
+    }
+  });
+
   const resolveRequestOrigin = (req: express.Request): string => {
     const forwardedHost = String(req.headers['x-forwarded-host'] || '')
       .split(',')[0]
@@ -2358,6 +2552,7 @@ Hãy trích xuất các thông tin văn bản y tế hành chính dưới dạng
       const isHtmlPageRequest =
         req.method === 'GET' &&
         !req.path.startsWith('/api/') &&
+        !req.path.startsWith('/hooks/') &&
         !req.path.startsWith('/@') &&
         !req.path.startsWith('/src/') &&
         !req.path.startsWith('/node_modules/') &&

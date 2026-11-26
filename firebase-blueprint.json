@@ -9,8 +9,8 @@
         "email": { "type": "string", "maxLength": 256 },
         "displayName": { "type": "string", "maxLength": 128 },
         "phoneNumber": { "type": "string", "maxLength": 32 },
-        "role": { "type": "string", "enum": ["super_admin", "admin", "leadership", "doctor", "nurse", "communicator", "staff", "citizen", "organization"] },
-        "accountType": { "type": "string", "enum": ["citizen", "employee", "admin", "organization"] },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "organization", "user", "other", "leadership", "doctor", "nurse", "communicator", "staff", "citizen"] },
+        "accountType": { "type": "string", "enum": ["super_admin", "admin", "organization", "user", "other", "citizen", "employee"] },
         "department": { "type": "string", "maxLength": 128 },
         "position": { "type": "string", "maxLength": 128 },
         "qualification": { "type": "string", "maxLength": 128 },
@@ -75,6 +75,12 @@
         "organizationAddress": { "type": "string", "maxLength": 256 },
         "organizationPhone": { "type": "string", "maxLength": 32 },
         "organizationEmail": { "type": "string", "maxLength": 128 },
+        "isVip": { "type": "boolean" },
+        "vipTier": { "type": "string", "maxLength": 64 },
+        "vipPackageName": { "type": "string", "maxLength": 128 },
+        "vipActivatedAt": { "type": "string", "maxLength": 64 },
+        "vipExpiresAt": { "type": "string", "maxLength": 64 },
+        "vipOrderCode": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
@@ -143,8 +149,8 @@
         "label": { "type": "string", "maxLength": 128 },
         "active": { "type": "boolean" },
         "issuerTier": { "type": "string", "enum": ["super_admin", "admin"] },
-        "targetAccountType": { "type": "string", "enum": ["employee", "admin"] },
-        "targetRole": { "type": "string", "enum": ["admin", "staff", "doctor", "nurse", "communicator", "leadership"] },
+        "targetAccountType": { "type": "string", "enum": ["user", "organization", "other", "admin", "employee", "citizen"] },
+        "targetRole": { "type": "string", "enum": ["user", "organization", "other", "admin", "staff", "doctor", "nurse", "communicator", "leadership", "citizen"] },
         "createdByUid": { "type": "string", "maxLength": 128 },
         "createdByEmail": { "type": "string", "maxLength": 256 },
         "createdAt": { "type": "string", "maxLength": 64 },
@@ -442,6 +448,7 @@
         "workingHours": { "type": "string", "maxLength": 256 },
         "leaderName": { "type": "string", "maxLength": 128 },
         "bannerNotice": { "type": "string", "maxLength": 1000 },
+        "coverImageUrl": { "type": "string", "maxLength": 500000, "description": "Station portal hero cover image URL or compressed image data URI" },
         "vaccinationSchedules": { "type": "array", "description": "Priority vaccination schedules configured in admin console" },
         "workScheduleConfig": { "type": "object", "description": "Configured weekly clinic and administrative work schedule combined with 24/7 duty roster" },
         "holidaySchedules": { "type": "array", "description": "Configured public holiday schedules with automatic holiday notification banner and modal" },
@@ -475,6 +482,7 @@
         "portalAppCategories": { "type": "array", "description": "Custom categories configured by Admin for Apps Launcher alongside defaults" },
         "migrationReconciliationActive": { "type": "boolean", "description": "Prompts signed-in users to review and verify/reconcile their migrated profile after Firebase migration" },
         "migrationBannerNote": { "type": "string", "maxLength": 512 },
+        "sepayConfig": { "type": "object", "description": "Public SePay bank account, VietQR template, webhook endpoint URL, and VIP pricing configuration" },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["stationName", "address", "hotline"]
@@ -849,6 +857,36 @@
         "expiresAtMs": { "type": "number" }
       },
       "required": ["pairCode", "sessionId", "expiresAtMs"]
+    },
+    "PaymentOrder": {
+      "title": "PaymentOrder",
+      "description": "SePay VietQR payment orders and VIP package upgrade records with admin-configurable per-order amounts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "orderCode": { "type": "string", "maxLength": 64 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 256 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "packageId": { "type": "string", "maxLength": 64 },
+        "packageName": { "type": "string", "maxLength": 140 },
+        "orderType": { "type": "string", "enum": ["vip_package", "custom_order"] },
+        "amountVnd": { "type": "number" },
+        "currency": { "type": "string", "enum": ["VND"] },
+        "status": { "type": "string", "enum": ["pending", "paid", "underpaid", "cancelled"] },
+        "description": { "type": "string", "maxLength": 256 },
+        "customAmountConfiguredByAdmin": { "type": "boolean" },
+        "durationDays": { "type": "number" },
+        "sepayTransactionId": { "type": "string", "maxLength": 64 },
+        "sepayReferenceCode": { "type": "string", "maxLength": 64 },
+        "sepayGateway": { "type": "string", "maxLength": 64 },
+        "paidAmountVnd": { "type": "number" },
+        "paidAt": { "type": "string", "maxLength": 64 },
+        "adminNote": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "orderCode", "uid", "userName", "packageName", "orderType", "amountVnd", "currency", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -999,6 +1037,10 @@
     "/qrPairCodes/{pairCode}": {
       "schema": { "$ref": "#/entities/QrPairCode" },
       "description": "Short-lived 6-character QR pair code lookup registry"
+    },
+    "/paymentOrders/{orderCode}": {
+      "schema": { "$ref": "#/entities/PaymentOrder" },
+      "description": "SePay VietQR payment orders and VIP upgrade records"
     }
   }
 }

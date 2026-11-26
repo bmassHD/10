@@ -1,15 +1,18 @@
 export type RoleType =
   | 'super_admin'
   | 'admin'
-  | 'leadership'
+  | 'user'
+  | 'other'
+  | 'citizen'
+  | 'employee'
+  | 'staff'
   | 'doctor'
   | 'nurse'
   | 'communicator'
-  | 'staff'
-  | 'citizen'
+  | 'leadership'
   | 'organization';
 
-export type AccountType = 'citizen' | 'employee' | 'admin' | 'organization';
+export type AccountType = RoleType;
 
 export interface EthnicItem {
   label: string;
@@ -103,6 +106,12 @@ export interface UserProfile {
   organizationAddress?: string; // Địa chỉ trụ sở/cơ sở tại địa bàn
   organizationPhone?: string; // Điện thoại bàn / hotline tổ chức
   organizationEmail?: string; // Email liên hệ tổ chức
+  isVip?: boolean;
+  vipTier?: string;
+  vipPackageName?: string;
+  vipActivatedAt?: string;
+  vipExpiresAt?: string;
+  vipOrderCode?: string;
   createdAt: string;
   updatedAt?: string;
   lastLoginAt?: string;
@@ -134,7 +143,7 @@ export interface ReferralCodeItem {
   label?: string;
   active: boolean;
   issuerTier?: ReferralIssuerTier;
-  targetAccountType: 'employee' | 'admin';
+  targetAccountType?: RoleType;
   targetRole: RoleType;
   createdByUid: string;
   createdByEmail?: string;
@@ -1030,6 +1039,7 @@ export interface SystemSettings {
   portalApps?: PortalAppItem[]; // Danh sách ứng dụng hiển thị ở tab Ứng dụng (kiểu launcher điện thoại)
   portalAppCategories?: string[]; // Danh mục tùy chỉnh do Admin thêm cho tab Ứng dụng (ngoài 4 danh mục mặc định)
   highlightImages?: HighlightImage[]; // Hình ảnh hoạt động y tế nổi bật (setup thủ công)
+  coverImageUrl?: string; // Ảnh bìa trang chủ Trạm Y tế (URL hoặc ảnh nén)
   vaccinationSchedules?: VaccinationScheduleItem[]; // Lịch tiêm chủng ưu tiên hàng đầu do Admin thiết lập
   workScheduleConfig?: WorkScheduleConfig; // Lịch làm việc cố định theo tuần của Trạm Y tế
   holidaySchedules?: HolidayScheduleItem[]; // Lịch nghỉ lễ & thông báo khi truy cập đúng ngày nghỉ lễ
@@ -1071,7 +1081,7 @@ export interface SystemSettings {
   accessControl?: AccessControlConfig;
   rolePermissions?: RolePermissionsConfig;
   sidebarColors?: SidebarColorsConfig;
-  authProvidersConfig?: AuthProvidersConfig;
+  authProvidersConfig?: Record<string, any>;
   bhxhApi?: BhxhApiPublicConfig;
   aiAutomation?: {
     autoScanOnUpload?: boolean;
@@ -1095,6 +1105,7 @@ export interface SystemSettings {
   businessTripConfig?: BusinessTripConfig;
   cccdLookupEnabled?: boolean;
   epidemicMapButtonVisible?: boolean; // Admin bật/tắt nút "Xem bản đồ dịch bệnh" cho tất cả đối tượng
+  sepayConfig?: SepayPublicConfig;
   updatedAt?: string;
 }
 
@@ -1381,9 +1392,106 @@ export type AuthProviderStatus = 'enabled' | 'disabled' | 'maintenance';
 
 export type AuthProvidersStatusMap = Partial<Record<AuthProviderId, AuthProviderStatus>>;
 
-export interface AuthProvidersConfig {
-  providers: AuthProvidersStatusMap;
+export function getAccountTypeForRole(role: RoleType): AccountType {
+  return role || 'user';
+}
+
+export type SepayAuthType = 'api_key' | 'hmac_sha256' | 'none';
+
+export type SepayBankTemplate = 'compact' | 'compact2' | 'qr_only' | 'print';
+
+export interface VipPackageConfig {
+  id: string;
+  name: string;
+  subtitle?: string;
+  priceVnd: number;
+  durationDays: number;
+  badgeText?: string;
+  isPopular?: boolean;
+  isActive: boolean;
+  features: string[];
+}
+
+export interface SepayPublicConfig {
+  enabled: boolean;
+  bankCode: string;
+  bankName: string;
+  accountNumber: string;
+  accountHolder: string;
+  subAccount?: string;
+  orderPrefix: string;
+  orderSuffixMinLength?: number;
+  orderSuffixMaxLength?: number;
+  orderSuffixType?: 'integer';
+  webhookUrl: string;
+  qrTemplate?: SepayBankTemplate;
+  packages: VipPackageConfig[];
   updatedAt?: string;
 }
 
+export interface SepayAdminConfig extends SepayPublicConfig {
+  authType: SepayAuthType;
+  hasApiKey?: boolean;
+  apiKeyMasked?: string;
+  hasHmacSecret?: boolean;
+  hmacSecretMasked?: string;
+}
+
+export type SepayOrderStatus = 'pending' | 'paid' | 'underpaid' | 'cancelled';
+
+export interface PaymentOrder {
+  id: string;
+  orderCode: string;
+  uid: string;
+  userEmail?: string;
+  userName: string;
+  packageId: string;
+  packageName: string;
+  orderType: 'vip_package' | 'custom_order';
+  amountVnd: number;
+  currency: 'VND';
+  status: SepayOrderStatus;
+  description: string;
+  customAmountConfiguredByAdmin?: boolean;
+  durationDays?: number;
+  sepayTransactionId?: string | number;
+  sepayReferenceCode?: string;
+  sepayGateway?: string;
+  paidAmountVnd?: number;
+  paidAt?: string;
+  adminNote?: string;
+  qrUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SepayWebhookLog {
+  id: string;
+  sepayTransactionId: number;
+  gateway: string;
+  transactionDate: string;
+  accountNumber: string;
+  subAccount?: string | null;
+  code?: string | null;
+  content: string;
+  transferType: 'in' | 'out';
+  transferAmount: number;
+  accumulated?: number;
+  referenceCode?: string;
+  description?: string;
+  matchedOrderCode?: string;
+  matchStatus: 'matched_paid' | 'underpaid' | 'unmatched' | 'ignored_out' | 'duplicate_ignored';
+  authMethod: string;
+  receivedAt: string;
+}
+
+export interface VipStatusInfo {
+  isVip: boolean;
+  vipTier?: string;
+  vipPackageName?: string;
+  vipActivatedAt?: string;
+  vipExpiresAt?: string;
+  vipOrderCode?: string;
+  source?: 'sepay' | 'admin' | 'none';
+}
 

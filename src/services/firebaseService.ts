@@ -127,6 +127,7 @@ export const emptySystemSettings: SystemSettings = {
   epidemicMapButtonVisible: true,
   version: 'v3.0.0 (Bản Chính Thức)',
   highlightImages: [],
+  coverImageUrl: '',
   vaccinationSchedules: [],
   holidaySchedules: [],
   startupPopup: {
@@ -2826,29 +2827,26 @@ export async function createReferralCode(params: {
   code?: string;
   label?: string;
   issuerTier?: ReferralIssuerTier;
-  targetAccountType?: 'employee' | 'admin';
-  targetRole?: Exclude<RoleType, 'citizen' | 'super_admin'>;
+  targetAccountType?: RoleType;
+  targetRole?: RoleType;
   createdByUid: string;
   createdByEmail?: string;
 }): Promise<ReferralCodeItem> {
   const issuerTier: ReferralIssuerTier = params.issuerTier || 'admin';
-  const targetAccountType: 'employee' | 'admin' =
-    issuerTier === 'super_admin' && params.targetAccountType === 'admin'
-      ? 'admin'
-      : 'employee';
   const targetRole: RoleType =
-    targetAccountType === 'admin'
-      ? 'admin'
-      : params.targetRole && params.targetRole !== 'admin'
-      ? params.targetRole
-      : 'staff';
+    params.targetRole ||
+    (params.targetAccountType as RoleType) ||
+    (issuerTier === 'super_admin' && params.targetAccountType === 'admin' ? 'admin' : 'user');
+  const targetAccountType: RoleType = targetRole;
 
   const defaultPrefix =
-    targetAccountType === 'admin'
+    targetRole === 'admin'
       ? 'ADM'
-      : issuerTier === 'super_admin'
-      ? 'SADM'
-      : 'CBYT';
+      : targetRole === 'organization'
+      ? 'ORG'
+      : targetRole === 'other'
+      ? 'OTH'
+      : 'REF';
   const code = normalizeReferralCode(params.code || generateRandomReferralCode(defaultPrefix));
   if (code.length < 4) {
     throw new Error('Mã giới thiệu phải có ít nhất 4 ký tự chữ/số (A-Z, 0-9, -, _).');

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings,
   MessageSquare,
@@ -69,8 +69,18 @@ import {
   Palette,
   Briefcase,
   Radar,
+  Image as ImageIcon,
+  Upload,
+  Crop,
 } from 'lucide-react';
+import { GitHubService } from '../../services/githubService';
 import * as XLSX from 'xlsx';
+import {
+  FacebookLogo,
+  ZaloLogo,
+  TikTokLogo,
+  YouTubeLogo,
+} from '../common/SocialPlatformLogos';
 import {
   SystemSettings,
   FeedbackItem,
@@ -105,6 +115,7 @@ import {
   SidebarColorsConfig,
   BusinessTripConfig,
   EpidemicCase,
+  RoleType,
 } from '../../types';
 import {
   AUTH_PROVIDER_CATEGORIES,
@@ -175,6 +186,7 @@ import { EpidemicCaseModal } from '../portal/EpidemicCaseModal';
 import { EPIDEMIC_STATUS_META, getEpidemicDiseaseConfig } from '../../constants/epidemicDiseases';
 import { SystemDiagnosticsManager } from '../admin/SystemDiagnosticsManager';
 import { AgentAutomationManager } from '../admin/AgentAutomationManager';
+import { SepayPaymentManager } from '../admin/SepayPaymentManager';
 import { OrganizationAccountsManager } from '../admin/OrganizationAccountsManager';
 import { FirebaseConfigReadonlyCard } from '../admin/FirebaseConfigReadonlyCard';
 import { AppsManager } from '../admin/AppsManager';
@@ -185,6 +197,7 @@ import { getBalancedMobileGridClass, getBalancedMobileItemSpan } from '../../uti
 import { StationLogo } from '../common/StationLogo';
 import { VerifiedBlueTick } from '../common/VerifiedBlueTick';
 import { UserAvatar } from '../common/UserAvatar';
+import { ImageCropModal, ImageCropResult } from '../common/ImageCropModal';
 import { PaginationBar } from '../common/PaginationBar';
 import {
   ACCOUNT_SECURITY_CARD_TITLE,
@@ -280,6 +293,7 @@ const VALID_ADMIN_SUBTABS = new Set<AdminSubTab>([
   'audit',
   'system_control',
   'bhxh_api',
+  'sepay_payment',
   'ai_automation',
   'diagnostics',
   'firebase_config',
@@ -354,6 +368,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [workingHours, setWorkingHours] = useState(settings.workingHours || '');
   const [leaderName, setLeaderName] = useState(settings.leaderName || '');
   const [bannerNotice, setBannerNotice] = useState(settings.bannerNotice || '');
+  const [coverImageUrl, setCoverImageUrl] = useState(settings.coverImageUrl || '');
+  const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
+  const [coverPreviewError, setCoverPreviewError] = useState(false);
+  const [coverUseProxy, setCoverUseProxy] = useState(false);
+  const [coverRetryTick, setCoverRetryTick] = useState(0);
+  const [coverCropSource, setCoverCropSource] = useState<{ src: string; fileName?: string } | null>(null);
+  const coverFileInputRef = useRef<HTMLInputElement | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Functions & Duties (Chức năng & Nhiệm vụ - nhập thủ công, mỗi dòng đầu cách vào 1cm)
@@ -681,6 +702,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     if (settings.workingHours !== undefined) setWorkingHours(settings.workingHours || '');
     if (settings.leaderName !== undefined) setLeaderName(settings.leaderName || '');
     if (settings.bannerNotice !== undefined) setBannerNotice(settings.bannerNotice || '');
+    if (settings.coverImageUrl !== undefined) {
+      setCoverImageUrl(settings.coverImageUrl || '');
+      setCoverPreviewError(false);
+      setCoverUseProxy(false);
+    }
     const syncedEmergencies = getConfiguredEmergencyContacts(settings);
     if (syncedEmergencies.length > 0) {
       setEmergencyContacts(syncedEmergencies);
@@ -826,7 +852,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editingUserDevices, setEditingUserDevices] = useState<UserVerifiedDevice[] | null>(null);
   const [savingUser, setSavingUser] = useState(false);
-  const [userCategoryTab, setUserCategoryTab] = useState<'all' | 'elevated' | 'standard' | 'duplicates' | 'banned'>('all');
+  const [userCategoryTab, setUserCategoryTab] = useState<'all' | 'elevated' | 'organization' | 'standard' | 'duplicates' | 'banned'>('all');
   const [usersPage, setUsersPage] = useState(1);
 
   const [banModalUser, setBanModalUser] = useState<UserProfile | null>(null);
@@ -867,8 +893,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [newRefIssuerTier, setNewRefIssuerTier] = useState<ReferralIssuerTier>(
     canManageSuperAdminTier ? 'super_admin' : 'admin'
   );
-  const [newRefTargetAccountType, setNewRefTargetAccountType] = useState<'employee' | 'admin'>('employee');
-  const [newRefRole, setNewRefRole] = useState<'staff' | 'doctor' | 'nurse' | 'communicator' | 'leadership'>('staff');
+  const [newRefTargetAccountType, setNewRefTargetAccountType] = useState<RoleType>('organization');
+  const [newRefRole, setNewRefRole] = useState<RoleType>('organization');
   const [creatingRef, setCreatingRef] = useState(false);
   const [copiedRefText, setCopiedRefText] = useState<string | null>(null);
   const [referralTierFilter, setReferralTierFilter] = useState<'all' | ReferralIssuerTier>('all');
@@ -901,8 +927,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     citizenId: '',
     department: '',
     position: '',
-    role: 'citizen',
-    accountType: 'citizen',
+    role: 'user',
+    accountType: 'user',
   });
   const [adminClaimNote, setAdminClaimNote] = useState('');
   const [savingClaimResolution, setSavingClaimResolution] = useState(false);
@@ -1008,11 +1034,15 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   }, [users]);
 
   const elevatedUsersCount = useMemo(
-    () => users.filter(u => u.accountType === 'admin' || u.accountType === 'employee' || u.role !== 'citizen').length,
+    () => users.filter(u => u.role === 'admin' || u.role === 'super_admin' || u.accountType === 'admin').length,
+    [users]
+  );
+  const orgUsersCount = useMemo(
+    () => users.filter(u => u.role === 'organization' || u.accountType === 'organization').length,
     [users]
   );
   const standardUsersCount = useMemo(
-    () => users.filter(u => !(u.accountType === 'admin' || u.accountType === 'employee' || u.role !== 'citizen')).length,
+    () => users.filter(u => u.role !== 'admin' && u.role !== 'super_admin' && u.accountType !== 'admin' && u.role !== 'organization' && u.accountType !== 'organization').length,
     [users]
   );
   const bannedUsersCount = useMemo(
@@ -1022,11 +1052,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
   const filteredUsersList = useMemo(() => {
     return users.filter(u => {
-      const isElevated = u.accountType === 'admin' || u.accountType === 'employee' || u.role !== 'citizen';
       const isDuplicate = userDuplicateInfo.duplicateUids.has(u.uid);
 
-      if (userCategoryTab === 'elevated') return isElevated;
-      if (userCategoryTab === 'standard') return !isElevated;
+      if (userCategoryTab === 'elevated') {
+        return u.role === 'admin' || u.role === 'super_admin' || u.accountType === 'admin';
+      }
+      if (userCategoryTab === 'organization') {
+        return u.role === 'organization' || u.accountType === 'organization';
+      }
+      if (userCategoryTab === 'standard') {
+        return u.role !== 'admin' && u.role !== 'super_admin' && u.accountType !== 'admin' && u.role !== 'organization' && u.accountType !== 'organization';
+      }
       if (userCategoryTab === 'duplicates') return isDuplicate;
       if (userCategoryTab === 'banned') return isUserActivelyBanned(u);
       return true;
@@ -1055,19 +1091,15 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       case 'super_admin':
         return 'Super Admin';
       case 'admin':
-        return 'Quản trị viên';
-      case 'leadership':
-        return 'Ban Lãnh đạo';
-      case 'doctor':
-        return 'Bác sĩ';
-      case 'nurse':
-        return 'Điều dưỡng';
-      case 'communicator':
-        return 'Truyền thông';
-      case 'staff':
-        return 'Nhân viên';
+        return 'Admin';
+      case 'organization':
+        return 'Doanh nghiệp / Tổ chức';
+      case 'user':
+        return 'User';
+      case 'other':
+        return 'Khác';
       default:
-        return 'Công dân';
+        return 'User';
     }
   };
 
@@ -1080,12 +1112,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       const vProg = getUserVerificationProgress(u, {
         phoneNumber: u.verifiedPhone || u.phoneNumber,
       });
-      const accountTypeLabel =
-        u.accountType === 'admin'
-          ? 'Quản trị'
-          : u.accountType === 'employee'
-          ? 'Cán bộ Y tế'
-          : 'Người dân';
+      const accountTypeLabel = getUserRoleLabel(u.role || u.accountType);
       const effectiveStatus = getEffectiveUserStatus(u);
       const activelyBanned = isUserActivelyBanned(u);
       const activityLabel = activelyBanned
@@ -1227,6 +1254,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           note: item.note.trim(),
         }));
 
+      const trimmedCover = coverImageUrl.trim();
+      const normalizedCover = trimmedCover
+        ? GitHubService.toRawGitHubUrl(trimmedCover)
+        : '';
+
       await updateSystemSettings({
         stationName: stationName.trim(),
         parentUnitName: parentUnitName.trim(),
@@ -1239,6 +1271,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         emergencyNote: validEmergencyContacts[0]?.note || '',
         workingHours: workingHours.trim(),
         leaderName: leaderName.trim(),
+        coverImageUrl: normalizedCover,
         updatedAt: new Date().toISOString(),
       });
 
@@ -3672,6 +3705,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         department: editingUser.department || '',
         position: editingUser.position || '',
         qualification: editingUser.qualification || '',
+        organizationName: editingUser.organizationName || '',
+        organizationType: editingUser.organizationType || '',
+        taxCode: editingUser.taxCode || '',
+        businessLicenseNumber: editingUser.businessLicenseNumber || '',
+        organizationAddress: editingUser.organizationAddress || '',
+        organizationPhone: editingUser.organizationPhone || '',
+        organizationEmail: editingUser.organizationEmail || '',
         status: editingUser.status,
         identityVerifiedFromDatabase: Boolean(cleanCccd && editingUser.identityVerifiedFromDatabase),
         allowIdentityEditByAdmin: Boolean(editingUser.allowIdentityEditByAdmin),
@@ -3738,16 +3778,15 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     e.preventDefault();
     if (!isAdmin || !currentUser) return;
     const effectiveTier: ReferralIssuerTier = canManageSuperAdminTier ? newRefIssuerTier : 'admin';
-    const effectiveTargetAccountType: 'employee' | 'admin' =
-      effectiveTier === 'super_admin' && newRefTargetAccountType === 'admin' ? 'admin' : 'employee';
+    const effectiveRole: RoleType = newRefRole || 'organization';
     setCreatingRef(true);
     try {
       const created = await createReferralCode({
         code: newRefCodeInput.trim() || undefined,
         label: newRefLabelInput.trim() || undefined,
         issuerTier: effectiveTier,
-        targetAccountType: effectiveTargetAccountType,
-        targetRole: newRefRole,
+        targetAccountType: effectiveRole,
+        targetRole: effectiveRole,
         createdByUid: currentUser.uid,
         createdByEmail: currentUser.email || undefined,
       });
@@ -3757,7 +3796,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       showToast(
         'success',
         'Đã tạo mã giới thiệu',
-        `Mã ${created.code} (${effectiveTier === 'super_admin' ? 'Super Admin' : 'Admin'}) đã sẵn sàng sử dụng.`
+        `Mã ${created.code} cho vai trò ${getUserRoleLabel(created.targetRole)} đã sẵn sàng sử dụng.`
       );
     } catch (err: any) {
       showToast('error', 'Không thể tạo mã giới thiệu', err?.message || 'Vui lòng thử lại.');
@@ -3914,6 +3953,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
       {/* Subtab: Agent AI Automation & Document Scanning */}
       {subTab === 'ai_automation' && isAdmin && <AgentAutomationManager settings={settings} />}
+
+      {/* Subtab: SePay Payment Webhook, Custom Order Pricing & VIP Management */}
+      {subTab === 'sepay_payment' && isAdmin && <SepayPaymentManager users={users} />}
 
       {/* Subtab: Read-only Firebase Config & Direct Console Links */}
       {subTab === 'firebase_config' && isAdmin && (
@@ -5307,6 +5349,163 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
+
+              {/* Station Portal Cover Image (Ảnh bìa) */}
+              <div className="col-span-full rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <label className="flex items-center gap-1.5 font-bold text-emerald-900 dark:text-emerald-200 text-xs sm:text-sm">
+                      <ImageIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Cấu hình Ảnh bìa Trang chủ Trạm Y tế</span>
+                    </label>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Hiển thị trên đầu trang chủ cổng thông tin (khuyên dùng ảnh ngang tỉ lệ 16:5 hoặc 16:6). Hỗ trợ tải ảnh từ thiết bị hoặc dán URL ảnh.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={coverFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          if (!file.type.startsWith('image/')) {
+                            throw new Error('Vui lòng chọn tệp hình ảnh hợp lệ (JPG, PNG, WebP...).');
+                          }
+                          const rawDataUrl = await new Promise<string>((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(String(reader.result || ''));
+                            reader.onerror = () => reject(new Error('Không thể đọc tệp ảnh từ thiết bị.'));
+                            reader.readAsDataURL(file);
+                          });
+                          setCoverPreviewError(false);
+                          setCoverCropSource({ src: rawDataUrl, fileName: file.name });
+                        } catch (err: any) {
+                          showToast('error', 'Không thể nạp ảnh bìa', err?.message || 'Vui lòng thử lại.');
+                        } finally {
+                          if (coverFileInputRef.current) coverFileInputRef.current.value = '';
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={uploadingCoverImage}
+                      onClick={() => coverFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                    >
+                      {uploadingCoverImage ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="w-3.5 h-3.5" />
+                      )}
+                      <span>{uploadingCoverImage ? 'Đang xử lý...' : 'Chọn ảnh & Cắt bìa'}</span>
+                    </button>
+                    {coverImageUrl.trim() && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={uploadingCoverImage}
+                          onClick={() => {
+                            const src = GitHubService.toRawGitHubUrl(coverImageUrl);
+                            setCoverCropSource({ src, fileName: 'station-cover.jpg' });
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <Crop className="w-3.5 h-3.5" />
+                          <span>Cắt ảnh hiện tại</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCoverImageUrl('');
+                            setCoverPreviewError(false);
+                            setCoverUseProxy(false);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Xóa ảnh bìa</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Đường dẫn URL ảnh bìa (hoặc tự động điền khi tải ảnh lên)
+                  </label>
+                  <input
+                    type="text"
+                    value={coverImageUrl}
+                    onChange={e => {
+                      setCoverImageUrl(e.target.value);
+                      setCoverPreviewError(false);
+                      setCoverUseProxy(false);
+                    }}
+                    placeholder="https://... hoặc tải ảnh từ máy bằng nút bên trên"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono"
+                  />
+                </div>
+
+                {(() => {
+                  const normalizedCoverPreview = GitHubService.toRawGitHubUrl(coverImageUrl);
+                  if (!normalizedCoverPreview) {
+                    return (
+                      <div className="p-4 rounded-2xl border border-dashed border-emerald-300/70 dark:border-emerald-800/70 bg-white/70 dark:bg-slate-900/50 text-center text-xs text-slate-500 dark:text-slate-400">
+                        Chưa cấu hình ảnh bìa. Khi để trống, trang chủ sẽ dùng nền màu chuyển sắc mặc định của Trạm Y tế.
+                      </div>
+                    );
+                  }
+                  const isHttpCover = /^https?:\/\//i.test(normalizedCoverPreview);
+                  const previewImgSrc =
+                    coverUseProxy && isHttpCover
+                      ? `${GitHubService.toImageProxyUrl(normalizedCoverPreview)}${coverRetryTick ? `&t=${coverRetryTick}` : ''}`
+                      : normalizedCoverPreview;
+
+                  return (
+                    <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 relative h-36 sm:h-48">
+                      {!coverPreviewError ? (
+                        <img
+                          key={`${previewImgSrc}_${coverRetryTick}`}
+                          src={previewImgSrc}
+                          alt="Xem trước ảnh bìa Trạm Y tế"
+                          referrerPolicy="no-referrer"
+                          onError={() => {
+                            if (!coverUseProxy && isHttpCover) {
+                              setCoverUseProxy(true);
+                              return;
+                            }
+                            setCoverPreviewError(true);
+                          }}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-rose-300 text-xs gap-2 px-4 text-center">
+                          <AlertCircle className="w-5 h-5" />
+                          <span>Không thể tải ảnh từ URL này. Vui lòng kiểm tra lại liên kết hoặc tải ảnh trực tiếp từ máy.</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCoverPreviewError(false);
+                              setCoverUseProxy(false);
+                              setCoverRetryTick(t => t + 1);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-[11px] font-semibold cursor-pointer"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>Thử tải lại</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
@@ -5843,7 +6042,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
             <div>
               <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Globe className="w-4 h-4 text-emerald-600" />
-                Kênh Mạng Xã Hội Footer (Facebook, Zalo, TikTok, YouTube)
+                <span>Kênh Mạng Xã Hội Footer (Facebook, Zalo, TikTok, YouTube)</span>
+                <span className="inline-flex items-center gap-1 ml-1">
+                  <FacebookLogo className="w-4 h-4" />
+                  <ZaloLogo className="w-4 h-4" />
+                  <TikTokLogo className="w-4 h-4" />
+                  <YouTubeLogo className="w-4 h-4" />
+                </span>
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                 Icon mạng xã hội chỉ hiển thị ở Footer khi được nhập đường dẫn hợp lệ (bỏ trống nếu không sử dụng).
@@ -5852,8 +6057,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Facebook Fanpage URL
+                <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <FacebookLogo className="w-4 h-4" />
+                  <span>Facebook Fanpage URL</span>
                 </label>
                 <input
                   type="url"
@@ -5865,8 +6071,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Zalo OA / Liên hệ Zalo URL
+                <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <ZaloLogo className="w-4 h-4" />
+                  <span>Zalo OA / Liên hệ Zalo URL</span>
                 </label>
                 <input
                   type="url"
@@ -5878,8 +6085,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  TikTok Channel URL
+                <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <TikTokLogo className="w-4 h-4" />
+                  <span>TikTok Channel URL</span>
                 </label>
                 <input
                   type="url"
@@ -5891,8 +6099,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  YouTube Channel URL
+                <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  <YouTubeLogo className="w-4 h-4" />
+                  <span>YouTube Channel URL</span>
                 </label>
                 <input
                   type="url"
@@ -6229,7 +6438,18 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 }`}
               >
-                Cán bộ &amp; Quản trị ({elevatedUsersCount})
+                Quản trị Admin ({elevatedUsersCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setUserCategoryTab('organization')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  userCategoryTab === 'organization'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                }`}
+              >
+                Doanh nghiệp / Tổ chức ({orgUsersCount})
               </button>
               <button
                 type="button"
@@ -6240,7 +6460,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 }`}
               >
-                Tài khoản thông thường / Công dân ({standardUsersCount})
+                User / Người dùng ({standardUsersCount})
               </button>
               <button
                 type="button"
@@ -6353,22 +6573,20 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           {u.gender || '—'}
                         </td>
 
-                        <td className="py-3 px-3">
+                        <td className="py-3 px-3" colSpan={2}>
                           <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              u.accountType === 'admin'
+                            className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                              u.role === 'super_admin'
+                                ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                                : u.role === 'admin'
                                 ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                                : u.accountType === 'employee'
-                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : u.role === 'organization' || u.accountType === 'organization'
+                                ? 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300'
+                                : u.role === 'other'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                                 : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                             }`}
                           >
-                            {u.accountType === 'admin' ? 'Quản trị' : u.accountType === 'employee' ? 'Cán bộ Y tế' : 'Người dân'}
-                          </span>
-                        </td>
-
-                        <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800 dark:text-slate-200">
                             {getUserRoleLabel(u.role)}
                           </span>
                         </td>
@@ -6544,7 +6762,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           {/* User Edit Modal */}
           {editingUser && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg md:max-w-3xl lg:max-w-4xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <UserCheck className="w-5 h-5 text-emerald-600" />
@@ -6662,7 +6880,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     );
                   })()}
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Họ và tên *
@@ -6695,9 +6913,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       />
                     </div>
-                  </div>
 
-                  <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Số CCCD / CMND (12 số)
@@ -6823,41 +7039,101 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Loại tài khoản *
-                      </label>
-                      <select
-                        value={editingUser.accountType}
-                        onChange={e => setEditingUser({ ...editingUser, accountType: e.target.value as any })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
-                      >
-                        <option value="citizen">Người dân (Công dân)</option>
-                        <option value="employee">Cán bộ / Nhân viên Y tế</option>
-                        <option value="admin">Quản trị viên (Admin)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Vai trò RBAC *
-                      </label>
-                      <select
-                        value={editingUser.role}
-                        onChange={e => setEditingUser({ ...editingUser, role: e.target.value as any })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
-                      >
-                        <option value="citizen">Công dân</option>
-                        <option value="doctor">Bác sĩ khám</option>
-                        <option value="nurse">Điều dưỡng viên</option>
-                        <option value="communicator">Cán bộ truyền thông</option>
-                        <option value="staff">Nhân viên y tế cơ sở</option>
-                        <option value="admin">Quản trị viên (Admin)</option>
-                        <option value="super_admin">Super Admin</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Vai trò &amp; Loại tài khoản (Unified Role) *
+                    </label>
+                    <select
+                      value={editingUser.role || editingUser.accountType || 'user'}
+                      onChange={e => {
+                        const val = e.target.value as any;
+                        setEditingUser({ ...editingUser, role: val, accountType: val });
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
+                    >
+                      <option value="user">User (Người dùng cá nhân)</option>
+                      <option value="organization">Doanh nghiệp / Tổ chức</option>
+                      <option value="admin">Admin (Quản trị viên)</option>
+                      <option value="super_admin">Super Admin (Quản trị tối cao)</option>
+                      <option value="other">Khác (Tài khoản khác)</option>
+                    </select>
                   </div>
+
+                  {(editingUser.role === 'organization' || editingUser.accountType === 'organization') && (
+                    <div className="p-3.5 rounded-2xl bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 space-y-3">
+                      <div className="font-bold text-sky-900 dark:text-sky-200 flex items-center gap-1.5">
+                        <Building2 className="w-4 h-4 text-sky-600" />
+                        <span>Thông tin Doanh nghiệp / Tổ chức liên kết</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div className="sm:col-span-2">
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Tên Doanh nghiệp / Tổ chức
+                          </label>
+                          <input
+                            type="text"
+                            value={editingUser.organizationName || ''}
+                            onChange={e => setEditingUser({ ...editingUser, organizationName: e.target.value })}
+                            placeholder="Công ty TNHH / Phòng khám / Nhà thuốc..."
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Loại hình
+                          </label>
+                          <select
+                            value={editingUser.organizationType || 'enterprise'}
+                            onChange={e => setEditingUser({ ...editingUser, organizationType: e.target.value as any })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          >
+                            <option value="enterprise">Doanh nghiệp</option>
+                            <option value="clinic">Phòng khám</option>
+                            <option value="pharmacy">Nhà thuốc</option>
+                            <option value="school">Trường học</option>
+                            <option value="agency">Cơ quan nhà nước</option>
+                            <option value="other">Khác</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Mã số thuế (MST)
+                          </label>
+                          <input
+                            type="text"
+                            value={editingUser.taxCode || ''}
+                            onChange={e => setEditingUser({ ...editingUser, taxCode: e.target.value })}
+                            placeholder="Mã số thuế"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Hotline tổ chức
+                          </label>
+                          <input
+                            type="text"
+                            value={editingUser.organizationPhone || ''}
+                            onChange={e => setEditingUser({ ...editingUser, organizationPhone: e.target.value })}
+                            placeholder="Số điện thoại đơn vị"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Địa chỉ trụ sở
+                          </label>
+                          <input
+                            type="text"
+                            value={editingUser.organizationAddress || ''}
+                            onChange={e => setEditingUser({ ...editingUser, organizationAddress: e.target.value })}
+                            placeholder="Địa chỉ trụ sở"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -7449,17 +7725,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                                 onClick={() => {
                                   const liveUser = users.find(u => u.uid === claim.uid);
                                   setResolvingClaim(claim);
-                                  setClaimEditValues({
-                                    displayName: liveUser?.displayName || claim.displayName || '',
-                                    phoneNumber: liveUser?.phoneNumber || liveUser?.verifiedPhone || '',
-                                    citizenId: liveUser?.citizenId || '',
-                                    department: liveUser?.department || '',
-                                    position: liveUser?.position || '',
-                                    role: liveUser?.role || 'citizen',
-                                    accountType: liveUser?.accountType || 'citizen',
-                                  });
-                                  setAdminClaimNote(claim.adminNote || '');
-                                }}
+                                    setClaimEditValues({
+                                      displayName: liveUser?.displayName || claim.displayName || '',
+                                      phoneNumber: liveUser?.phoneNumber || liveUser?.verifiedPhone || '',
+                                      citizenId: liveUser?.citizenId || '',
+                                      department: liveUser?.department || '',
+                                      position: liveUser?.position || '',
+                                      role: liveUser?.role || 'user',
+                                      accountType: liveUser?.accountType || 'user',
+                                    });
+                                    setAdminClaimNote(claim.adminNote || '');
+                                  }}
                                 className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold cursor-pointer"
                               >
                                 {isPending ? 'Kiểm tra & Điều chỉnh' : 'Xem chi tiết'}
@@ -7478,7 +7754,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           {/* Modal Admin Resolve Migration Claim */}
           {resolvingClaim && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-xl w-full p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto text-xs">
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-xl md:max-w-3xl w-full p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto text-xs">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                   <div>
                     <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
@@ -7586,34 +7862,20 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold mb-1">Vai trò hệ thống</label>
+                    <label className="block font-semibold mb-1">Vai trò tài khoản (Role)</label>
                     <select
-                      value={claimEditValues.role}
-                      onChange={e => setClaimEditValues(p => ({ ...p, role: e.target.value as UserProfile['role'] }))}
+                      value={claimEditValues.role || claimEditValues.accountType || 'user'}
+                      onChange={e => {
+                        const val = e.target.value as any;
+                        setClaimEditValues(p => ({ ...p, role: val, accountType: val }));
+                      }}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                     >
-                      <option value="citizen">Công dân</option>
-                      <option value="staff">Nhân viên Y tế</option>
-                      <option value="doctor">Bác sĩ</option>
-                      <option value="nurse">Điều dưỡng</option>
-                      <option value="communicator">Truyền thông</option>
-                      <option value="leadership">Ban Lãnh đạo</option>
-                      <option value="admin">Quản trị viên (Admin)</option>
-                      {canManageSuperAdminTier && <option value="super_admin">Super Admin</option>}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-semibold mb-1">Loại tài khoản</label>
-                    <select
-                      value={claimEditValues.accountType || 'citizen'}
-                      onChange={e =>
-                        setClaimEditValues(p => ({ ...p, accountType: e.target.value as UserProfile['accountType'] }))
-                      }
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    >
-                      <option value="citizen">Công dân</option>
-                      <option value="employee">Cán bộ / Nhân viên</option>
-                      <option value="admin">Quản trị viên</option>
+                      <option value="user">User (Người dùng)</option>
+                      <option value="organization">Doanh nghiệp / Tổ chức</option>
+                      <option value="admin">Admin (Quản trị viên)</option>
+                      {canManageSuperAdminTier && <option value="super_admin">Super Admin (Quản trị tối cao)</option>}
+                      <option value="other">Khác (Tài khoản khác)</option>
                     </select>
                   </div>
                 </div>
@@ -7802,38 +8064,47 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
               {/* Create Form */}
               <form onSubmit={handleCreateReferralCode} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
-                <div className="sm:col-span-3">
+                <div className="sm:col-span-2">
                   <select
                     value={canManageSuperAdminTier ? newRefIssuerTier : 'admin'}
                     disabled={!canManageSuperAdminTier}
                     onChange={e => {
                       const nextTier = e.target.value as ReferralIssuerTier;
                       setNewRefIssuerTier(nextTier);
-                      if (nextTier !== 'super_admin') setNewRefTargetAccountType('employee');
+                      if (nextTier !== 'super_admin' && newRefRole === 'admin') {
+                        setNewRefRole('organization');
+                        setNewRefTargetAccountType('organization');
+                      }
                     }}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-70"
                   >
                     {canManageSuperAdminTier && (
-                      <option value="super_admin">Đối tượng: Super Admin</option>
+                      <option value="super_admin">Cấp phát: Super Admin</option>
                     )}
-                    <option value="admin">Đối tượng: Admin</option>
+                    <option value="admin">Cấp phát: Admin</option>
                   </select>
                 </div>
 
-                {canManageSuperAdminTier && newRefIssuerTier === 'super_admin' && (
-                  <div className="sm:col-span-2">
-                    <select
-                      value={newRefTargetAccountType}
-                      onChange={e => setNewRefTargetAccountType(e.target.value as 'employee' | 'admin')}
-                      className="w-full px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 font-bold text-amber-900 dark:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    >
-                      <option value="employee">Cấp: Cán bộ Y tế</option>
-                      <option value="admin">Cấp: Admin Trạm</option>
-                    </select>
-                  </div>
-                )}
+                <div className="sm:col-span-3">
+                  <select
+                    value={newRefRole}
+                    onChange={e => {
+                      const nextRole = e.target.value as RoleType;
+                      setNewRefRole(nextRole);
+                      setNewRefTargetAccountType(nextRole);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="organization">Vai trò cấp: Doanh nghiệp / Tổ chức</option>
+                    <option value="user">Vai trò cấp: User (Người dùng)</option>
+                    {canManageSuperAdminTier && newRefIssuerTier === 'super_admin' && (
+                      <option value="admin">Vai trò cấp: Admin</option>
+                    )}
+                    <option value="other">Vai trò cấp: Khác</option>
+                  </select>
+                </div>
 
-                <div className={canManageSuperAdminTier && newRefIssuerTier === 'super_admin' ? 'sm:col-span-3 flex gap-1.5' : 'sm:col-span-4 flex gap-1.5'}>
+                <div className="sm:col-span-3 flex gap-1.5">
                   <input
                     type="text"
                     value={newRefCodeInput}
@@ -7846,11 +8117,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     onClick={() =>
                       setNewRefCodeInput(
                         generateRandomReferralCode(
-                          canManageSuperAdminTier && newRefIssuerTier === 'super_admin'
-                            ? newRefTargetAccountType === 'admin'
-                              ? 'ADM'
-                              : 'SADM'
-                            : 'CBYT'
+                          newRefRole === 'admin'
+                            ? 'ADM'
+                            : newRefRole === 'organization'
+                            ? 'ORG'
+                            : newRefRole === 'other'
+                            ? 'OTH'
+                            : 'REF'
                         )
                       )
                     }
@@ -7865,23 +8138,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   type="text"
                   value={newRefLabelInput}
                   onChange={e => setNewRefLabelInput(e.target.value)}
-                  placeholder="Ghi chú (VD: Tổ Tiêm chủng)"
-                  className={canManageSuperAdminTier && newRefIssuerTier === 'super_admin' ? 'sm:col-span-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500' : 'sm:col-span-3 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500'}
+                  placeholder="Ghi chú (VD: Doanh nghiệp đối tác)"
+                  className="sm:col-span-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
-
-                {!(canManageSuperAdminTier && newRefIssuerTier === 'super_admin' && newRefTargetAccountType === 'admin') && (
-                  <select
-                    value={newRefRole}
-                    onChange={e => setNewRefRole(e.target.value as any)}
-                    className="sm:col-span-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="staff">Nhân viên Y tế</option>
-                    <option value="doctor">Bác sĩ</option>
-                    <option value="nurse">Điều dưỡng</option>
-                    <option value="communicator">Truyền thông</option>
-                    <option value="leadership">Ban Lãnh đạo</option>
-                  </select>
-                )}
 
                 <button
                   type="submit"
@@ -7945,18 +8204,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                                     typeof window !== 'undefined'
                                       ? `${window.location.origin}/?ref=${item.code}#tai-khoan`
                                       : `/?ref=${item.code}#tai-khoan`;
-                                  const roleLabel =
-                                    item.targetAccountType === 'admin' || item.targetRole === 'admin'
-                                      ? 'Admin Trạm'
-                                      : item.targetRole === 'doctor'
-                                      ? 'Bác sĩ'
-                                      : item.targetRole === 'nurse'
-                                      ? 'Điều dưỡng'
-                                      : item.targetRole === 'communicator'
-                                      ? 'Truyền thông'
-                                      : item.targetRole === 'leadership'
-                                      ? 'Ban Lãnh đạo'
-                                      : 'Nhân viên Y tế';
+                                  const roleLabel = getUserRoleLabel(
+                                    item.targetRole || item.targetAccountType || 'user'
+                                  );
                                   return (
                                     <tr key={item.code} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition">
                                       <td className="py-2.5 px-3 whitespace-nowrap">
@@ -11169,6 +11419,76 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         isOpen={showSendNotifModal}
         onClose={() => setShowSendNotifModal(false)}
         onSuccess={onRefreshData}
+      />
+
+      {/* Cover Image Crop Modal */}
+      <ImageCropModal
+        isOpen={Boolean(coverCropSource)}
+        imageSrc={coverCropSource?.src || null}
+        mode="cover"
+        fileName={coverCropSource?.fileName}
+        isSubmitting={uploadingCoverImage}
+        onCancel={() => {
+          if (!uploadingCoverImage) setCoverCropSource(null);
+        }}
+        onConfirm={async (result: ImageCropResult) => {
+          setUploadingCoverImage(true);
+          setCoverPreviewError(false);
+          setCoverUseProxy(false);
+          try {
+            let privateGitHubRepo = false;
+            const gh = settings.githubConfig;
+            if (gh?.token?.trim() && gh?.owner?.trim() && gh?.repo?.trim()) {
+              try {
+                const ext = result.blob.type.includes('webp') ? 'webp' : 'jpg';
+                const croppedFile = new File(
+                  [result.blob],
+                  `station-cover-${Date.now()}.${ext}`,
+                  { type: result.blob.type || 'image/jpeg' }
+                );
+                const res = await GitHubService.uploadFile(
+                  gh,
+                  croppedFile,
+                  userProfile?.displayName || 'Admin'
+                );
+                if (res.success && res.isPrivate) {
+                  privateGitHubRepo = true;
+                } else if (res.success && res.fileItem?.downloadUrl && !res.isPrivate) {
+                  const rawUrl = GitHubService.toRawGitHubUrl(res.fileItem.downloadUrl).split('?')[0];
+                  setCoverImageUrl(rawUrl);
+                  setCoverCropSource(null);
+                  showToast(
+                    'success',
+                    'Đã cắt và tải ảnh bìa lên kho lưu trữ',
+                    'Nhấn "Lưu cấu hình đơn vị" để áp dụng lên trang chủ.'
+                  );
+                  return;
+                }
+              } catch {
+                // Fallback to compressed cropped data URI
+              }
+            }
+
+            if (result.dataUrl.length > 460000) {
+              throw new Error(
+                'Ảnh bìa sau khi cắt vẫn quá lớn (>450KB). Vui lòng chọn vùng cắt nhỏ hơn hoặc dùng URL ảnh.'
+              );
+            }
+            setCoverImageUrl(result.dataUrl);
+            setCoverCropSource(null);
+            showToast(
+              'success',
+              privateGitHubRepo
+                ? 'Đã cắt & lưu trực tiếp ảnh bìa (kho GitHub đang Riêng tư)'
+                : 'Đã cắt & nạp ảnh bìa',
+              'Nhấn "Lưu cấu hình đơn vị" để áp dụng lên trang chủ.'
+            );
+          } catch (err: any) {
+            showToast('error', 'Không thể áp dụng ảnh bìa', err?.message || 'Vui lòng thử lại.');
+          } finally {
+            setUploadingCoverImage(false);
+          }
+        }}
       />
     </div>
   );

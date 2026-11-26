@@ -113,7 +113,7 @@ export const SmsMfaChallengeModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in">
-      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-md md:max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="p-5 bg-gradient-to-br from-sky-700 via-teal-700 to-emerald-800 text-white">
           <div className="flex items-start justify-between gap-3">

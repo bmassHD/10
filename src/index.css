@@ -159,12 +159,7 @@
     sos-border-blink 0.95s ease-in-out infinite;
 }
 
-.leaflet-picking-mode .leaflet-grab {
-  cursor: crosshair !important;
-}
-
-.rescue-sos-beacon-pin,
-.rescue-relative-draft-pin {
+.rescue-sos-beacon-pin {
   background: transparent !important;
   border: none !important;
 }

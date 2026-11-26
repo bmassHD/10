@@ -21,6 +21,7 @@ export interface UserVerificationProgress {
   passwordDone: boolean;
   twoFactorDone: boolean;
   citizenIdDone: boolean;
+  paidVerified: boolean;
   completedCount: number;
   totalCount: 4;
   percent: number;
@@ -79,6 +80,11 @@ export function getUserVerificationProgress(
 
   const citizenIdDone = Boolean(profile?.citizenIdVerified && profile?.citizenId);
 
+  const paidExpiresMs = profile?.vipExpiresAt ? new Date(profile.vipExpiresAt).getTime() : 0;
+  const paidVerified = Boolean(
+    profile?.isVip && (!paidExpiresMs || !Number.isFinite(paidExpiresMs) || paidExpiresMs > Date.now())
+  );
+
   const completedCount =
     (emailDone ? 1 : 0) +
     (phoneDone ? 1 : 0) +
@@ -91,10 +97,11 @@ export function getUserVerificationProgress(
     passwordDone,
     twoFactorDone,
     citizenIdDone,
+    paidVerified,
     completedCount,
     totalCount: 4,
     percent: Math.round((completedCount / 4) * 100),
-    isFullyVerified: completedCount === 4,
+    isFullyVerified: completedCount === 4 || paidVerified,
   };
 }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Code2, Phone, Mail, Clock, ExternalLink, User, Info } from 'lucide-react';
 import { SoftwareTeamContactConfig } from '../../types';
+import { FacebookLogo, ZaloLogo } from './SocialPlatformLogos';
 
 export function hasSoftwareTeamContactInfo(cfg?: SoftwareTeamContactConfig | null): boolean {
   if (!cfg || cfg.enabled === false) return false;
@@ -115,6 +116,7 @@ export const SoftwareTeamContactCard: React.FC<SoftwareTeamContactCardProps> = (
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
               >
+                <ZaloLogo className="w-4 h-4" />
                 <span>Zalo hỗ trợ</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
@@ -126,6 +128,7 @@ export const SoftwareTeamContactCard: React.FC<SoftwareTeamContactCardProps> = (
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 text-xs font-bold transition"
               >
+                <FacebookLogo className="w-4 h-4" />
                 <span>Facebook</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>

@@ -44,6 +44,7 @@ import {
   Ticket,
   Search,
   Wrench,
+  BadgeCheck,
 } from 'lucide-react';
 import {
   useAuth,
@@ -58,6 +59,7 @@ import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { StationLogo } from '../common/StationLogo';
 import { UserAvatar } from '../common/UserAvatar';
+import { ImageCropModal, ImageCropResult } from '../common/ImageCropModal';
 import { AccountSecurityCard } from '../account/AccountSecurityCard';
 import { LoggedInDevicesPanel } from '../account/LoggedInDevicesPanel';
 import { QrLoginModal } from '../auth/QrLoginModal';
@@ -171,33 +173,15 @@ function loadLocationPref(): boolean {
   }
 }
 
-async function compressImageToAvatarDataUrl(file: File): Promise<string> {
+function readImageFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Vui lòng chọn tệp hình ảnh hợp lệ (JPG, PNG, WebP...).'));
+      return;
+    }
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Không thể đọc tệp ảnh'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Định dạng ảnh không hợp lệ'));
-      img.onload = () => {
-        const size = 220;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Trình duyệt không hỗ trợ xử lý ảnh'));
-          return;
-        }
-        const minSide = Math.min(img.width, img.height);
-        const sx = (img.width - minSide) / 2;
-        const sy = (img.height - minSide) / 2;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, size, size);
-        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = String(reader.result);
-    };
+    reader.onerror = () => reject(new Error('Không thể đọc tệp ảnh từ thiết bị.'));
+    reader.onload = () => resolve(String(reader.result || ''));
     reader.readAsDataURL(file);
   });
 }
@@ -330,6 +314,7 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
 
   // Profile form states
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [avatarCropSrc, setAvatarCropSrc] = useState<string | null>(null);
   const [profileForm, setProfileForm] = useState<Partial<UserProfile>>({
     displayName: userProfile?.displayName || '',
     phoneNumber: userProfile?.phoneNumber || '',
@@ -1801,17 +1786,27 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setSavingAvatar(true);
     try {
-      const dataUrl = await compressImageToAvatarDataUrl(file);
-      setProfileForm(prev => ({ ...prev, avatarUrl: dataUrl }));
-      await updateProfileData({ avatarUrl: dataUrl });
-      showToast('success', 'Đã cập nhật ảnh đại diện', 'Ảnh đại diện mới đã được lưu vào hồ sơ.');
+      const rawDataUrl = await readImageFileAsDataUrl(file);
+      setAvatarCropSrc(rawDataUrl);
     } catch (err: any) {
       showToast('error', 'Lỗi xử lý ảnh', err?.message);
     } finally {
-      setSavingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmAvatarCrop = async (result: ImageCropResult) => {
+    setSavingAvatar(true);
+    try {
+      setProfileForm(prev => ({ ...prev, avatarUrl: result.dataUrl }));
+      await updateProfileData({ avatarUrl: result.dataUrl });
+      setAvatarCropSrc(null);
+      showToast('success', 'Đã cập nhật ảnh đại diện', 'Ảnh đại diện mới đã được cắt và lưu vào hồ sơ.');
+    } catch (err: any) {
+      showToast('error', 'Lỗi lưu ảnh đại diện', err?.message);
+    } finally {
+      setSavingAvatar(false);
     }
   };
 
@@ -2129,7 +2124,19 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
           </div>
 
           {currentUser && (
-            <div className="mt-4 pt-3.5 border-t border-white/15 grid grid-cols-2 gap-2.5">
+            <div className="mt-4 pt-3.5 border-t border-white/15 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setCurrentView('vip_premium')}
+                className={`min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-xs ${
+                  userProfile?.isVip
+                    ? 'bg-sky-400 hover:bg-sky-300 text-slate-950'
+                    : 'bg-sky-500 hover:bg-sky-400 text-white'
+                }`}
+              >
+                <BadgeCheck className="w-4 h-4 shrink-0" />
+                <span>{userProfile?.isVip ? 'Tài khoản Verified' : 'Mua Verify (SePay)'}</span>
+              </button>
               {isAdmin ? (
                 <button
                   type="button"
@@ -4067,6 +4074,17 @@ export const AccountDeviceView: React.FC<AccountDeviceViewProps> = ({
           </div>
         </div>
       )}
+
+      <ImageCropModal
+        isOpen={Boolean(avatarCropSrc)}
+        imageSrc={avatarCropSrc}
+        mode="avatar"
+        isSubmitting={savingAvatar}
+        onCancel={() => {
+          if (!savingAvatar) setAvatarCropSrc(null);
+        }}
+        onConfirm={handleConfirmAvatarCrop}
+      />
     </div>
   );
 };

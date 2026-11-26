@@ -174,12 +174,8 @@ service cloud.firestore {
         data.code is string && data.code == codeId && data.code.size() >= 4 && data.code.size() <= 64 &&
         data.active is bool &&
         (!('issuerTier' in data) || data.issuerTier in ['super_admin', 'admin']) &&
-        data.targetAccountType in ['employee', 'admin'] &&
-        data.targetRole in ['admin', 'staff', 'doctor', 'nurse', 'communicator', 'leadership'] &&
-        (
-          (data.targetAccountType == 'admin' && data.targetRole == 'admin') ||
-          (data.targetAccountType == 'employee' && data.targetRole in ['staff', 'doctor', 'nurse', 'communicator', 'leadership'])
-        ) &&
+        data.targetAccountType in ['user', 'organization', 'other', 'admin', 'employee', 'citizen'] &&
+        data.targetRole in ['user', 'organization', 'other', 'admin', 'staff', 'doctor', 'nurse', 'communicator', 'leadership', 'citizen'] &&
         data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
         data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64 &&
         data.usedCount is int && data.usedCount >= 0 &&
@@ -198,7 +194,7 @@ service cloud.firestore {
         (
           isAdmin() &&
           request.resource.data.get('issuerTier', 'admin') == 'admin' &&
-          request.resource.data.targetAccountType == 'employee' &&
+          request.resource.data.targetRole in ['user', 'organization', 'other', 'employee'] &&
           request.resource.data.createdByUid == request.auth.uid
         )
       );
@@ -207,7 +203,7 @@ service cloud.firestore {
         (
           isAdmin() &&
           resource.data.get('issuerTier', 'admin') == 'admin' &&
-          resource.data.targetAccountType == 'employee'
+          resource.data.targetRole in ['user', 'organization', 'other', 'employee']
         )
       );
       allow update: if isValidId(codeId) &&
@@ -218,9 +214,9 @@ service cloud.firestore {
           (
             isAdmin() &&
             resource.data.get('issuerTier', 'admin') == 'admin' &&
-            resource.data.targetAccountType == 'employee' &&
+            resource.data.targetRole in ['user', 'organization', 'other', 'employee'] &&
             request.resource.data.get('issuerTier', 'admin') == 'admin' &&
-            request.resource.data.targetAccountType == 'employee'
+            request.resource.data.targetRole in ['user', 'organization', 'other', 'employee']
           ) ||
           (
             isSignedIn() &&
@@ -367,10 +363,16 @@ service cloud.firestore {
               get(/databases/$(database)/documents/userReferralLinks/$(request.resource.data.referredByCode)).data.ownerUid == request.resource.data.referredByUid
             )
           ) &&
+          request.resource.data.get('isVip', false) == false &&
+          !('vipTier' in request.resource.data) &&
+          !('vipPackageName' in request.resource.data) &&
+          !('vipActivatedAt' in request.resource.data) &&
+          !('vipExpiresAt' in request.resource.data) &&
+          !('vipOrderCode' in request.resource.data) &&
           (
             (
-              request.resource.data.role == 'citizen' &&
-              request.resource.data.accountType == 'citizen' &&
+              request.resource.data.role in ['user', 'organization', 'other', 'citizen'] &&
+              request.resource.data.accountType == request.resource.data.role &&
               request.resource.data.status == 'active'
             ) ||
             (
@@ -479,6 +481,12 @@ service cloud.firestore {
           request.resource.data.get('bannedByUid', '') == resource.data.get('bannedByUid', '') &&
           request.resource.data.get('bannedByName', '') == resource.data.get('bannedByName', '') &&
           request.resource.data.get('allowIdentityEditByAdmin', false) == resource.data.get('allowIdentityEditByAdmin', false) &&
+          request.resource.data.get('isVip', false) == resource.data.get('isVip', false) &&
+          request.resource.data.get('vipTier', '') == resource.data.get('vipTier', '') &&
+          request.resource.data.get('vipPackageName', '') == resource.data.get('vipPackageName', '') &&
+          request.resource.data.get('vipActivatedAt', '') == resource.data.get('vipActivatedAt', '') &&
+          request.resource.data.get('vipExpiresAt', '') == resource.data.get('vipExpiresAt', '') &&
+          request.resource.data.get('vipOrderCode', '') == resource.data.get('vipOrderCode', '') &&
           (
             resource.data.get('emailVerified', false) != true ||
             (
@@ -1494,6 +1502,13 @@ service cloud.firestore {
       allow create: if isValidId(pairCode) && isValidQrPairCode(request.resource.data, pairCode);
       allow update: if false;
       allow delete: if isValidId(pairCode) && (isSignedIn() || isAdmin());
+    }
+
+    // SePay Payment Orders (Admins full access; owners read-only)
+    match /paymentOrders/{orderCode} {
+      allow get: if isValidId(orderCode) && (isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create, update, delete: if isValidId(orderCode) && isAdmin();
     }
   }
 }

@@ -14,6 +14,12 @@ import { StationLogo } from './StationLogo';
 import { hasSoftwareTeamContactInfo } from './SoftwareTeamContactCard';
 import { getConfiguredEmergencyContacts } from '../../services/firebaseService';
 import { useVisitorStats } from '../../services/visitorStatsService';
+import {
+  FacebookLogo,
+  ZaloLogo,
+  TikTokLogo,
+  YouTubeLogo,
+} from './SocialPlatformLogos';
 
 interface CustomFooterProps {
   settings: SystemSettings;
@@ -103,9 +109,10 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={social.facebook.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-950/80 text-xs font-bold transition"
                       >
-                        Facebook
+                        <FacebookLogo className="w-4 h-4" />
+                        <span>Facebook</span>
                       </a>
                     )}
                     {social.zalo?.trim() && (
@@ -113,13 +120,9 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={social.zalo.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 dark:hover:bg-sky-950/80 text-xs font-bold transition"
                       >
-                        <img
-                          src="/zalo.png"
-                          alt="Zalo"
-                          className="w-4 h-4 rounded object-contain shrink-0"
-                        />
+                        <ZaloLogo className="w-4 h-4" />
                         <span>Zalo</span>
                       </a>
                     )}
@@ -128,9 +131,10 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={social.tiktok.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold transition"
                       >
-                        TikTok
+                        <TikTokLogo className="w-4 h-4" />
+                        <span>TikTok</span>
                       </a>
                     )}
                     {social.youtube?.trim() && (
@@ -138,9 +142,10 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={social.youtube.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-xs font-bold transition"
                       >
-                        YouTube
+                        <YouTubeLogo className="w-4 h-4" />
+                        <span>YouTube</span>
                       </a>
                     )}
                   </div>
@@ -348,11 +353,7 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 text-xs font-bold transition"
                       >
-                        <img
-                          src="/zalo.png"
-                          alt="Zalo"
-                          className="w-3.5 h-3.5 rounded object-contain shrink-0"
-                        />
+                        <ZaloLogo className="w-3.5 h-3.5" />
                         <span>Zalo</span>
                       </a>
                     )}
@@ -361,9 +362,10 @@ export const CustomFooter: React.FC<CustomFooterProps> = ({ settings, settingsLo
                         href={softTeam.facebookUrl.trim()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 text-xs font-bold transition"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 text-xs font-bold transition"
                       >
-                        Facebook
+                        <FacebookLogo className="w-3.5 h-3.5" />
+                        <span>Facebook</span>
                       </a>
                     )}
                     {softTeam.websiteUrl?.trim() && (

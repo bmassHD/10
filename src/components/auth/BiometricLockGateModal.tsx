@@ -192,7 +192,7 @@ export const BiometricLockGateModal: React.FC<BiometricLockGateModalProps> = ({
       aria-modal="true"
       aria-labelledby="biometric-lock-title"
     >
-      <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="w-full max-w-sm md:max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         <div className="px-6 pt-6 pb-5 text-center space-y-3 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-b from-emerald-50/80 to-white dark:from-emerald-950/30 dark:to-slate-900">
           <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-700 text-white flex items-center justify-center shadow-md">
             {isAppleFace ? (

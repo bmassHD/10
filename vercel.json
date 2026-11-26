@@ -14,11 +14,21 @@
     },
     "api/auth/qr/[action].ts": {
       "includeFiles": "firebase-applet-config.json"
+    },
+    "api/hooks/sepay-payment.ts": {
+      "includeFiles": "firebase-applet-config.json"
+    },
+    "api/sepay/[action].ts": {
+      "includeFiles": "firebase-applet-config.json"
     }
   },
   "rewrites": [
     {
-      "source": "/((?!api/|assets/|.*\\..*).*)",
+      "source": "/hooks/sepay-payment",
+      "destination": "/api/hooks/sepay-payment"
+    },
+    {
+      "source": "/((?!api/|hooks/|assets/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ],

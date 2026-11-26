@@ -18,7 +18,7 @@ const SIZE_CLASSES: Record<'xs' | 'sm' | 'md', string> = {
  */
 export const VerifiedBlueTick: React.FC<VerifiedBlueTickProps> = ({
   size = 'sm',
-  title = 'Tài khoản đã xác minh 100% (4/4 lớp bảo mật)',
+  title = 'Tài khoản đã xác minh chính thức (Verified)',
   className = '',
 }) => {
   return (
